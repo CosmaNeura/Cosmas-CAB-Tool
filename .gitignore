@@ -1,0 +1,18 @@
+# Secrets — never commit credentials. Use environment variables or a secrets manager.
+.env
+.env.*
+*api*key*.txt
+openaiapikey.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local artifacts
+coder_feedback.jsonl
+*.log
+.DS_Store
