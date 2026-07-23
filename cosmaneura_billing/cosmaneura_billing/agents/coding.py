@@ -7,11 +7,74 @@ from ..llm import LLMClient
 from ..schemas import CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle
 
 
+# --------------------------------------------------------------------------- #
+# Structured-output schemas for the two LLM calls. With AnthropicLLM these are
+# enforced via forced tool use and re-validated locally; MockLLM ignores them.
+# --------------------------------------------------------------------------- #
+FACTS_SCHEMA = {
+    "type": "object",
+    "required": ["chief_complaint", "problems", "data_reviewed", "risk"],
+    "properties": {
+        "chief_complaint": {"type": "string"},
+        "problems": {"type": "array", "items": {
+            "type": "object", "required": ["name"],
+            "properties": {
+                "name": {"type": "string"}, "status": {"type": "string"},
+                "acuity": {"type": "string"},
+                "uncertain_prognosis": {"type": "boolean"},
+                "quote": {"type": "string"},
+            }}},
+        "data_reviewed": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"item": {"type": "string"}, "category": {"type": "string"},
+                           "quote": {"type": "string"}}}},
+        "risk": {"type": "object", "properties": {
+            "level": {"type": "string"},
+            "drivers": {"type": "array", "items": {"type": "string"}},
+            "quote": {"type": "string"}}},
+        "total_time_minutes": {"type": ["integer", "null"]},
+        "vitals": {"type": "object"},
+        "family_history_colon_cancer": {"type": ["boolean", "null"]},
+        "family_history_quote": {"type": "string"},
+    },
+}
+
+DIAGNOSES_SCHEMA = {
+    "type": "object",
+    "required": ["diagnoses"],
+    "properties": {
+        "diagnoses": {"type": "array", "items": {
+            "type": "object", "required": ["concept"],
+            "properties": {"concept": {"type": "string"},
+                           "primary": {"type": "boolean"},
+                           "quote": {"type": "string"}}}},
+    },
+}
+
+
+def sanitize_facts(facts: dict) -> dict:
+    """Defensive normalization of the extraction output before any leveling
+    decision reads it. Off-shape values become safe (conservative) defaults, so
+    a degenerate extraction can only under-level, never inflate."""
+    if not isinstance(facts, dict):
+        return {"problems": [], "data_reviewed": [], "risk": {}}
+    out = dict(facts)
+    out["problems"] = [p for p in out.get("problems") or [] if isinstance(p, dict)]
+    out["data_reviewed"] = [d for d in out.get("data_reviewed") or [] if isinstance(d, dict)]
+    out["risk"] = out.get("risk") if isinstance(out.get("risk"), dict) else {}
+    t = out.get("total_time_minutes")
+    out["total_time_minutes"] = t if isinstance(t, int) and not isinstance(t, bool) and t > 0 else None
+    out["vitals"] = out.get("vitals") if isinstance(out.get("vitals"), dict) else {}
+    return out
+
+
 # Map the LLM's element labels onto risk/data/problem levels for the ruleset.
 def _facts_to_em(facts: dict, *, new_patient: bool) -> em_ruleset.EMResult:
-    problems = facts.get("problems", [])
+    facts = sanitize_facts(facts)
+    problems = facts["problems"]
     # number/complexity of problems
-    has_uncertain = any(p.get("uncertain_prognosis") or p.get("status", "").startswith("new") for p in problems)
+    has_uncertain = any(p.get("uncertain_prognosis") or str(p.get("status", "")).startswith("new")
+                        for p in problems)
     if len(problems) >= 1 and has_uncertain:
         problem_level = "moderate"
     elif len(problems) >= 2:
@@ -21,15 +84,15 @@ def _facts_to_em(facts: dict, *, new_patient: bool) -> em_ruleset.EMResult:
     else:
         problem_level = "straightforward"
 
-    data = facts.get("data_reviewed", [])
+    data = facts["data_reviewed"]
     unique = len({d.get("category", d.get("item")) for d in data})
     data_level = "moderate" if unique >= 3 else "low" if unique >= 1 else "straightforward"
 
-    risk_level = facts.get("risk", {}).get("level", "low")
+    risk_level = facts["risk"].get("level", "low")
     if risk_level not in ("straightforward", "low", "moderate", "high"):
         risk_level = "low"
 
-    total_time = facts.get("total_time_minutes")
+    total_time = facts["total_time_minutes"]
     return em_ruleset.level_office_visit(
         new_patient=new_patient, problems=problem_level, data=data_level,
         risk=risk_level, total_time_minutes=total_time,
@@ -48,9 +111,13 @@ class CodingAgent:
         )
         facts = self.llm.complete_json(
             system="You are a clinical documentation extraction assistant. Extract only "
-                   "facts present in the text; never infer services that were not described.",
+                   "facts present in the text; never infer services that were not described. "
+                   "Every 'quote' field must be copied verbatim from the documentation — "
+                   "never paraphrase a quote.",
             user=f"TASK: extract_clinical_facts\n\n{combined}",
+            schema=FACTS_SCHEMA,
         )
+        facts = sanitize_facts(facts)
 
         suggestions: list[CodeSuggestion] = []
 
@@ -75,8 +142,10 @@ class CodingAgent:
         # --- diagnoses (LLM concepts -> authoritative ICD-10 lookup) -------- #
         dx = self.llm.complete_json(
             system="You map documented clinical concepts to diagnosis intent. "
-                   "List the underlying clinical concept and the exact supporting quote.",
+                   "List the underlying clinical concept and the exact supporting quote, "
+                   "copied verbatim from the documentation — never paraphrased.",
             user=f"TASK: propose_diagnoses\n\n{combined}",
+            schema=DIAGNOSES_SCHEMA,
         )
         for d in dx.get("diagnoses", []):
             matches = self.icd10.find_by_description(d["concept"], limit=1)

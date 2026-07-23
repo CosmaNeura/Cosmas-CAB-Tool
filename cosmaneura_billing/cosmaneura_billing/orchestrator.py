@@ -5,6 +5,7 @@ from .agents import (
     CodingAgent, ComplianceGuardrailAgent, DenialRiskAgent,
     DocumentationIntegrityAgent, FeedbackAgent,
 )
+from .evidence import verify_suggestion_evidence
 from .knowledge.icd10_ccsr import ICD10CCSR
 from .llm import LLMClient, get_default_client
 from .schemas import (
@@ -29,8 +30,13 @@ class BillingOrchestrator:
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions = self.coding.run(bundle)
+        # Authenticate every evidence quote against the actual documentation
+        # BEFORE any agent may rely on it; a code whose quotes don't verify
+        # loses them and cannot pass the guardrail's evidence gate.
+        ver_audit = verify_suggestion_evidence(bundle, suggestions)
         suggestions, gaps = self.integrity.run(facts, suggestions)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
+        audit = ver_audit + audit
         suggestions, denial_flags = self.denial.run(suggestions, ncci=self.ncci, coverage=self.coverage)
         events = self.feedback.run(facts, gaps, suggestions, submitted_em_code=bundle.submitted_em_code)
 
