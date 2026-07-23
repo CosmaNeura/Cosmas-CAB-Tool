@@ -6,7 +6,10 @@ gets a denial_risk rating and, where relevant, a concrete fix.
 
 If real CMS NCCI edits are loaded (see knowledge/ncci.py) they are consulted for
 procedure-to-procedure bundling and per-day unit limits; otherwise the agent
-falls back to the modifier-25 heuristic below.
+falls back to the modifier-25 heuristic below. If the current-FY ICD-10-CM set
+is available (knowledge/icd10_ccsr.py overlay) every captured diagnosis is
+checked for current validity; if the POS table is available (knowledge/pos.py)
+telehealth encounters are checked for modifier/POS consistency.
 """
 from __future__ import annotations
 
@@ -16,7 +19,17 @@ _UNSPECIFIED_HINTS = ("unspecified", "other ", "not specified")
 
 
 class DenialRiskAgent:
-    def run(self, suggestions: list[CodeSuggestion], *, ncci=None, coverage=None) -> tuple[list[CodeSuggestion], list[str]]:
+    def run(
+        self,
+        suggestions: list[CodeSuggestion],
+        *,
+        ncci=None,
+        coverage=None,
+        icd10=None,                 # knowledge.icd10_ccsr.ICD10CCSR (current-FY check)
+        pos=None,                   # knowledge.pos.PlaceOfService
+        place_of_service: str = "",
+        encounter_type: str = "",
+    ) -> tuple[list[CodeSuggestion], list[str]]:
         flags: list[str] = []
         captured = [s for s in suggestions if s.disposition == Disposition.CAPTURED]
 
@@ -33,8 +46,30 @@ class DenialRiskAgent:
                                  "(type, acuity, cause, or site) where known to support a more specific code.")
                 else:
                     s.denial_risk = "low"
+                # current-FY validity: a deleted or header-level code is a
+                # near-certain claim rejection.
+                if icd10 is not None and getattr(icd10, "has_current_fy", False):
+                    if icd10.is_active(s.code) is False:
+                        s.denial_risk = "high"
+                        s.notes.append("not billable in current FY ICD-10-CM code set")
+                        flags.append(f"{s.code} ({s.label}) is not a billable code in the current "
+                                     "FY ICD-10-CM set (deleted, replaced, or a non-billable "
+                                     "category code) - recode before submitting.")
             if s.kind == CodeKind.EM:
                 s.denial_risk = "low" if has_dx else "high"
+
+        # Telehealth POS / modifier consistency.
+        if pos is not None and place_of_service and has_em:
+            if pos.is_telehealth(place_of_service):
+                desc = pos.get(place_of_service) or "telehealth"
+                flags.append(
+                    f"Telehealth place of service {place_of_service} ({desc}): confirm the E/M "
+                    "carries modifier 95 (or 93 for audio-only) and that the payer covers "
+                    "telehealth for this service; payment differs from in-office POS 11.")
+            elif "telehealth" in encounter_type:
+                flags.append(
+                    f"Encounter is typed telehealth but place of service is {place_of_service} "
+                    "(not POS 02/10) - fix the POS or the encounter type before submitting.")
 
         # Real NCCI edits, if the practice has loaded the CMS files.
         proc_codes = [s for s in captured if s.kind in (CodeKind.EM, CodeKind.PROCEDURE)]

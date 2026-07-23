@@ -33,6 +33,12 @@ from pathlib import Path
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _FULL_CSV = _DATA_DIR / "icd10cm_ccsr_full.csv.gz"
 _SUBSET_CSV = _DATA_DIR / "icd10_ccsr_subset.csv"
+# Current-FY ICD-10-CM code set (CMS via Tuva Project terminology; public
+# domain). Layout, no header: code, billable_flag(0/1), short_desc, long_desc.
+# The CCSR map lags the fiscal-year cycle, so this overlay is what tells us a
+# code is actually valid to bill TODAY (new codes appear here first; deleted
+# codes disappear).
+_FY_CURRENT_CSV = _DATA_DIR / "icd10cm_fy_current.csv.gz"
 
 
 def _default_csv() -> Path:
@@ -57,11 +63,26 @@ def _format_icd10(raw: str) -> str:
 
 
 class ICD10CCSR:
-    def __init__(self, csv_path: str | os.PathLike | None = None):
+    def __init__(self, csv_path: str | os.PathLike | None = None,
+                 current_csv: str | os.PathLike | None = None):
         path = Path(csv_path or os.environ.get("ICD10_CCSR_CSV") or _default_csv())
         self._by_raw: dict[str, ICD10Code] = {}
         self._rows: list[ICD10Code] = []
         self._load(path)
+        # current-FY overlay: raw code -> (billable, description). Pass
+        # current_csv="" to disable explicitly.
+        self._current: dict[str, tuple[bool, str]] = {}
+        cur = _FY_CURRENT_CSV if current_csv is None else current_csv
+        if cur and Path(cur).exists():
+            self._load_current(Path(cur))
+
+    def _load_current(self, path: Path) -> None:
+        opener = gzip.open if str(path).endswith(".gz") else open
+        with opener(path, "rt", newline="", encoding="utf-8") as fh:
+            for row in csv.reader(fh):
+                if len(row) >= 3 and row[0].strip():
+                    raw = row[0].strip().strip("'\" ").upper()
+                    self._current[raw] = (row[1].strip() == "1", row[-1].strip())
 
     def _load(self, path: Path) -> None:
         opener = gzip.open if str(path).endswith(".gz") else open
@@ -88,7 +109,28 @@ class ICD10CCSR:
     # ---- lookups -------------------------------------------------------- #
     def get(self, code: str) -> ICD10Code | None:
         raw = code.replace(".", "").strip().upper()
-        return self._by_raw.get(raw)
+        hit = self._by_raw.get(raw)
+        if hit is None and raw in self._current:
+            # in the current FY set but newer than the CCSR map
+            _, desc = self._current[raw]
+            return ICD10Code(code=_format_icd10(raw), raw=raw, description=desc,
+                             ccsr_category="", ccsr_description="")
+        return hit
+
+    @property
+    def has_current_fy(self) -> bool:
+        return bool(self._current)
+
+    def is_active(self, code: str) -> bool | None:
+        """Is the code billable in the current FY code set?
+
+        True  = present and billable; False = absent or a non-billable header
+        code; None = no current-FY data loaded (can't say).
+        """
+        if not self._current:
+            return None
+        entry = self._current.get(code.replace(".", "").strip().upper())
+        return bool(entry and entry[0])
 
     def find_by_description(self, text: str, limit: int = 5) -> list[ICD10Code]:
         """Lightweight keyword match against official descriptors (offline path)."""

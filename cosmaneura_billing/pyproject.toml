@@ -23,7 +23,7 @@ dev = ["pytest>=8", "numpy>=1.24"]
 include = ["cosmaneura_billing*"]
 
 [tool.setuptools.package-data]
-"cosmaneura_billing.data" = ["*.csv", "*.csv.gz"]
+"cosmaneura_billing.data" = ["*.csv", "*.csv.gz", "corpora/*.csv", "corpora/README.md"]
 "cosmaneura_billing.benchmarks.data" = ["*.csv"]
 
 [tool.pytest.ini_options]

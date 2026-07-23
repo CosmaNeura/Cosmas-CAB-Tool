@@ -6,7 +6,9 @@ from .agents import (
     DocumentationIntegrityAgent, FeedbackAgent,
 )
 from .evidence import verify_suggestion_evidence
+from .knowledge.cpt import CPTDescriptors
 from .knowledge.icd10_ccsr import ICD10CCSR
+from .knowledge.pos import PlaceOfService
 from .llm import LLMClient, get_default_client
 from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Disposition,
@@ -15,11 +17,14 @@ from .schemas import (
 
 
 class BillingOrchestrator:
-    def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None, ncci=None, coverage=None):
+    def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None,
+                 ncci=None, coverage=None, pos=None, cpt=None):
         self.llm = llm or get_default_client()
         self.icd10 = icd10 or ICD10CCSR()
         self.ncci = ncci         # optional knowledge.ncci.NCCIEdits
         self.coverage = coverage  # optional knowledge.coverage.CoverageDB
+        self.pos = pos or PlaceOfService()       # bundled CMS POS codes
+        self.cpt = cpt or CPTDescriptors()       # loads only from licensed data (CPT_DATA_DIR)
         self.coding = CodingAgent(self.llm, self.icd10)
         self.integrity = DocumentationIntegrityAgent()
         self.guardrail = ComplianceGuardrailAgent()
@@ -37,7 +42,18 @@ class BillingOrchestrator:
         suggestions, gaps = self.integrity.run(facts, suggestions)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
         audit = ver_audit + audit
-        suggestions, denial_flags = self.denial.run(suggestions, ncci=self.ncci, coverage=self.coverage)
+        suggestions, denial_flags = self.denial.run(
+            suggestions, ncci=self.ncci, coverage=self.coverage,
+            icd10=self.icd10, pos=self.pos,
+            place_of_service=bundle.place_of_service,
+            encounter_type=bundle.encounter_type,
+        )
+        # Official CPT descriptors, when the practice's licensed data is loaded.
+        relabeled = self.cpt.relabel([s for s in suggestions
+                                      if s.kind in (CodeKind.EM, CodeKind.PROCEDURE)])
+        if relabeled:
+            audit.append(f"CPT     official descriptors applied to {relabeled} code(s) "
+                         "from licensed CPT data.")
         events = self.feedback.run(facts, gaps, suggestions, submitted_em_code=bundle.submitted_em_code)
 
         captured = [s for s in suggestions if s.disposition == Disposition.CAPTURED]
