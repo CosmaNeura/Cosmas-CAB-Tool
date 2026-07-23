@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosmaneura-billing"
+version = "0.1.0"
+description = "CosmaNeura agentic billing layer: multi-agent pipeline turning finished visits into auditable billing codes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+# The core engine is deliberately dependency-free (stdlib only).
+dependencies = []
+
+[project.optional-dependencies]
+# LocalVectorStore / dialogue RAG (feature3 replacement)
+vector = ["numpy>=1.24"]
+# iCliniq corpus loading + feather I/O
+corpus = ["pandas>=2.0", "pyarrow>=14"]
+dev = ["pytest>=8", "numpy>=1.24"]
+
+[tool.setuptools.packages.find]
+include = ["cosmaneura_billing*"]
+
+[tool.setuptools.package-data]
+"cosmaneura_billing.data" = ["*.csv", "*.csv.gz"]
+"cosmaneura_billing.benchmarks.data" = ["*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
