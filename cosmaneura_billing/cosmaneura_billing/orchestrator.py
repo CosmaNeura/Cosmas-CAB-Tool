@@ -11,6 +11,7 @@ from .knowledge.cpt import CPTDescriptors
 from .knowledge.icd10_ccsr import ICD10CCSR
 from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
+from .preferences import PreferenceStore, apply_preferences
 from .llm import LLMClient, get_default_client
 from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Disposition,
@@ -20,7 +21,7 @@ from .schemas import (
 
 class BillingOrchestrator:
     def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None,
-                 ncci=None, coverage=None, pos=None, cpt=None):
+                 ncci=None, coverage=None, pos=None, cpt=None, preferences=None):
         self.llm = llm or get_default_client()
         self.icd10 = icd10 or ICD10CCSR()
         # NCCI / MCD coverage: explicit instance wins; otherwise auto-load from
@@ -29,13 +30,15 @@ class BillingOrchestrator:
         self.coverage = coverage if coverage is not None else CoverageDB.from_bundled()
         self.pos = pos or PlaceOfService()       # bundled CMS POS codes
         self.cpt = cpt or CPTDescriptors()       # loads only from licensed data (CPT_DATA_DIR)
+        # learned reviewer preferences (hold/refine only, never inflate)
+        self.preferences = preferences or PreferenceStore()
         self.coding = CodingAgent(self.llm, self.icd10)
         self.integrity = DocumentationIntegrityAgent()
         self.guardrail = ComplianceGuardrailAgent()
         self.denial = DenialRiskAgent()
         self.feedback = FeedbackAgent()
 
-    def process(self, bundle: VisitBundle) -> BillingResult:
+    def process(self, bundle: VisitBundle, user_id: str | None = None) -> BillingResult:
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions = self.coding.run(bundle)
@@ -44,8 +47,13 @@ class BillingOrchestrator:
         # loses them and cannot pass the guardrail's evidence gate.
         ver_audit = verify_suggestion_evidence(bundle, suggestions)
         suggestions, gaps = self.integrity.run(facts, suggestions)
+        # Learned reviewer preferences (per user + practice-wide): may hold a
+        # code for review or refine it within its ICD-10 family — never add,
+        # promote, or re-level. Runs before the guardrail, which enforces that.
+        pref_audit = apply_preferences(
+            suggestions, self.preferences.for_user(user_id), icd10=self.icd10)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
-        audit = ver_audit + audit
+        audit = ver_audit + pref_audit + audit
         suggestions, denial_flags = self.denial.run(
             suggestions, ncci=self.ncci, coverage=self.coverage,
             icd10=self.icd10, pos=self.pos,

@@ -59,19 +59,26 @@ function Pill({ tone, children }) {
   return <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>{children}</span>;
 }
 
-function Why({ text, evidence }) {
+function Why({ text, evidence, history }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-1">
-      <button onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs text-sky-700 hover:underline">
-        <Info size={12} /> Why this code <ChevronDown size={12} className={open ? "rotate-180 transition" : "transition"} />
-      </button>
-      {open && (
-        <div className="mt-1 rounded-lg bg-sky-50 p-2.5 text-xs leading-relaxed text-slate-600">
-          {text}
-          {evidence && <div className="mt-1 italic text-slate-500">Documentation: “{evidence}”</div>}
-        </div>
+      {history && (
+        <p className="mb-1 inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-0.5 text-xs text-violet-700 ring-1 ring-inset ring-violet-200">
+          <Info size={11} /> {history}
+        </p>
       )}
+      <div>
+        <button onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs text-sky-700 hover:underline">
+          <Info size={12} /> Why this code <ChevronDown size={12} className={open ? "rotate-180 transition" : "transition"} />
+        </button>
+        {open && (
+          <div className="mt-1 rounded-lg bg-sky-50 p-2.5 text-xs leading-relaxed text-slate-600">
+            {text}
+            {evidence && <div className="mt-1 italic text-slate-500">Documentation: “{evidence}”</div>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -92,7 +99,7 @@ function CodeRow({ row, kind, decision, set }) {
           <button onClick={() => set({ action: "reject", final: null })} className={seg(a === "reject", "bg-red-100 text-red-700")}><X size={13} />Reject</button>
         </div>
       </div>
-      <Why text={row.why} evidence={row.evidence} />
+      <Why text={row.why} evidence={row.evidence} history={row.history} />
       {a === "modify" && (
         <div className="mt-2 flex flex-wrap items-center gap-2 pl-16">
           {kind === "EM" ? (
@@ -243,7 +250,7 @@ export default function CoderReview({ encounterId, live }) {
                     <button onClick={() => setWithheld((s) => ({ ...s, [w.id]: { ...s[w.id], bill: true } }))} className={seg(withheld[w.id]?.bill, "bg-emerald-100 text-emerald-700")}>Bill it</button>
                   </div>
                 </div>
-                <Why text={w.why} evidence={w.evidence} />
+                <Why text={w.why} evidence={w.evidence} history={w.history} />
               </div>
             ))}
           </>

@@ -172,6 +172,7 @@ class ProcessRequest(BaseModel):
     placeOfService: str = "11"
     patientAge: int = 0
     patientSex: str = "unknown"
+    userId: Optional[str] = None      # reviewer identity for learned preferences
 
 
 class DecisionModel(BaseModel):
@@ -240,9 +241,9 @@ def get_encounter(encounter_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/encounters/{encounter_id}/billing")
-def bill_stored(encounter_id: str) -> dict[str, Any]:
+def bill_stored(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
     bundle = _get_bundle(encounter_id)
-    result = get_orchestrator().process(bundle)
+    result = get_orchestrator().process(bundle, user_id=user_id)
     return _billing_json(bundle, result)
 
 
@@ -255,15 +256,28 @@ def bill_adhoc(req: ProcessRequest) -> dict[str, Any]:
         transcript=req.transcript, signed_note=req.signedNote,
         submitted_em_code=req.submittedEm,
     )
-    result = get_orchestrator().process(bundle)
+    result = get_orchestrator().process(bundle, user_id=req.userId)
     return _billing_json(bundle, result)
 
 
 @app.get("/api/encounters/{encounter_id}/coder-view")
-def coder_view(encounter_id: str) -> dict[str, Any]:
+def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
     bundle = _get_bundle(encounter_id)
-    result = get_orchestrator().process(bundle)
-    return _coder_view_json(bundle, result)
+    orch = get_orchestrator()
+    uid = user_id or os.environ.get("COSMANEURA_CODER_ID", "coder_A")
+    result = orch.process(bundle, user_id=uid)
+    view = _coder_view_json(bundle, result)
+    view["coderId"] = uid
+    # attach learned-history hints so the reviewer sees why a code was
+    # refined or held ("you've declined this 3x")
+    prefs = orch.preferences.for_user(uid)
+    for row in ([view["em"]] if view["em"] else []) + view["dx"] + view["withheld"]:
+        key = row["code"].replace(".", "").upper()
+        if key in prefs.suppress:
+            row["history"] = prefs.suppress[key].hint()
+        elif key in prefs.refine:
+            row["history"] = prefs.refine[key].hint()
+    return view
 
 
 @app.post("/api/feedback")

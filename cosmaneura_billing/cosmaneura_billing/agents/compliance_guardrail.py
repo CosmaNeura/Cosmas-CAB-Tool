@@ -59,6 +59,14 @@ class ComplianceGuardrailAgent:
                     s.disposition = Disposition.REVIEW
                     audit.append(f"HOLD    unresolved dx '{s.label}': map to a valid ICD-10 before billing.")
                     continue
+                # a learned reviewer preference can hold a code for review; it
+                # never argues one INTO the claim, so honoring it here keeps
+                # the guardrail's keep/downgrade/remove invariant intact
+                if any(n.startswith("preference_hold") for n in s.notes):
+                    s.disposition = Disposition.REVIEW
+                    hint = next(n for n in s.notes if n.startswith("preference_hold"))
+                    audit.append(f"HOLD    {s.code} ({s.label}): {hint.split(': ', 1)[-1]}.")
+                    continue
                 addressed = "not_addressed_in_plan" not in s.notes
                 s.necessity_supported = s.has_evidence and addressed
                 if s.necessity_supported and s.disposition != Disposition.REJECTED:

@@ -98,3 +98,31 @@ def test_feedback_roundtrip_and_summary(client):
 def test_feedback_summary_empty(client):
     s = client.get("/api/feedback/summary").json()
     assert s["encounters"] == 0 and s["goldRows"] == 0
+
+
+def test_reviewer_rejections_influence_future_runs_for_that_reviewer(client):
+    """The full loop: three rejections of K59.00 by one reviewer -> the engine
+    holds it on their next run (with history), while others are unaffected."""
+    reject = {"kind": "ICD10", "engine_code": "K59.00", "action": "reject",
+              "final_code": None, "reason_code": "dx_not_supported_by_doc"}
+    for i in range(3):
+        client.post("/api/feedback", json={
+            "encounter_id": f"E{i}", "coder_id": "dr_smith",
+            "engine_em": "99214", "final_em": "99214", "decisions": [reject]})
+
+    j = client.post("/api/encounters/ENC-100237/billing?user_id=dr_smith").json()
+    captured = {c["code"] for c in j["captured"]}
+    assert "K59.00" not in captured
+    held = [c for c in j["declined"] if c["code"] == "K59.00"]
+    assert held and held[0]["disposition"] == "needs_review"
+    assert any(a["action"] == "HOLD" and "declined K59.00 3x" in a["detail"]
+               for a in j["audit"])
+
+    # a different reviewer still gets the base behavior
+    j2 = client.post("/api/encounters/ENC-100237/billing?user_id=dr_jones").json()
+    assert "K59.00" in {c["code"] for c in j2["captured"]}
+
+    # and the coder view surfaces the learned history
+    cv = client.get("/api/encounters/ENC-100237/coder-view?user_id=dr_smith").json()
+    row = next(w for w in cv["withheld"] if w["code"] == "K59.00")
+    assert "declined K59.00 3x" in row["history"]
