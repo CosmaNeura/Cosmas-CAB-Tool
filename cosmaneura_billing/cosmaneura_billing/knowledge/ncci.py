@@ -79,12 +79,34 @@ def _col(header: list[str], *needles: str) -> int | None:
     return None
 
 
+_BUNDLED_DIR = Path(__file__).resolve().parent.parent / "data" / "ncci"
+
+
 class NCCIEdits:
     def __init__(self) -> None:
         self._ptp: dict[tuple[str, str], PTPResult] = {}
         self._mue: dict[str, int] = {}
 
     # ---- construction --------------------------------------------------- #
+    @classmethod
+    def from_bundled(cls, dir_path: str | Path | None = None) -> "NCCIEdits | None":
+        """Load from ``data/ncci/`` if the practice has dropped the CMS files
+        there (any file whose name contains 'ptp' / 'mue'; .gz accepted).
+        Returns None when nothing is present — callers treat that as 'no NCCI'."""
+        d = Path(dir_path or _BUNDLED_DIR)
+        if not d.is_dir():
+            return None
+
+        def find(needle: str) -> Path | None:
+            hits = [p for p in sorted(d.iterdir())
+                    if p.is_file() and needle in p.name.lower()]
+            return hits[0] if hits else None
+
+        ptp, mue = find("ptp"), find("mue")
+        if ptp is None and mue is None:
+            return None
+        return cls.from_files(ptp_path=ptp, mue_path=mue)
+
     @classmethod
     def from_files(cls, ptp_path: str | Path | None = None,
                    mue_path: str | Path | None = None) -> "NCCIEdits":

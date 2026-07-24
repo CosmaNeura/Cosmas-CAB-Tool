@@ -6,8 +6,10 @@ from .agents import (
     DocumentationIntegrityAgent, FeedbackAgent,
 )
 from .evidence import verify_suggestion_evidence
+from .knowledge.coverage import CoverageDB
 from .knowledge.cpt import CPTDescriptors
 from .knowledge.icd10_ccsr import ICD10CCSR
+from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
 from .llm import LLMClient, get_default_client
 from .schemas import (
@@ -21,8 +23,10 @@ class BillingOrchestrator:
                  ncci=None, coverage=None, pos=None, cpt=None):
         self.llm = llm or get_default_client()
         self.icd10 = icd10 or ICD10CCSR()
-        self.ncci = ncci         # optional knowledge.ncci.NCCIEdits
-        self.coverage = coverage  # optional knowledge.coverage.CoverageDB
+        # NCCI / MCD coverage: explicit instance wins; otherwise auto-load from
+        # data/ncci/ and data/mcd/ if the practice has dropped the CMS files there.
+        self.ncci = ncci if ncci is not None else NCCIEdits.from_bundled()
+        self.coverage = coverage if coverage is not None else CoverageDB.from_bundled()
         self.pos = pos or PlaceOfService()       # bundled CMS POS codes
         self.cpt = cpt or CPTDescriptors()       # loads only from licensed data (CPT_DATA_DIR)
         self.coding = CodingAgent(self.llm, self.icd10)

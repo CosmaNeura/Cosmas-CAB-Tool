@@ -99,6 +99,33 @@ class CoverageDB:
         ) for d in data])
 
     @classmethod
+    def from_bundled(cls, dir_path: str | Path | None = None) -> "CoverageDB | None":
+        """Load from ``data/mcd/`` if the practice has dropped the MCD Article
+        tables there. Files are matched by name: *hcpc* (code list),
+        *icd10*covered* (supporting dx), *dont*/*noncovered* (non-supporting
+        dx), and article.* (titles/contractor). Returns None when absent."""
+        d = Path(dir_path or Path(__file__).resolve().parent.parent / "data" / "mcd")
+        if not d.is_dir():
+            return None
+        files = [p for p in sorted(d.iterdir()) if p.is_file()]
+
+        def find(want, exclude=()):
+            for p in files:
+                n = p.name.lower()
+                if all(w in n for w in want) and not any(x in n for x in exclude):
+                    return p
+            return None
+
+        hcpc = find(("hcpc",))
+        covered = find(("icd10", "covered"), exclude=("dont", "non"))
+        if hcpc is None or covered is None:
+            return None
+        dont = find(("dont",)) or find(("noncovered",))
+        article = next((p for p in files if p.stem.lower() == "article"), None)
+        return cls.from_mcd_tables(hcpc_file=hcpc, covered_file=covered,
+                                   dont_support_file=dont, article_file=article)
+
+    @classmethod
     def from_mcd_tables(cls, *, hcpc_file: str | Path, covered_file: str | Path,
                         dont_support_file: str | Path | None = None,
                         article_file: str | Path | None = None) -> "CoverageDB":
