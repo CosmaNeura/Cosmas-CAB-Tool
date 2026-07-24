@@ -92,11 +92,14 @@ class DenialRiskAgent:
             flags.append("E/M billed with a same-day procedure: confirm modifier 25 is appropriate "
                          "(separately identifiable E/M). Load NCCI edits for exact bundling rules.")
 
-        # LCD/NCD medical-necessity check, if the practice has loaded coverage data.
+        # LCD/NCD medical-necessity check, if the practice has loaded coverage
+        # data. Applies to PROCEDURES only: office-visit E/M codes are not
+        # governed by LCD diagnosis lists, so matching them against articles
+        # would produce false medical-necessity flags.
         if coverage is not None and getattr(coverage, "loaded", False) and has_dx:
             dx = [s for s in captured if s.kind == CodeKind.ICD10]
             primary = next((s for s in dx if "primary_candidate" in s.notes), dx[0])
-            for s in [c for c in captured if c.kind in (CodeKind.EM, CodeKind.PROCEDURE)]:
+            for s in [c for c in captured if c.kind == CodeKind.PROCEDURE]:
                 res = coverage.supports(s.code, primary.code)
                 if res.status in ("not_supported", "not_covered"):
                     s.denial_risk = "high"

@@ -87,13 +87,26 @@ class NCCIEdits:
         self._ptp: dict[tuple[str, str], PTPResult] = {}
         self._mue: dict[str, int] = {}
 
+    _bundled_cache: dict[str, "NCCIEdits | None"] = {}
+
     # ---- construction --------------------------------------------------- #
     @classmethod
     def from_bundled(cls, dir_path: str | Path | None = None) -> "NCCIEdits | None":
         """Load from ``data/ncci/`` if the practice has dropped the CMS files
         there (any file whose name contains 'ptp' / 'mue'; .gz accepted).
-        Returns None when nothing is present — callers treat that as 'no NCCI'."""
+        Returns None when nothing is present — callers treat that as 'no NCCI'.
+        The full practitioner PTP set is ~1.7M pairs (~18s parse), so results
+        are memoized per directory for the life of the process."""
         d = Path(dir_path or _BUNDLED_DIR)
+        key = str(d.resolve())
+        if key in cls._bundled_cache:
+            return cls._bundled_cache[key]
+        result = cls._from_bundled_uncached(d)
+        cls._bundled_cache[key] = result
+        return result
+
+    @classmethod
+    def _from_bundled_uncached(cls, d: Path) -> "NCCIEdits | None":
         if not d.is_dir():
             return None
 

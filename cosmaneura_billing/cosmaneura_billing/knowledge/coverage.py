@@ -98,13 +98,25 @@ class CoverageDB:
             noncovered_icd10=set(d.get("noncovered_icd10", [])),
         ) for d in data])
 
+    _bundled_cache: dict[str, "CoverageDB | None"] = {}
+
     @classmethod
     def from_bundled(cls, dir_path: str | Path | None = None) -> "CoverageDB | None":
         """Load from ``data/mcd/`` if the practice has dropped the MCD Article
         tables there. Files are matched by name: *hcpc* (code list),
         *icd10*covered* (supporting dx), *dont*/*noncovered* (non-supporting
-        dx), and article.* (titles/contractor). Returns None when absent."""
+        dx), and article.* (titles/contractor). Returns None when absent.
+        Memoized per directory (the national article tables are large)."""
         d = Path(dir_path or Path(__file__).resolve().parent.parent / "data" / "mcd")
+        key = str(d.resolve())
+        if key in cls._bundled_cache:
+            return cls._bundled_cache[key]
+        result = cls._from_bundled_uncached(d)
+        cls._bundled_cache[key] = result
+        return result
+
+    @classmethod
+    def _from_bundled_uncached(cls, d: Path) -> "CoverageDB | None":
         if not d.is_dir():
             return None
         files = [p for p in sorted(d.iterdir()) if p.is_file()]
@@ -121,7 +133,8 @@ class CoverageDB:
         if hcpc is None or covered is None:
             return None
         dont = find(("dont",)) or find(("noncovered",))
-        article = next((p for p in files if p.stem.lower() == "article"), None)
+        article = next((p for p in files
+                        if p.name.lower().split(".")[0] == "article"), None)
         return cls.from_mcd_tables(hcpc_file=hcpc, covered_file=covered,
                                    dont_support_file=dont, article_file=article)
 
@@ -204,7 +217,11 @@ class CoverageDB:
 # delimited-table helpers (pipe/comma/tab auto-detect; column match by name)
 # --------------------------------------------------------------------------- #
 def _rows(path: str | Path) -> list[dict[str, str]]:
-    with open(path, newline="", encoding="utf-8", errors="ignore") as fh:
+    import gzip
+    opener = (lambda p: gzip.open(p, "rt", newline="", encoding="utf-8", errors="ignore")) \
+        if str(path).endswith(".gz") else \
+        (lambda p: open(p, newline="", encoding="utf-8", errors="ignore"))
+    with opener(path) as fh:
         sample = fh.read(4096); fh.seek(0)
         delim = max(["|", "\t", ","], key=sample.count)
         reader = csv.reader(fh, delimiter=delim)
