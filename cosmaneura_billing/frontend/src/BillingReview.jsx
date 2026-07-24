@@ -1,49 +1,16 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Stethoscope, FileText, ShieldCheck, AlertTriangle, Check, X, Clock,
-  ArrowUp, Heart, Info, RefreshCw,
+  ArrowUp, Heart, RefreshCw,
 } from "lucide-react";
+import { api } from "./api.js";
 
 /*
-  CosmaNeura — Billing review front end (prototype)
-  =================================================
-  This is a self-contained, clickable prototype for developer handoff. It renders
-  the two role-scoped views (provider + biller) and the feedback loop produced by
-  the Python engine in `cosmaneura_billing/`.
-
-  DATA CONTRACT — what the backend must return (mirrors schemas.py: BillingResult)
-  --------------------------------------------------------------------------------
-  type Evidence = { source: string; quote: string };
-  type Code = {
-    kind: "EM" | "ICD10" | "PROCEDURE" | "MODIFIER";
-    code: string; label: string;            // label = short generic label, NOT the AMA CPT long descriptor
-    disposition: "captured" | "needs_review" | "rejected";
-    evidence: Evidence[];
-    denialRisk: "low" | "medium" | "high" | "unknown";
-    correctedFrom?: string;                  // e.g. "99213" when up-coded from the submitted level
-    primary?: boolean;
-    reason?: string;                         // why rejected / held
-  };
-  type FeedbackEvent = {
-    kind: "documentation_gap" | "care_quality" | "intake_completeness" | "coding_education";
-    target: "provider" | "intake_agent" | "documentation_agent" | "biller";
-    message: string; patientBenefit: string; tone: "subtle" | "informational";
-  };
-  type BillingResult = {
-    encounterId: string; summary: string;
-    captured: Code[]; declined: Code[];
-    em: Code | null; primary: Code | null; diagnoses: Code[];
-    denialFlags: string[]; requiresSignoff: boolean;
-    audit: { action: "CAPTURE" | "REJECT" | "HOLD" | "DOWNGRADE"; code: string; detail: string }[];
-    feedback: FeedbackEvent[]; revenueIntegrityNote: string;
-  };
-
-  WIRING — replace the mock with the real call:
-    async function getBilling(encounterId) {
-      const r = await fetch(`/api/encounters/${encounterId}/billing`, { method: "POST" });
-      if (!r.ok) throw new Error(`billing API ${r.status}`);
-      return r.json();  // -> BillingResult
-    }
+  Provider card + biller worksheet, wired to the live engine:
+    GET  /api/encounters/{id}   -> populate the editable documentation
+    POST /api/billing           -> run the 5-agent pipeline on what's shown
+  When the engine is unreachable (`live` prop false) the demo encounter and a
+  canned result keep the page walkable.
 */
 
 const DEMO_ENCOUNTER = {
@@ -69,7 +36,7 @@ const DEMO_ENCOUNTER = {
     "hydration; (3) Diarrhea — monitor. Electronically signed.",
 };
 
-// MOCK — returns the exact BillingResult the engine produces for the demo encounter.
+// Offline fallback — the result the engine produces for the demo encounter.
 function mockBillingApi() {
   return {
     encounterId: "ENC-100237",
@@ -77,7 +44,7 @@ function mockBillingApi() {
     captured: [
       { kind: "EM", code: "99214", label: "Office visit, established · moderate MDM",
         disposition: "captured", denialRisk: "low", correctedFrom: "99213",
-        evidence: [{ source: "signed_note", quote: "refer you for a colonoscopy to be safe" }] },
+        evidence: [{ source: "transcript", quote: "refer you for a colonoscopy to be safe" }] },
       { kind: "ICD10", code: "K62.5", label: "Hemorrhage of anus and rectum", primary: true,
         disposition: "captured", denialRisk: "low",
         evidence: [{ source: "intake", quote: "When I eat spicy food, I poop blood" }] },
@@ -92,7 +59,7 @@ function mockBillingApi() {
       { kind: "ICD10", code: "Z80.0", label: "Family history of malignant neoplasm of digestive organs",
         disposition: "rejected", denialRisk: "unknown", evidence: [],
         reason: "Patient explicitly denied family history of colorectal cancer." },
-      { kind: "ICD10", code: "E66.9", label: "Obesity, unspecified",
+      { kind: "ICD10", code: "E66.8", label: "Other obesity",
         disposition: "needs_review", denialRisk: "unknown", evidence: [],
         reason: "BMI 37.6 is documented in vitals but obesity is not addressed in the plan." },
     ],
@@ -111,7 +78,7 @@ function mockBillingApi() {
       { action: "CAPTURE", code: "99214", detail: "within MDM ceiling, evidence attached" },
       { action: "CAPTURE", code: "K62.5", detail: "linked to documented finding" },
       { action: "REJECT", code: "Z80.0", detail: "family history denied by patient" },
-      { action: "HOLD", code: "E66.9", detail: "documented, not addressed in plan" },
+      { action: "HOLD", code: "E66.8", detail: "documented, not addressed in plan" },
     ],
     feedback: [
       { kind: "coding_education", target: "provider", tone: "subtle",
@@ -120,12 +87,6 @@ function mockBillingApi() {
       { kind: "documentation_gap", target: "provider", tone: "subtle",
         message: "BMI 37.6 is in the vitals but obesity isn't addressed in the plan; it's reportable only if you assess/manage it.",
         patientBenefit: "Complete documentation reflects the care actually delivered." },
-      { kind: "care_quality", target: "provider", tone: "subtle",
-        message: "Flag the colonoscopy for navigation so the bleeding workup isn't lost.",
-        patientBenefit: "Timely completion of an indicated diagnostic study." },
-      { kind: "intake_completeness", target: "intake_agent", tone: "informational",
-        message: "For GI-bleeding presentations, intake should capture NSAID/aspirin use, stool color & duration, and weight change.",
-        patientBenefit: "A fuller history means fewer call-backs and a safer workup." },
     ],
     revenueIntegrityNote:
       "4 codes captured (3 dx + E/M), each linked to documentation. 1 rejected as unsupported, 1 held for sign-off. No code exceeds its MDM ceiling.",
@@ -216,7 +177,11 @@ function ProviderCard({ r }) {
 }
 
 function BillerCard({ r }) {
-  const actionTone = { CAPTURE: "text-emerald-600", REJECT: "text-red-500", HOLD: "text-amber-600", DOWNGRADE: "text-amber-600" };
+  const actionTone = {
+    CAPTURE: "text-emerald-600", REJECT: "text-red-500", HOLD: "text-amber-600",
+    DOWNGRADE: "text-amber-600", "EVIDENCE-REMOVED": "text-red-500",
+    "EVIDENCE-RELABELED": "text-slate-500", CPT: "text-slate-500",
+  };
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center gap-2.5">
@@ -233,7 +198,10 @@ function BillerCard({ r }) {
       <SectionLabel>Claim lines</SectionLabel>
       <div className="flex items-center justify-between border-t border-slate-100 py-2">
         <span className="text-sm text-slate-500">E/M code</span>
-        <code className="font-mono text-sm text-slate-900">{r.em?.code}</code>
+        <span className="text-right">
+          <code className="font-mono text-sm text-slate-900">{r.em?.code}</code>
+          {r.em?.label && <span className="ml-2 text-xs text-slate-500">{r.em.label}</span>}
+        </span>
       </div>
       <div className="flex items-center justify-between border-t border-slate-100 py-2">
         <span className="text-sm text-slate-500">Primary diagnosis</span>
@@ -246,12 +214,13 @@ function BillerCard({ r }) {
           <div key={d.code} className="flex items-center gap-2 py-2">
             <code className="w-16 font-mono text-sm text-slate-900">{d.code}</code>
             <span className="flex-1 text-sm text-slate-700">{d.label}</span>
-            <Pill tone={RISK[d.denialRisk]}>denial: {d.denialRisk}</Pill>
+            <Pill tone={RISK[d.denialRisk] || RISK.unknown}>denial: {d.denialRisk}</Pill>
           </div>
         ))}
       </div>
 
       <SectionLabel>Denial-risk flags</SectionLabel>
+      {r.denialFlags.length === 0 && <p className="text-sm text-slate-400">none</p>}
       {r.denialFlags.map((f, i) => (
         <div key={i} className="mb-2 flex gap-2 text-sm text-slate-700">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-500" />
@@ -263,7 +232,7 @@ function BillerCard({ r }) {
       <div className="rounded-lg bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-600">
         {r.audit.map((a, i) => (
           <div key={i}>
-            <span className={`font-medium ${actionTone[a.action]}`}>{a.action}</span>{" "}
+            <span className={`font-medium ${actionTone[a.action] || "text-slate-500"}`}>{a.action}</span>{" "}
             <span className="text-slate-900">{a.code}</span> — {a.detail}
           </div>
         ))}
@@ -284,97 +253,121 @@ function Field({ label, value, onChange, rows = 3 }) {
   );
 }
 
-export default function App() {
+export default function BillingReview({ encounterId, live }) {
   const [enc, setEnc] = useState(DEMO_ENCOUNTER);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const run = () => {
+  // load the selected encounter's documentation into the editor
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+    if (!live) { setEnc(DEMO_ENCOUNTER); return; }
+    (async () => {
+      try {
+        const e = await api(`/api/encounters/${encodeURIComponent(encounterId)}`);
+        setEnc({
+          encounterId: e.id, submittedEm: e.submittedEm || "",
+          intake: e.intake || "", transcript: e.transcript || "", signedNote: e.signedNote || "",
+        });
+      } catch {
+        setEnc(DEMO_ENCOUNTER);
+      }
+    })();
+  }, [encounterId, live]);
+
+  const run = async () => {
     setLoading(true);
-    setTimeout(() => { setResult(mockBillingApi()); setLoading(false); }, 600);
+    setError(null);
+    try {
+      if (live) {
+        const j = await api("/api/billing", {
+          method: "POST",
+          body: {
+            encounterId: enc.encounterId, submittedEm: enc.submittedEm || null,
+            intake: enc.intake, transcript: enc.transcript, signedNote: enc.signedNote,
+          },
+        });
+        setResult(j);
+      } else {
+        await new Promise((r) => setTimeout(r, 500));
+        setResult(mockBillingApi());
+      }
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900" style={{ fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial" }}>
-      <div className="mx-auto max-w-5xl">
-        <header className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white">
-              <ShieldCheck size={20} />
-            </span>
-            <div>
-              <h1 className="text-lg font-medium tracking-tight">CosmaNeura · Billing review</h1>
-              <p className="text-xs text-slate-500">Evidence-grounded coding for independent practices</p>
-            </div>
-          </div>
-          <Pill tone="bg-amber-50 text-amber-700 ring-amber-200"><Info size={12} className="mr-1" />mock data</Pill>
-        </header>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <p className="text-sm font-medium text-slate-900">Encounter {enc.encounterId}</p>
-            <span className="text-xs text-slate-500">submitted as <code className="font-mono">{enc.submittedEm}</code></span>
-          </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} />
-            <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} />
-            <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} />
-          </div>
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              onClick={run} disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 active:scale-95 disabled:opacity-60"
-            >
-              {loading ? <RefreshCw size={16} className="animate-spin" /> : <Check size={16} />}
-              {loading ? "Reviewing…" : "Process encounter"}
-            </button>
-            <span className="text-xs text-slate-400">Runs the 5-agent pipeline · guardrail can only downgrade or remove</span>
-          </div>
+    <>
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-sm font-medium text-slate-900">Encounter {enc.encounterId}</p>
+          <span className="text-xs text-slate-500">
+            {enc.submittedEm ? <>submitted as <code className="font-mono">{enc.submittedEm}</code></> : "no code submitted yet"}
+          </span>
         </div>
-
-        {result && (
-          <>
-            <div className="mt-5 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-              <ShieldCheck size={18} className="mt-0.5 shrink-0" />
-              <span>{result.revenueIntegrityNote}</span>
-            </div>
-            <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <ProviderCard r={result} />
-              <BillerCard r={result} />
-            </div>
-
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-                  <RefreshCw size={18} />
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-slate-900">Feedback loop</p>
-                  <p className="text-xs text-slate-500">routed to the platform · every nudge states a patient benefit</p>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {result.feedback.map((f, i) => (
-                  <div key={i} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <div className="mb-1 flex items-center gap-2">
-                      <Pill tone="bg-slate-100 text-slate-600 ring-slate-300">{f.kind.replace(/_/g, " ")}</Pill>
-                      <span className="text-xs text-slate-400">→ {f.target.replace(/_/g, " ")}</span>
-                    </div>
-                    <p className="text-sm text-slate-700">{f.message}</p>
-                    <p className="mt-1 flex items-start gap-1 text-xs text-slate-500">
-                      <Heart size={12} className="mt-0.5 shrink-0 text-sky-500" />{f.patientBenefit}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <p className="mt-4 text-center text-xs text-slate-400">
-              Codes shown by number with generic labels. AMA CPT long descriptors require the practice's CPT license.
-            </p>
-          </>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} />
+          <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} />
+          <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} />
+        </div>
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            onClick={run} disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 active:scale-95 disabled:opacity-60"
+          >
+            {loading ? <RefreshCw size={16} className="animate-spin" /> : <Check size={16} />}
+            {loading ? "Reviewing…" : "Process encounter"}
+          </button>
+          <span className="text-xs text-slate-400">Runs the 5-agent pipeline · guardrail can only downgrade or remove</span>
+        </div>
+        {error && (
+          <p className="mt-3 rounded-lg bg-red-50 p-2.5 text-sm text-red-700">engine error: {error}</p>
         )}
       </div>
-    </div>
+
+      {result && (
+        <>
+          <div className="mt-5 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+            <ShieldCheck size={18} className="mt-0.5 shrink-0" />
+            <span>{result.revenueIntegrityNote}</span>
+          </div>
+          <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <ProviderCard r={result} />
+            <BillerCard r={result} />
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+                <RefreshCw size={18} />
+              </span>
+              <div>
+                <p className="text-sm font-medium text-slate-900">Feedback loop</p>
+                <p className="text-xs text-slate-500">routed to the platform · every nudge states a patient benefit</p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {result.feedback.map((f, i) => (
+                <div key={i} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-1 flex items-center gap-2">
+                    <Pill tone="bg-slate-100 text-slate-600 ring-slate-300">{f.kind.replace(/_/g, " ")}</Pill>
+                    <span className="text-xs text-slate-400">→ {f.target.replace(/_/g, " ")}</span>
+                  </div>
+                  <p className="text-sm text-slate-700">{f.message}</p>
+                  <p className="mt-1 flex items-start gap-1 text-xs text-slate-500">
+                    <Heart size={12} className="mt-0.5 shrink-0 text-sky-500" />{f.patientBenefit}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 }

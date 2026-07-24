@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install test dependencies
-        run: python -m pip install pytest numpy
+        run: python -m pip install pytest numpy fastapi uvicorn httpx
       - name: Run billing engine tests
         working-directory: cosmaneura_billing
         run: python -m pytest -v
@@ -27,3 +27,16 @@ jobs:
       - name: Offline demo smoke test
         working-directory: cosmaneura_billing
         run: python run_demo.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install and build
+        working-directory: cosmaneura_billing/frontend
+        run: |
+          npm ci
+          npm run build

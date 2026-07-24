@@ -17,7 +17,9 @@ dependencies = []
 vector = ["numpy>=1.24"]
 # iCliniq corpus loading + feather I/O
 corpus = ["pandas>=2.0", "pyarrow>=14"]
-dev = ["pytest>=8", "numpy>=1.24"]
+# the demo/pilot API service (cosmaneura_billing.api)
+api = ["fastapi>=0.110", "uvicorn>=0.30"]
+dev = ["pytest>=8", "numpy>=1.24", "fastapi>=0.110", "uvicorn>=0.30", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 include = ["cosmaneura_billing*"]

@@ -17,6 +17,26 @@ python run_demo.py                  # prints the provider view + biller workshee
 python prove_no_upcode.py           # proves the guardrail cannot upcode
 ```
 
+## The pilot demo (API + web UI)
+
+Two terminals:
+
+```bash
+# 1. the engine API (FastAPI; first request loads the NCCI edits, ~18s)
+pip install fastapi uvicorn
+uvicorn cosmaneura_billing.api:app --port 8000
+
+# 2. the web UI (provider card, biller worksheet, coder review)
+cd frontend && npm install && npm run dev     # -> http://localhost:5173
+```
+
+The UI shows a live-engine status pill (NCCI / coverage / CPT), lets you pick
+an encounter (the GI-bleed demo plus ACI-Bench visits), edit the documentation,
+run the pipeline, and — on the Coder review tab — accept/edit/reject each code
+and submit feedback that lands in the JSONL store for `scripts/analyze_feedback.py`.
+Coder feedback is persisted to `coder_feedback.jsonl` (override with
+`COSMANEURA_FEEDBACK_PATH`).
+
 Production inference (clinical fact extraction via Claude) turns on automatically
 when a key is present, and the full AHRQ code set loads from a path you point at:
 
