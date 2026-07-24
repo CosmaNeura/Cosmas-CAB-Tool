@@ -48,16 +48,33 @@ _CANDIDATES = ("SHORTU.txt", "SHORTU.TXT", "shortu.txt",
 _CODE_RE = re.compile(r"^\s*([0-9]{4}[0-9A-Z])\s+(.+?)\s*$")
 
 _AMA_VARS = ("AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET")
+# The AMA gateway's WAF rejects requests without an explicit User-Agent
+# (Python-urllib's default gets 403), so every request sends one.
+_UA = "cosmaneura-billing/0.1"
 _DEFAULT_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) \
     / "cosmaneura" / "cpt"
 
 
 def _find_descriptor_file(d: Path) -> Path | None:
     for name in _CANDIDATES:
-        if (d / name).exists():
-            return d / name
+        hits = sorted(d.rglob(name))
+        if hits:
+            return hits[0]
     hits = sorted(d.rglob("*.txt")) + sorted(d.rglob("*.csv"))
     return hits[0] if hits else None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _urlopen(req: urllib.request.Request, timeout: int):
+    """One HTTP round trip that does NOT auto-follow redirects (the file
+    endpoint 303s to pre-signed storage, where forwarding the Authorization
+    header would be rejected — and would leak the token). Module-level seam
+    so tests can fake HTTP."""
+    return urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout)
 
 
 class CPTDescriptors:
@@ -99,12 +116,15 @@ class CPTDescriptors:
             if not release:
                 self.fetch_error = f"could not determine a release id from {str(releases)[:200]}"
                 return None
-            file_path = os.environ.get("AMA_FILE_PATH", "/cpt-zip/1.0.0/files/{release}")
+            file_path = os.environ.get("AMA_FILE_PATH", "/cpt-zip/1.0.0/files?release={release}")
             blob = self._get_bytes(
                 base + file_path.format(release=urllib.parse.quote(str(release))), token)
             self._cache.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-                zf.extractall(self._cache)
+                # descriptors live in the .txt data files; skip the PDF/DOCX bulk
+                for m in zf.namelist():
+                    if m.lower().endswith((".txt", ".csv")):
+                        zf.extract(m, self._cache)
             return _find_descriptor_file(self._cache)
         except Exception as e:  # never break the pipeline over descriptors
             self.fetch_error = f"{type(e).__name__}: {e}"
@@ -120,8 +140,9 @@ class CPTDescriptors:
             data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
             method="POST",
             headers={"Authorization": f"Basic {basic}",
-                     "Content-Type": "application/x-www-form-urlencoded"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+                     "Content-Type": "application/x-www-form-urlencoded",
+                     "User-Agent": _UA})
+        with _urlopen(req, timeout=60) as r:
             payload = json.loads(r.read())
         tok = payload.get("access_token")
         if not tok:
@@ -130,15 +151,28 @@ class CPTDescriptors:
 
     @staticmethod
     def _get_json(url: str, token: str):
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=120) as r:
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}", "User-Agent": _UA})
+        with _urlopen(req, timeout=120) as r:
             return json.loads(r.read())
 
     @staticmethod
     def _get_bytes(url: str, token: str) -> bytes:
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=300) as r:
-            return r.read()
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}", "User-Agent": _UA})
+        try:
+            with _urlopen(req, timeout=300) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308):
+                loc = e.headers.get("Location")
+                if not loc:
+                    raise
+                # pre-signed URL: authenticate by URL only — never forward the token
+                req2 = urllib.request.Request(loc, headers={"User-Agent": _UA})
+                with _urlopen(req2, timeout=300) as r:
+                    return r.read()
+            raise
 
     @staticmethod
     def _pick_release(releases) -> str | None:

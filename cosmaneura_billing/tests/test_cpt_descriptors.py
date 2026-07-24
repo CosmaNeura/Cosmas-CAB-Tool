@@ -59,17 +59,17 @@ def test_relabel_upgrades_generic_labels(tmp_path):
 
 
 # ---- auto-fetch from the AMA CPT Zip API (all HTTP faked) ------------------- #
-def _fake_ama(monkeypatch, tmp_path, token_status=200):
-    """Fake the token, releases, and file endpoints."""
+def _fake_ama(monkeypatch, tmp_path, token_status=200, redirect=False):
+    """Fake the token, releases, and file endpoints behind the module seam."""
     import io as _io
     import json as _json
     import urllib.error
-    import urllib.request
     import zipfile as _zip
 
     buf = _io.BytesIO()
     with _zip.ZipFile(buf, "w") as zf:
-        zf.writestr("SHORTU.txt", FAKE_SDF)
+        zf.writestr("2026 Update/Legacy Format/SHORTU.txt", FAKE_SDF)
+        zf.writestr("2026 Update/Appendix.pdf", b"%PDF-fake")
     zip_bytes = buf.getvalue()
 
     class R:
@@ -90,11 +90,18 @@ def _fake_ama(monkeypatch, tmp_path, token_status=200):
             return R(_json.dumps({"access_token": "tok-1", "expires_in": 3600}).encode())
         if url.endswith("/releases"):
             return R(_json.dumps({"releases": [{"id": "cpt-2026"}]}).encode())
-        if "/files/" in url:
+        if "/files" in url and "s3.example" not in url:
+            if redirect:
+                raise urllib.error.HTTPError(
+                    url, 303, "See Other", {"Location": "https://s3.example/presigned"},
+                    _io.BytesIO(b""))
+            return R(zip_bytes)
+        if "s3.example" in url:
+            assert "Authorization" not in req.headers, "token must not go to storage"
             return R(zip_bytes)
         raise AssertionError(f"unexpected url {url}")
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("cosmaneura_billing.knowledge.cpt._urlopen", fake_urlopen)
     monkeypatch.setenv("AMA_TOKEN_URL", "https://gw.example/oauth2/token")
     monkeypatch.setenv("AMA_BASE_URL", "https://gw.example")
     monkeypatch.setenv("AMA_CONSUMER_KEY", "k")
@@ -108,15 +115,23 @@ def test_auto_fetch_with_credentials(monkeypatch, tmp_path):
     cpt = CPTDescriptors(cache_dir=tmp_path / "cache")
     assert cpt.loaded and cpt.size == 3
     assert cpt.get("99214") == "FAKE-DESCRIPTOR-B est patient visit"
-    assert any("/files/cpt-2026" in c for c in calls)
+    assert any("files?release=cpt-2026" in c for c in calls)
+    # only text data extracted, never the PDF bulk
+    assert not list((tmp_path / "cache").rglob("*.pdf"))
+
+
+def test_auto_fetch_follows_presigned_redirect_without_token(monkeypatch, tmp_path):
+    calls = _fake_ama(monkeypatch, tmp_path, redirect=True)
+    cpt = CPTDescriptors(cache_dir=tmp_path / "cache")
+    assert cpt.loaded and cpt.size == 3
+    assert any("s3.example" in c for c in calls)
 
 
 def test_auto_fetch_uses_cache_on_second_load(monkeypatch, tmp_path):
     _fake_ama(monkeypatch, tmp_path)
     CPTDescriptors(cache_dir=tmp_path / "cache")
     # second instance must load from cache without any HTTP
-    import urllib.request
-    monkeypatch.setattr(urllib.request, "urlopen",
+    monkeypatch.setattr("cosmaneura_billing.knowledge.cpt._urlopen",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("network hit")))
     cpt2 = CPTDescriptors(cache_dir=tmp_path / "cache")
     assert cpt2.loaded and cpt2.size == 3
