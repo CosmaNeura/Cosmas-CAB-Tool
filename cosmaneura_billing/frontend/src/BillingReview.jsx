@@ -133,6 +133,11 @@ function ProviderCard({ r }) {
             <div className="flex flex-wrap items-baseline gap-2">
               <code className="w-16 font-mono text-sm text-slate-900">{c.code}</code>
               <span className="flex-1 text-sm text-slate-700">{c.label}</span>
+              {c.denialPrior != null && (
+                <span className="text-xs text-slate-400" title="National Medicare denial rate for this code (CMS PSPS 2024)">
+                  natl denial {(c.denialPrior * 100).toFixed(1)}%
+                </span>
+              )}
               {c.correctedFrom && (
                 <Pill tone={RISK.low}><ArrowUp size={12} className="mr-0.5" />from {c.correctedFrom}</Pill>
               )}

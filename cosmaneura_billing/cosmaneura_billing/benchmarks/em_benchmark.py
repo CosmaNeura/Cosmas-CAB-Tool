@@ -146,3 +146,54 @@ if __name__ == "__main__":
     assert res["per_visit_gap_vs_benchmark"] > 0  # this practice looks low vs peers
     print("\nPASS — benchmark loads real CMS allowed amounts, computes specialty mix, "
           "sizes the opportunity, and screens for over-coding outliers.")
+
+
+# --------------------------------------------------------------------------- #
+# State-level E/M benchmark (pilot market). Same hard boundary as above:
+# population data for opportunity-sizing and outlier screening only — never an
+# input to coding an individual encounter.
+# --------------------------------------------------------------------------- #
+_STATE_CSV = Path(__file__).resolve().parent / "data" / "em_nh_2024.csv"
+
+
+class StateEMBenchmark:
+    """E/M utilization for one state, from the CMS Medicare Physician & Other
+    Practitioners by-Provider-and-Service data (2024; code numbers + numeric
+    stats only, no CPT descriptors). Bundled: New Hampshire — the pilot market."""
+
+    def __init__(self, csv_path: str | Path | None = None, state: str = "NH"):
+        self.state = state
+        self._rows: dict[tuple[str, str], tuple[int, int, float]] = {}
+        path = Path(csv_path or _STATE_CSV)
+        if path.exists():
+            with open(path, newline="", encoding="utf-8") as fh:
+                for r in csv.DictReader(fh):
+                    self._rows[(r["specialty"].strip(), r["hcpcs"].strip())] = (
+                        int(r["providers"]), int(r["total_services"]),
+                        float(r["avg_allowed_weighted"] or 0))
+
+    @property
+    def loaded(self) -> bool:
+        return bool(self._rows)
+
+    def specialties(self) -> list[str]:
+        return sorted({s for s, _ in self._rows})
+
+    def mix(self, specialty: str | None = None, family: str = "established") -> dict[str, float]:
+        """Share of services per E/M level, for one specialty or statewide."""
+        codes = ESTABLISHED if family.startswith("est") else NEW
+        totals = {c: 0 for c in codes}
+        for (spec, code), (_p, services, _a) in self._rows.items():
+            if code in totals and (specialty is None or spec == specialty):
+                totals[code] += services
+        n = sum(totals.values())
+        return {c: (v / n if n else 0.0) for c, v in totals.items()}
+
+    def allowed(self, code: str, specialty: str | None = None) -> float | None:
+        """Weighted mean Medicare allowed amount in this state."""
+        num = den = 0.0
+        for (spec, c), (_p, services, avg) in self._rows.items():
+            if c == code and avg and (specialty is None or spec == specialty):
+                num += avg * services
+                den += services
+        return round(num / den, 2) if den else None

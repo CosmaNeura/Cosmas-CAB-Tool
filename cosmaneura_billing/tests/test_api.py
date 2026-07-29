@@ -100,6 +100,25 @@ def test_feedback_summary_empty(client):
     assert s["encounters"] == 0 and s["goldRows"] == 0
 
 
+def test_billing_carries_denial_prior(client):
+    j = client.post("/api/encounters/ENC-100237/billing").json()
+    em = next(c for c in j["captured"] if c["kind"] == "EM")
+    assert 0.0 < em["denialPrior"] < 0.10
+
+
+def test_em_benchmarks_endpoint(client):
+    b = client.get("/api/benchmarks/em?specialty=Family%20Practice").json()
+    assert b["state"] == "NH"
+    assert abs(sum(b["stateMix"].values()) - 1.0) < 0.01
+    assert b["stateAllowed"]["99214"] > b["stateAllowed"]["99213"]
+
+
+def test_payer_denials_endpoint(client):
+    p = client.get("/api/benchmarks/payer-denials?state=NH").json()
+    assert p["state"] == "NH" and len(p["issuers"]) >= 2
+    assert p["issuers"][0]["denialRate"] >= p["issuers"][-1]["denialRate"]
+
+
 def test_reviewer_rejections_influence_future_runs_for_that_reviewer(client):
     """The full loop: three rejections of K59.00 by one reviewer -> the engine
     holds it on their next run (with history), while others are unaffected."""

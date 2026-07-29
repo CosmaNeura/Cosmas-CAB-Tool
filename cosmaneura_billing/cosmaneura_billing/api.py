@@ -89,6 +89,9 @@ def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None) -> dict[st
     if (s.kind == CodeKind.EM and s.disposition == Disposition.CAPTURED
             and submitted_em and _level(s.code) > _level(submitted_em)):
         out["correctedFrom"] = submitted_em
+    prior = next((n for n in s.notes if n.startswith("denial_prior:")), None)
+    if prior:
+        out["denialPrior"] = float(prior.split(":", 1)[1])
     return out
 
 
@@ -210,6 +213,7 @@ def health() -> dict[str, Any]:
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),
         "coverageLoaded": bool(orch.coverage and orch.coverage.loaded),
         "cptDescriptors": orch.cpt.size if orch.cpt.loaded else 0,
+        "denialPriors": orch.denial_priors.size,
         "encounters": len(get_encounters()),
     }
 
@@ -292,6 +296,42 @@ def submit_feedback(fb: FeedbackModel) -> dict[str, Any]:
     )
     store.append(record)
     return {"ok": True, "stored": len(store.load())}
+
+
+@app.get("/api/benchmarks/em")
+def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[str, Any]:
+    """State + national E/M mix and allowed amounts — population benchmarks for
+    opportunity-sizing only, never an input to coding an encounter."""
+    from .benchmarks.em_benchmark import EMBenchmark, StateEMBenchmark
+    nh = StateEMBenchmark()
+    if state.upper() != nh.state:
+        raise HTTPException(status_code=404, detail=f"no bundled benchmark for state '{state}'")
+    nat = EMBenchmark()
+    spec = specialty if specialty in (nh.specialties() if specialty else []) or specialty else None
+    return {
+        "state": nh.state,
+        "specialty": specialty,
+        "stateMix": nh.mix(specialty),
+        "nationalMix": (nat.mix(specialty) if specialty in nat.specialties() else None),
+        "stateAllowed": {c: nh.allowed(c, specialty)
+                         for c in ("99212", "99213", "99214", "99215")},
+        "specialtiesAvailable": nh.specialties(),
+    }
+
+
+@app.get("/api/benchmarks/payer-denials")
+def payer_denials(state: str = "NH") -> dict[str, Any]:
+    """Issuer-level Marketplace denial rates (CMS TC-PUF PY2026) — the
+    'how tough is this payer' prior."""
+    from .knowledge.denial_stats import PayerDenialRates
+    rates = PayerDenialRates()
+    rows = rates.for_state(state)
+    return {"state": state.upper(), "source": "CMS Marketplace TC-PUF PY2026 (2024 claims)",
+            "issuers": [{
+                "name": r.issuer_name, "claimsReceived": r.claims_received,
+                "denialRate": r.denial_rate, "topReason": r.top_reason or None,
+                "topReasonShare": r.top_reason_share,
+            } for r in rows]}
 
 
 @app.get("/api/feedback/summary")

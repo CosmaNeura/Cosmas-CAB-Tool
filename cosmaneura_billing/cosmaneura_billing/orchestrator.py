@@ -8,6 +8,7 @@ from .agents import (
 from .evidence import verify_suggestion_evidence
 from .knowledge.coverage import CoverageDB
 from .knowledge.cpt import CPTDescriptors
+from .knowledge.denial_stats import DenialPriors
 from .knowledge.icd10_ccsr import ICD10CCSR
 from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
@@ -32,6 +33,8 @@ class BillingOrchestrator:
         self.cpt = cpt or CPTDescriptors()       # loads only from licensed data (CPT_DATA_DIR)
         # learned reviewer preferences (hold/refine only, never inflate)
         self.preferences = preferences or PreferenceStore()
+        # national per-code denial priors (CMS PSPS, bundled)
+        self.denial_priors = DenialPriors()
         self.coding = CodingAgent(self.llm, self.icd10)
         self.integrity = DocumentationIntegrityAgent()
         self.guardrail = ComplianceGuardrailAgent()
@@ -56,7 +59,7 @@ class BillingOrchestrator:
         audit = ver_audit + pref_audit + audit
         suggestions, denial_flags = self.denial.run(
             suggestions, ncci=self.ncci, coverage=self.coverage,
-            icd10=self.icd10, pos=self.pos,
+            icd10=self.icd10, pos=self.pos, denial_priors=self.denial_priors,
             place_of_service=bundle.place_of_service,
             encounter_type=bundle.encounter_type,
         )
