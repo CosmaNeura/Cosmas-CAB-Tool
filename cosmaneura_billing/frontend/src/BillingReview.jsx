@@ -134,8 +134,10 @@ function ProviderCard({ r }) {
               <code className="w-16 font-mono text-sm text-slate-900">{c.code}</code>
               <span className="flex-1 text-sm text-slate-700">{c.label}</span>
               {c.denialPrior != null && (
-                <span className="text-xs text-slate-400" title="National Medicare denial rate for this code (CMS PSPS 2024)">
-                  natl denial {(c.denialPrior * 100).toFixed(1)}%
+                <span className="text-xs text-slate-400" title="Medicare denial rate for this code (CMS PSPS 2024): pilot state, then national">
+                  {c.denialPriorState
+                    ? `denials ${c.denialPriorState.state} ${(c.denialPriorState.rate * 100).toFixed(1)}% · natl ${(c.denialPrior * 100).toFixed(1)}%`
+                    : `natl denial ${(c.denialPrior * 100).toFixed(1)}%`}
                 </span>
               )}
               {c.correctedFrom && (

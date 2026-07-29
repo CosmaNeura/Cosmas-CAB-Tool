@@ -92,6 +92,10 @@ def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None) -> dict[st
     prior = next((n for n in s.notes if n.startswith("denial_prior:")), None)
     if prior:
         out["denialPrior"] = float(prior.split(":", 1)[1])
+    sprior = next((n for n in s.notes if n.startswith("denial_prior_state:")), None)
+    if sprior:
+        _, state, rate = sprior.split(":")
+        out["denialPriorState"] = {"state": state, "rate": float(rate)}
     return out
 
 

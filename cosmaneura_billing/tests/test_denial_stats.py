@@ -20,6 +20,15 @@ def test_priors_load_with_plausible_values():
     assert dp.rate("XXXXX") is None
 
 
+def test_state_overlay_loads_nh_carrier_slice():
+    dp = DenialPriors()
+    nh = dp.get_state("99214")
+    assert nh is not None and nh.submitted > 100_000
+    assert nh.rate < dp.rate("99214")     # NGS-NH denies office E/M below national
+    assert dp.get_state("G0438").rate >= 0.15
+    assert dp.state == "NH"
+
+
 def _captured(kind, code, label="x"):
     return CodeSuggestion(kind=kind, code=code, label=label,
                           disposition=Disposition.CAPTURED,

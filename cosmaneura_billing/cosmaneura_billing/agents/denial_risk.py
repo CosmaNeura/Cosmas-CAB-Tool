@@ -71,15 +71,21 @@ class DenialRiskAgent:
                 if prior is None:
                     continue
                 s.notes.append(f"denial_prior:{prior.rate:.4f}")
+                state_prior = denial_priors.get_state(s.code)
+                if state_prior is not None:
+                    s.notes.append(
+                        f"denial_prior_state:{denial_priors.state}:{state_prior.rate:.4f}")
                 if prior.rate >= HIGH_THRESHOLD:
                     s.denial_risk = "high"
                 elif prior.rate >= FLAG_THRESHOLD and s.denial_risk in ("low", "unknown"):
                     s.denial_risk = "medium"
                 if prior.rate >= FLAG_THRESHOLD:
+                    local = (f" ({denial_priors.state}: {state_prior.rate:.0%})"
+                             if state_prior is not None else "")
                     flags.append(
                         f"{s.code}: Medicare denied {prior.rate:.0%} of "
-                        f"{prior.submitted:,} submissions of this code nationally "
-                        f"(PSPS {denial_priors.source_year}) - verify frequency "
+                        f"{prior.submitted:,} submissions of this code nationally"
+                        f"{local} (PSPS {denial_priors.source_year}) - verify frequency "
                         "limits, coverage criteria, and modifiers before submitting.")
 
         # Telehealth POS / modifier consistency.

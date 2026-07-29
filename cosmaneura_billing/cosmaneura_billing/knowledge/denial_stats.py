@@ -31,6 +31,7 @@ from pathlib import Path
 
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _PSPS = _DATA / "psps_denial_rates_2024.csv.gz"
+_PSPS_STATE = _DATA / "psps_denial_rates_nh_2024.csv.gz"   # carrier 14312 (NH) slice
 _TCPUF = _DATA / "tcpuf_issuer_denials_2026.csv.gz"
 
 # a code is worth flagging when Medicare denies it at least this often
@@ -59,23 +60,40 @@ class IssuerRate:
 
 
 class DenialPriors:
-    """Per-code national Medicare denial rates (PSPS 2024)."""
+    """Per-code Medicare denial rates: national (PSPS 2024) plus a state
+    overlay (the pilot MAC's carrier slice of the same file — NH is Medicare
+    carrier 14312 under NGS Jurisdiction K)."""
 
-    def __init__(self, csv_path: str | os.PathLike | None = None):
+    def __init__(self, csv_path: str | os.PathLike | None = None,
+                 state_csv: str | os.PathLike | None = None, state: str = "NH"):
         self._by_code: dict[str, CodePrior] = {}
+        self._state_by_code: dict[str, CodePrior] = {}
+        self.state = state
         self.source_year = "2024"
         path = Path(csv_path or _PSPS)
         if path.exists():
-            with gzip.open(path, "rt", newline="") as fh:
-                for row in csv.DictReader(fh):
-                    code = row["hcpcs"].strip().upper()
-                    self._by_code[code] = CodePrior(
-                        code=code, submitted=int(row["submitted_services"]),
-                        denied=int(row["denied_services"]),
-                        rate=float(row["denial_rate"]))
+            self._by_code = self._read(path)
+        spath = Path(state_csv or _PSPS_STATE)
+        if spath.exists():
+            self._state_by_code = self._read(spath)
+
+    @staticmethod
+    def _read(path: Path) -> dict[str, CodePrior]:
+        out: dict[str, CodePrior] = {}
+        with gzip.open(path, "rt", newline="") as fh:
+            for row in csv.DictReader(fh):
+                code = row["hcpcs"].strip().upper()
+                out[code] = CodePrior(
+                    code=code, submitted=int(row["submitted_services"]),
+                    denied=int(row["denied_services"]),
+                    rate=float(row["denial_rate"]))
+        return out
 
     def get(self, code: str) -> CodePrior | None:
         return self._by_code.get(str(code).strip().upper())
+
+    def get_state(self, code: str) -> CodePrior | None:
+        return self._state_by_code.get(str(code).strip().upper())
 
     def rate(self, code: str) -> float | None:
         p = self.get(code)
