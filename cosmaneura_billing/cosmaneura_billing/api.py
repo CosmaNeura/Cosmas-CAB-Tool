@@ -206,6 +206,20 @@ class FeedbackModel(BaseModel):
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
+def _cpt_status(cpt) -> str:
+    """One human-readable line the UI can show for the CPT pill tooltip."""
+    if cpt.loaded:
+        return f"{cpt.size} official descriptors loaded from {cpt.source}"
+    if cpt.fetch_error:
+        return f"auto-fetch failed: {cpt.fetch_error}"
+    if all(os.environ.get(v) for v in
+           ("AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET")):
+        return "AMA credentials present but no descriptors resolved"
+    return ("no CPT license configured — set the four AMA_* variables "
+            "(auto-fetch) or CPT_DATA_DIR (local Standard Data File); "
+            "generic labels in use")
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     orch = get_orchestrator()
@@ -217,6 +231,7 @@ def health() -> dict[str, Any]:
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),
         "coverageLoaded": bool(orch.coverage and orch.coverage.loaded),
         "cptDescriptors": orch.cpt.size if orch.cpt.loaded else 0,
+        "cptStatus": _cpt_status(orch.cpt),
         "denialPriors": orch.denial_priors.size,
         "encounters": len(get_encounters()),
     }

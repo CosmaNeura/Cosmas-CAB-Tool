@@ -45,6 +45,40 @@ ANTHROPIC_API_KEY=sk-...   python run_demo.py
 ICD10_CCSR_CSV=/path/to/DXCCSR_v2023-1.csv   python run_demo.py
 ```
 
+## Official CPT descriptors (AMA developer account)
+
+Out of the box the engine shows CPT/E&M codes with short generic labels,
+because the official descriptors are AMA-licensed. If you hold a CPT license
+with API access (AMA Intelligent Platform / CPT Developer Program), the engine
+auto-fetches the CPT Standard Data File at startup and swaps in the official
+short descriptors. Set the four values from your Developer Portal application
+(Keys tab) before starting the API:
+
+```bash
+export AMA_TOKEN_URL='https://<gateway-host>/oauth2/token'
+export AMA_BASE_URL='https://<gateway-host>'
+export AMA_CONSUMER_KEY='...'          # Application Consumer Key
+export AMA_CONSUMER_SECRET='...'       # Application Consumer Secret
+
+# optional: validate credentials + subscription first (2 API calls, no download)
+python scripts/fetch_cpt_zip.py --check
+
+uvicorn cosmaneura_billing.api:app --port 8000
+```
+
+`GET /api/health` then reports the loaded descriptor count in `cptDescriptors`
+and a human-readable `cptStatus` (which also explains any fetch failure); the
+UI status pill shows `CPT ✓` with the detail on hover. The download is cached
+under `~/.cache/cosmaneura/cpt`, so the fetch runs once, not on every boot —
+which matters because AMA production credentials are capped at ~10 API calls
+per day (staging/sample credentials are uncapped; the endpoint defaults were
+verified against the production gateway, CPT 2026 Standard Update 4, 10,988
+descriptors). Alternatively, point `CPT_DATA_DIR` at an already-extracted
+Standard Data File directory, or set `CPT_AUTO_FETCH=0` to disable fetching.
+
+Never commit descriptor files, the downloaded ZIP, or the AMA key/secret —
+CPT content stays under your license, outside the repository.
+
 ## What's in the box
 
 ```

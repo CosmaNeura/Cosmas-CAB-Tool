@@ -16,3 +16,8 @@ venv/
 coder_feedback.jsonl
 *.log
 .DS_Store
+
+# AMA-licensed CPT content — never commit (fetch script output / local data dirs)
+cpt_standard_data_file.zip
+CPT_DATA/
+cpt_data/

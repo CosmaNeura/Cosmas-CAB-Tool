@@ -17,13 +17,17 @@ Fill in the four values from your Developer Portal application, then run:
 Notes:
   * Use STAGING/sample credentials while debugging — Production is capped at 3
     users and ~10 calls/day across endpoints; sample-data Staging is unlimited.
-  * The exact Releases/Files paths below are the documented endpoints, but
-    confirm the precise path + params against your portal's API definition
-    ("Try Out" / Swagger) and override with --releases-path / --file-path.
+    Run `--check` first: it costs 2 calls and stops before the download.
+  * The default paths below were verified against the production gateway
+    (July 2026, CPT 2026 Standard Update 4). If your portal's API definition
+    ("Try Out" / Swagger) shows different paths, override with
+    --releases-path / --file-path.
   * NEVER commit the key/secret. Read them from env or a secret manager.
 
-This is a template to run in YOUR environment against YOUR licensed credentials;
-it is not executed or tested here (no network/credentials in the build sandbox).
+Note: you rarely need this script — the engine itself auto-fetches at startup
+when the same four AMA_* variables are set (see knowledge/cpt.py). Use this to
+pre-download the ZIP for an offline/air-gapped deployment, or `--check` to
+validate credentials without waiting for an engine boot.
 """
 import argparse
 import base64
@@ -35,6 +39,20 @@ import urllib.parse
 import urllib.request
 
 REQUIRED = ["AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET"]
+
+# The AMA gateway's WAF rejects Python-urllib's default User-Agent with 403.
+_UA = "cosmaneura-billing/0.1"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _urlopen(req: urllib.request.Request, timeout: int):
+    # No auto-redirect: the Files endpoint 303s to pre-signed storage, where a
+    # forwarded Authorization header is both rejected and a token leak.
+    return urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout)
 
 
 def _auth_help(detail: str = "") -> None:
@@ -54,9 +72,10 @@ def get_token(token_url: str, key: str, secret: str) -> str:
     req = urllib.request.Request(
         token_url, data=data, method="POST",
         headers={"Authorization": f"Basic {basic}",
-                 "Content-Type": "application/x-www-form-urlencoded"})
+                 "Content-Type": "application/x-www-form-urlencoded",
+                 "User-Agent": _UA})
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with _urlopen(req, timeout=60) as r:
             payload = json.loads(r.read())
     except urllib.error.HTTPError as e:
         _auth_help(e.read().decode(errors="ignore")[:300])
@@ -69,12 +88,22 @@ def get_token(token_url: str, key: str, secret: str) -> str:
 
 
 def _get(url: str, token: str, binary: bool = False):
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {token}", "User-Agent": _UA})
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with _urlopen(req, timeout=300 if binary else 120) as r:
             body = r.read()
             return body if binary else json.loads(body)
     except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            loc = e.headers.get("Location")
+            if not loc:
+                raise SystemExit(f"GET {url} redirected with no Location header")
+            # pre-signed URL: authenticate by URL only — never forward the token
+            req2 = urllib.request.Request(loc, headers={"User-Agent": _UA})
+            with _urlopen(req2, timeout=300) as r:
+                body = r.read()
+                return body if binary else json.loads(body)
         if e.code in (401, 403):
             _auth_help(e.read().decode(errors="ignore")[:300])
         raise SystemExit(f"GET {url} failed: HTTP {e.code}")
@@ -85,8 +114,12 @@ def main() -> int:
     ap.add_argument("--out", default="cpt_standard_data_file.zip", help="where to save the ZIP")
     ap.add_argument("--release", help="release id to download (default: newest from Releases)")
     ap.add_argument("--releases-path", default="/cpt-zip/1.0.0/releases")
-    ap.add_argument("--file-path", default="/cpt-zip/1.0.0/files/{release}",
-                    help="template for the Files endpoint; {release} is substituted")
+    ap.add_argument("--file-path", default="/cpt-zip/1.0.0/files?release={release}",
+                    help="template for the Files endpoint; {release} is substituted "
+                         "(?release= verified against the production gateway)")
+    ap.add_argument("--check", action="store_true",
+                    help="validate credentials + subscription and stop before downloading "
+                         "(2 API calls — safe under the 10-call/day production cap)")
     args = ap.parse_args()
 
     missing = [v for v in REQUIRED if not os.environ.get(v)]
@@ -110,6 +143,15 @@ def main() -> int:
         if items:
             first = items[0]
             release = first if isinstance(first, str) else (first.get("id") or first.get("release") or first.get("name"))
+
+    if args.check:
+        print(f"\nCheck PASSED: credentials valid, CPT Zip API subscription active, "
+              f"newest release: {release or 'could not parse — inspect the payload above'}.",
+              file=sys.stderr)
+        print("The engine will auto-fetch on next start with these same AMA_* variables set.",
+              file=sys.stderr)
+        return 0
+
     if not release:
         raise SystemExit("Could not determine a release id; pass --release after inspecting the Releases output.")
 

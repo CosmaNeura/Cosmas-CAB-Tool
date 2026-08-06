@@ -4,9 +4,9 @@ import { api } from "./api.js";
 import BillingReview from "./BillingReview.jsx";
 import CoderReview from "./CoderReview.jsx";
 
-function Pill({ tone, children }) {
+function Pill({ tone, title, children }) {
   return (
-    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>
+    <span title={title} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>
       {children}
     </span>
   );
@@ -59,7 +59,8 @@ export default function App() {
               </Pill>
             )}
             {health && (
-              <Pill tone="bg-emerald-50 text-emerald-700 ring-emerald-200">
+              <Pill tone="bg-emerald-50 text-emerald-700 ring-emerald-200"
+                    title={health.cptStatus}>
                 <Wifi size={12} className="mr-1" />
                 live engine · NCCI {health.ncciLoaded ? "✓" : "–"} · coverage {health.coverageLoaded ? "✓" : "–"} ·
                 CPT {health.cptDescriptors > 0 ? "✓" : "–"}

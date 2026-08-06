@@ -19,6 +19,32 @@ def test_health_reports_knowledge_bases(client):
     assert h["status"] == "ok"
     assert h["icd10Codes"] > 1000
     assert h["encounters"] >= 1
+    # cptStatus always explains the descriptor state, loaded or not
+    assert h["cptStatus"]
+    if h["cptDescriptors"] == 0:
+        assert "descriptors loaded" not in h["cptStatus"]
+    else:
+        assert "descriptors loaded" in h["cptStatus"]
+
+
+def test_cpt_status_lines(monkeypatch):
+    for v in ("AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET"):
+        monkeypatch.delenv(v, raising=False)
+
+    class FakeCPT:
+        loaded, size, source, fetch_error = False, 0, None, None
+
+    unlicensed = FakeCPT()
+    assert "no CPT license configured" in api._cpt_status(unlicensed)
+
+    failed = FakeCPT()
+    failed.fetch_error = "HTTPError: 401"
+    assert api._cpt_status(failed) == "auto-fetch failed: HTTPError: 401"
+
+    loaded = FakeCPT()
+    loaded.loaded, loaded.size, loaded.source = True, 10988, "/cache/SHORTU.txt"
+    assert api._cpt_status(loaded) == \
+        "10988 official descriptors loaded from /cache/SHORTU.txt"
 
 
 def test_list_and_get_encounter(client):
