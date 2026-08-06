@@ -1,0 +1,1340 @@
+specialty,place_of_service,hcpcs,n_providers,total_services,total_benes,mean_allowed_amt
+Addiction Medicine,F,99204,1,14,14,131.37
+Addiction Medicine,F,99205,1,11,11,179.27
+Addiction Medicine,F,99212,2,120,53,34.17
+Addiction Medicine,F,99213,10,505,270,63.21
+Addiction Medicine,F,99214,13,619,322,94.48
+Addiction Medicine,F,99215,4,102,73,140.96
+Addiction Medicine,O,99202,1,31,31,76.22
+Addiction Medicine,O,99203,5,252,252,107.06
+Addiction Medicine,O,99204,18,1006,1006,163.34
+Addiction Medicine,O,99205,7,148,148,215.8
+Addiction Medicine,O,99211,3,156,37,24.83
+Addiction Medicine,O,99212,2,165,117,49.56
+Addiction Medicine,O,99213,68,7748,3088,87.05
+Addiction Medicine,O,99214,117,24582,7471,121.71
+Addiction Medicine,O,99215,14,1342,581,175.76
+Adult Congenital Heart Disease,F,99204,1,19,19,139.12
+Adult Congenital Heart Disease,F,99205,7,132,132,185.18
+Adult Congenital Heart Disease,F,99213,2,60,56,66.89
+Adult Congenital Heart Disease,F,99214,21,779,653,96.74
+Adult Congenital Heart Disease,F,99215,14,685,510,148.5
+Adult Congenital Heart Disease,O,99204,2,31,31,171.89
+Adult Congenital Heart Disease,O,99205,5,206,206,235.06
+Adult Congenital Heart Disease,O,99211,1,19,14,23.71
+Adult Congenital Heart Disease,O,99213,4,111,89,100.32
+Adult Congenital Heart Disease,O,99214,16,928,797,127.53
+Adult Congenital Heart Disease,O,99215,19,1931,1276,185.7
+Advanced Heart Failure and Transplant Cardiology,F,99203,5,248,248,82.11
+Advanced Heart Failure and Transplant Cardiology,F,99204,72,2652,2652,128.39
+Advanced Heart Failure and Transplant Cardiology,F,99205,155,3955,3955,179.61
+Advanced Heart Failure and Transplant Cardiology,F,99211,6,120,116,8.68
+Advanced Heart Failure and Transplant Cardiology,F,99213,79,3814,2969,65.3
+Advanced Heart Failure and Transplant Cardiology,F,99214,363,38672,26971,94.77
+Advanced Heart Failure and Transplant Cardiology,F,99215,355,29535,19886,144.34
+Advanced Heart Failure and Transplant Cardiology,O,99203,29,591,591,110.75
+Advanced Heart Failure and Transplant Cardiology,O,99204,199,7525,7525,167.46
+Advanced Heart Failure and Transplant Cardiology,O,99205,210,6117,6117,221.39
+Advanced Heart Failure and Transplant Cardiology,O,99211,17,781,441,22.23
+Advanced Heart Failure and Transplant Cardiology,O,99212,2,51,48,58.2
+Advanced Heart Failure and Transplant Cardiology,O,99213,135,8288,6782,90.72
+Advanced Heart Failure and Transplant Cardiology,O,99214,471,89023,58029,127.72
+Advanced Heart Failure and Transplant Cardiology,O,99215,364,34314,22481,181.82
+Allergy/ Immunology,F,99202,2,72,72,45.54
+Allergy/ Immunology,F,99203,25,551,551,79.4
+Allergy/ Immunology,F,99204,104,2874,2874,131.37
+Allergy/ Immunology,F,99205,42,1014,1014,180.29
+Allergy/ Immunology,F,99212,1,21,19,34.07
+Allergy/ Immunology,F,99213,63,2647,1877,65.18
+Allergy/ Immunology,F,99214,163,8862,6522,96.4
+Allergy/ Immunology,F,99215,65,2143,1595,146.05
+Allergy/ Immunology,O,99202,24,631,631,71.93
+Allergy/ Immunology,O,99203,1113,38215,38212,112.43
+Allergy/ Immunology,O,99204,2143,86388,86379,164.15
+Allergy/ Immunology,O,99205,335,9198,9197,217.74
+Allergy/ Immunology,O,99211,104,12670,2399,25.2
+Allergy/ Immunology,O,99212,210,15688,6020,58.61
+Allergy/ Immunology,O,99213,2170,242642,156779,90.16
+Allergy/ Immunology,O,99214,2492,300455,188324,125.35
+Allergy/ Immunology,O,99215,417,21276,14197,176.54
+Anesthesiology,F,99202,15,406,406,45.41
+Anesthesiology,F,99203,132,4362,4362,79.25
+Anesthesiology,F,99204,396,18469,18467,129.71
+Anesthesiology,F,99205,79,2121,2121,177.9
+Anesthesiology,F,99211,1,74,37,8.93
+Anesthesiology,F,99212,118,4104,3149,33.77
+Anesthesiology,F,99213,401,34802,20472,63.61
+Anesthesiology,F,99214,493,63209,35061,94.13
+Anesthesiology,F,99215,107,4480,3469,143.14
+Anesthesiology,O,99202,15,323,323,61.35
+Anesthesiology,O,99203,519,22160,22150,108.31
+Anesthesiology,O,99204,1459,100693,100682,162.1
+Anesthesiology,O,99205,224,9396,9395,220.28
+Anesthesiology,O,99211,30,3952,1279,20.56
+Anesthesiology,O,99212,222,17881,9004,55.04
+Anesthesiology,O,99213,1537,353905,154146,88.18
+Anesthesiology,O,99214,1827,714658,260854,124.27
+Anesthesiology,O,99215,267,22729,9757,180.31
+Audiologist,O,99211,3,131,127,21.46
+Audiologist,O,99212,2,49,37,46.23
+Cardiac Surgery,F,99202,8,202,202,45.47
+Cardiac Surgery,F,99203,56,1605,1605,79.01
+Cardiac Surgery,F,99204,129,3749,3748,129.44
+Cardiac Surgery,F,99205,173,6744,6744,178.5
+Cardiac Surgery,F,99212,15,981,552,34.07
+Cardiac Surgery,F,99213,51,2837,2383,63.85
+Cardiac Surgery,F,99214,70,2962,2507,94.6
+Cardiac Surgery,F,99215,66,2895,2083,140.83
+Cardiac Surgery,O,99202,12,386,386,69.33
+Cardiac Surgery,O,99203,121,3616,3616,107.4
+Cardiac Surgery,O,99204,295,12443,12441,164.41
+Cardiac Surgery,O,99205,337,14857,14855,219.66
+Cardiac Surgery,O,99211,5,171,134,25.2
+Cardiac Surgery,O,99212,46,2144,1804,51.66
+Cardiac Surgery,O,99213,211,15613,11725,87.96
+Cardiac Surgery,O,99214,252,27099,17289,127.32
+Cardiac Surgery,O,99215,156,8290,6268,180.41
+Cardiology,F,99202,10,174,174,45.92
+Cardiology,F,99203,365,9276,9276,79.25
+Cardiology,F,99204,2431,88541,88533,129.52
+Cardiology,F,99205,948,26299,26299,180.53
+Cardiology,F,99211,59,9013,3524,8.77
+Cardiology,F,99212,124,4279,3707,34.79
+Cardiology,F,99213,1585,127137,105207,63.74
+Cardiology,F,99214,4349,666270,483308,94.64
+Cardiology,F,99215,2188,124176,98936,143.69
+Cardiology,O,99202,63,5794,5794,65.34
+Cardiology,O,99203,2050,66299,66296,110.42
+Cardiology,O,99204,11336,662739,662687,165.74
+Cardiology,O,99205,3644,135424,135399,222.29
+Cardiology,O,99211,1143,97220,46681,23.21
+Cardiology,O,99212,917,61550,44010,56.65
+Cardiology,O,99213,8782,1424947,991206,90.6
+Cardiology,O,99214,15026,7244452,4324967,128.18
+Cardiology,O,99215,7389,775923,556071,182.76
+Certified Clinical Nurse Specialist,F,99202,1,12,12,38.11
+Certified Clinical Nurse Specialist,F,99203,17,518,518,66.73
+Certified Clinical Nurse Specialist,F,99204,23,647,647,109.21
+Certified Clinical Nurse Specialist,F,99205,20,636,636,148.33
+Certified Clinical Nurse Specialist,F,99211,1,197,33,7.06
+Certified Clinical Nurse Specialist,F,99212,18,627,468,30.16
+Certified Clinical Nurse Specialist,F,99213,95,5817,3965,53.73
+Certified Clinical Nurse Specialist,F,99214,130,12418,7655,79.78
+Certified Clinical Nurse Specialist,F,99215,82,5616,3698,122.15
+Certified Clinical Nurse Specialist,O,99202,4,61,61,59.94
+Certified Clinical Nurse Specialist,O,99203,41,1407,1407,87.93
+Certified Clinical Nurse Specialist,O,99204,79,2578,2576,132.61
+Certified Clinical Nurse Specialist,O,99205,59,1646,1646,180.58
+Certified Clinical Nurse Specialist,O,99211,10,1197,529,9.8
+Certified Clinical Nurse Specialist,O,99212,43,2139,1147,43.8
+Certified Clinical Nurse Specialist,O,99213,408,52514,26371,71.7
+Certified Clinical Nurse Specialist,O,99214,615,103421,49346,102.23
+Certified Clinical Nurse Specialist,O,99215,182,14429,8333,146.64
+Certified Nurse Midwife,F,99203,1,11,11,73.58
+Certified Nurse Midwife,F,99212,2,62,26,36.33
+Certified Nurse Midwife,F,99213,17,974,714,66.76
+Certified Nurse Midwife,F,99214,4,1029,733,101.2
+Certified Nurse Midwife,F,99215,2,115,98,149.24
+Certified Nurse Midwife,O,99202,3,43,43,74.8
+Certified Nurse Midwife,O,99203,45,794,794,106.8
+Certified Nurse Midwife,O,99204,18,338,338,159.9
+Certified Nurse Midwife,O,99205,6,155,155,209.5
+Certified Nurse Midwife,O,99211,2,56,36,21.22
+Certified Nurse Midwife,O,99212,31,858,600,53.1
+Certified Nurse Midwife,O,99213,260,8221,6458,88.01
+Certified Nurse Midwife,O,99214,96,4191,2770,122.01
+Certified Nurse Midwife,O,99215,16,629,375,177.1
+Certified Registered Nurse Anesthetist (CRNA),F,99202,1,12,12,48.68
+Certified Registered Nurse Anesthetist (CRNA),F,99203,29,1033,1033,77.59
+Certified Registered Nurse Anesthetist (CRNA),F,99204,11,510,510,123.26
+Certified Registered Nurse Anesthetist (CRNA),F,99205,2,29,29,175.99
+Certified Registered Nurse Anesthetist (CRNA),F,99212,12,349,286,33.51
+Certified Registered Nurse Anesthetist (CRNA),F,99213,49,3330,2030,62.14
+Certified Registered Nurse Anesthetist (CRNA),F,99214,21,941,674,92.09
+Certified Registered Nurse Anesthetist (CRNA),F,99215,2,36,36,133.29
+Certified Registered Nurse Anesthetist (CRNA),O,99202,2,27,27,64.92
+Certified Registered Nurse Anesthetist (CRNA),O,99203,12,319,319,103.14
+Certified Registered Nurse Anesthetist (CRNA),O,99204,26,882,880,158.1
+Certified Registered Nurse Anesthetist (CRNA),O,99205,9,236,236,212.15
+Certified Registered Nurse Anesthetist (CRNA),O,99211,1,13,13,23.1
+Certified Registered Nurse Anesthetist (CRNA),O,99212,10,655,408,52.92
+Certified Registered Nurse Anesthetist (CRNA),O,99213,34,2990,2026,85.0
+Certified Registered Nurse Anesthetist (CRNA),O,99214,32,5161,1912,121.71
+Certified Registered Nurse Anesthetist (CRNA),O,99215,12,1001,393,171.24
+Chiropractic,O,99204,1,18,18,129.41
+Chiropractic,O,99213,4,201,123,70.89
+Chiropractic,O,99214,2,369,142,98.74
+Clinic or Group Practice,O,99203,1,66,66,95.86
+Clinic or Group Practice,O,99204,1,28,28,156.29
+Clinic or Group Practice,O,99212,1,35,33,61.28
+Clinic or Group Practice,O,99213,5,592,284,88.77
+Clinic or Group Practice,O,99214,5,800,525,117.05
+Clinic or Group Practice,O,99215,2,27,24,170.46
+Clinical Cardiac Electrophysiology,F,99202,2,52,52,47.0
+Clinical Cardiac Electrophysiology,F,99203,78,1783,1783,78.5
+Clinical Cardiac Electrophysiology,F,99204,459,20730,20730,129.27
+Clinical Cardiac Electrophysiology,F,99205,333,13719,13718,178.15
+Clinical Cardiac Electrophysiology,F,99211,13,2439,1130,8.77
+Clinical Cardiac Electrophysiology,F,99212,23,1053,997,37.14
+Clinical Cardiac Electrophysiology,F,99213,345,21164,18741,63.37
+Clinical Cardiac Electrophysiology,F,99214,697,90436,72224,94.45
+Clinical Cardiac Electrophysiology,F,99215,430,24409,21314,142.94
+Clinical Cardiac Electrophysiology,O,99202,13,307,307,68.08
+Clinical Cardiac Electrophysiology,O,99203,280,9174,9174,109.32
+Clinical Cardiac Electrophysiology,O,99204,1574,93150,93141,164.37
+Clinical Cardiac Electrophysiology,O,99205,1124,57798,57793,218.57
+Clinical Cardiac Electrophysiology,O,99211,129,7206,4557,22.77
+Clinical Cardiac Electrophysiology,O,99212,108,4349,3835,56.82
+Clinical Cardiac Electrophysiology,O,99213,1273,151426,123510,89.62
+Clinical Cardiac Electrophysiology,O,99214,2058,652664,450848,126.74
+Clinical Cardiac Electrophysiology,O,99215,1307,122865,97544,181.18
+Clinical Laboratory,O,99211,3,2792,877,24.25
+Colorectal Surgery (Proctology),F,99202,12,199,199,47.02
+Colorectal Surgery (Proctology),F,99203,130,3094,3093,81.82
+Colorectal Surgery (Proctology),F,99204,171,4391,4390,131.61
+Colorectal Surgery (Proctology),F,99205,100,2400,2400,180.02
+Colorectal Surgery (Proctology),F,99212,67,2093,1690,34.82
+Colorectal Surgery (Proctology),F,99213,221,8362,6284,65.28
+Colorectal Surgery (Proctology),F,99214,170,6010,4754,96.47
+Colorectal Surgery (Proctology),F,99215,74,1929,1639,142.8
+Colorectal Surgery (Proctology),O,99202,117,3861,3861,71.26
+Colorectal Surgery (Proctology),O,99203,918,41352,41349,111.21
+Colorectal Surgery (Proctology),O,99204,944,34832,34829,166.98
+Colorectal Surgery (Proctology),O,99205,392,9806,9805,217.4
+Colorectal Surgery (Proctology),O,99211,25,828,524,22.7
+Colorectal Surgery (Proctology),O,99212,312,14563,10119,55.56
+Colorectal Surgery (Proctology),O,99213,1095,75111,55331,90.62
+Colorectal Surgery (Proctology),O,99214,908,44219,33890,127.5
+Colorectal Surgery (Proctology),O,99215,264,8392,6516,177.48
+Critical Care (Intensivists),F,99202,2,24,24,46.35
+Critical Care (Intensivists),F,99203,33,725,725,79.17
+Critical Care (Intensivists),F,99204,142,4627,4627,130.16
+Critical Care (Intensivists),F,99205,106,2774,2774,180.6
+Critical Care (Intensivists),F,99212,10,274,219,34.94
+Critical Care (Intensivists),F,99213,156,6039,5112,64.09
+Critical Care (Intensivists),F,99214,319,24790,18062,95.87
+Critical Care (Intensivists),F,99215,206,11567,8003,144.62
+Critical Care (Intensivists),O,99202,7,202,202,81.61
+Critical Care (Intensivists),O,99203,147,5030,5029,112.92
+Critical Care (Intensivists),O,99204,594,28026,28019,166.47
+Critical Care (Intensivists),O,99205,302,11360,11356,222.3
+Critical Care (Intensivists),O,99211,10,521,414,24.81
+Critical Care (Intensivists),O,99212,44,1837,1445,55.91
+Critical Care (Intensivists),O,99213,520,51320,37963,91.35
+Critical Care (Intensivists),O,99214,870,156431,98868,127.49
+Critical Care (Intensivists),O,99215,486,39356,26444,181.49
+Dentist,F,99202,4,89,88,47.53
+Dentist,F,99203,11,329,329,83.76
+Dentist,F,99204,12,212,212,136.28
+Dentist,F,99205,2,83,83,176.75
+Dentist,F,99212,4,112,88,32.72
+Dentist,F,99213,13,720,559,69.02
+Dentist,F,99214,14,658,470,101.07
+Dentist,F,99215,5,215,138,143.75
+Dentist,O,99202,21,671,671,70.5
+Dentist,O,99203,38,1417,1417,108.98
+Dentist,O,99204,45,1555,1555,163.16
+Dentist,O,99205,8,265,265,238.08
+Dentist,O,99211,4,202,161,22.85
+Dentist,O,99212,27,2324,1335,51.81
+Dentist,O,99213,65,4351,3101,88.58
+Dentist,O,99214,35,2142,1405,131.34
+Dentist,O,99215,12,621,444,181.75
+Dermatology,F,99202,63,1855,1855,45.49
+Dermatology,F,99203,457,18655,18654,79.97
+Dermatology,F,99204,416,14234,14234,131.36
+Dermatology,F,99205,21,479,479,194.37
+Dermatology,F,99211,3,119,92,8.75
+Dermatology,F,99212,206,11121,9256,34.09
+Dermatology,F,99213,770,111852,90489,64.37
+Dermatology,F,99214,714,75259,58080,95.91
+Dermatology,F,99215,59,4245,2263,152.07
+Dermatology,O,99202,3096,102927,102925,71.59
+Dermatology,O,99203,9490,721354,721278,111.42
+Dermatology,O,99204,6180,266701,266684,166.54
+Dermatology,O,99205,62,1668,1668,222.64
+Dermatology,O,99211,222,12020,8133,23.9
+Dermatology,O,99212,8035,879188,697696,56.7
+Dermatology,O,99213,11396,5912363,4108722,90.89
+Dermatology,O,99214,9963,2186078,1570512,128.17
+Dermatology,O,99215,404,23499,16702,183.26
+Diagnostic Radiology,F,99202,13,240,240,48.69
+Diagnostic Radiology,F,99203,51,999,998,80.99
+Diagnostic Radiology,F,99204,78,1596,1596,131.91
+Diagnostic Radiology,F,99205,43,1138,1138,181.25
+Diagnostic Radiology,F,99211,1,21,17,8.32
+Diagnostic Radiology,F,99212,34,761,664,34.97
+Diagnostic Radiology,F,99213,112,4408,3406,64.67
+Diagnostic Radiology,F,99214,125,3646,2903,96.59
+Diagnostic Radiology,F,99215,48,1073,856,143.65
+Diagnostic Radiology,O,99202,28,653,653,72.52
+Diagnostic Radiology,O,99203,189,7029,7025,111.15
+Diagnostic Radiology,O,99204,223,11416,11415,166.82
+Diagnostic Radiology,O,99205,90,2559,2559,220.69
+Diagnostic Radiology,O,99211,20,1921,1618,23.82
+Diagnostic Radiology,O,99212,106,6164,4695,55.44
+Diagnostic Radiology,O,99213,303,27632,19499,91.46
+Diagnostic Radiology,O,99214,250,19631,11930,126.36
+Diagnostic Radiology,O,99215,87,5469,3691,191.05
+Emergency Medicine,F,99202,7,156,156,46.51
+Emergency Medicine,F,99203,156,3986,3986,79.7
+Emergency Medicine,F,99204,158,5309,5309,130.63
+Emergency Medicine,F,99205,39,1023,1022,178.67
+Emergency Medicine,F,99211,7,257,130,8.63
+Emergency Medicine,F,99212,123,6139,4123,34.07
+Emergency Medicine,F,99213,430,51352,22053,64.37
+Emergency Medicine,F,99214,347,29557,15734,94.71
+Emergency Medicine,F,99215,91,2817,2177,142.64
+Emergency Medicine,O,99202,153,4819,4818,73.91
+Emergency Medicine,O,99203,2042,102927,102903,113.73
+Emergency Medicine,O,99204,1859,91445,91429,168.68
+Emergency Medicine,O,99205,283,7654,7648,222.42
+Emergency Medicine,O,99211,61,4465,2176,26.37
+Emergency Medicine,O,99212,593,50328,20597,62.96
+Emergency Medicine,O,99213,3474,389326,316666,90.64
+Emergency Medicine,O,99214,3191,378999,277999,125.92
+Emergency Medicine,O,99215,712,32091,26327,179.04
+Endocrinology,F,99203,66,1384,1384,79.06
+Endocrinology,F,99204,601,22098,22097,129.93
+Endocrinology,F,99205,210,5764,5764,179.96
+Endocrinology,F,99211,12,316,244,8.53
+Endocrinology,F,99212,12,301,239,33.35
+Endocrinology,F,99213,425,21383,17624,65.59
+Endocrinology,F,99214,1152,176141,120349,95.48
+Endocrinology,F,99215,552,29585,23240,143.53
+Endocrinology,O,99202,8,156,156,69.56
+Endocrinology,O,99203,538,16139,16139,110.06
+Endocrinology,O,99204,3656,184968,184958,165.75
+Endocrinology,O,99205,1551,51743,51737,220.13
+Endocrinology,O,99211,193,10188,6440,22.65
+Endocrinology,O,99212,183,16137,8254,59.28
+Endocrinology,O,99213,2858,297071,212432,90.31
+Endocrinology,O,99214,5313,1989160,1115160,127.13
+Endocrinology,O,99215,2808,267605,178225,179.53
+Epileptologists,F,99203,1,12,12,76.78
+Epileptologists,F,99204,1,58,58,123.28
+Epileptologists,F,99205,2,37,37,175.16
+Epileptologists,F,99214,4,229,141,91.22
+Epileptologists,F,99215,2,60,50,143.45
+Epileptologists,O,99203,2,71,71,120.06
+Epileptologists,O,99204,2,81,81,154.34
+Epileptologists,O,99205,4,190,190,216.38
+Epileptologists,O,99213,4,217,156,91.04
+Epileptologists,O,99214,6,680,519,119.39
+Epileptologists,O,99215,5,558,437,176.76
+Family Practice,F,99202,18,419,419,46.57
+Family Practice,F,99203,279,7973,7965,79.56
+Family Practice,F,99204,466,15714,15710,128.06
+Family Practice,F,99205,101,3542,3542,174.22
+Family Practice,F,99211,48,8811,2429,8.92
+Family Practice,F,99212,326,14163,9605,34.57
+Family Practice,F,99213,2844,240135,158128,63.39
+Family Practice,F,99214,3235,439252,255858,91.66
+Family Practice,F,99215,762,37277,27077,134.92
+Family Practice,O,99202,475,14237,14233,72.35
+Family Practice,O,99203,7223,274435,274407,109.77
+Family Practice,O,99204,13350,407890,407819,163.32
+Family Practice,O,99205,1202,28531,28529,218.69
+Family Practice,O,99211,2883,198124,96103,23.41
+Family Practice,O,99212,5890,279130,187759,55.16
+Family Practice,O,99213,54257,7079571,4490182,86.46
+Family Practice,O,99214,58965,14875047,7627052,119.85
+Family Practice,O,99215,17242,1026898,712134,169.77
+Gastroenterology,F,99202,17,342,342,45.09
+Gastroenterology,F,99203,324,8776,8775,80.93
+Gastroenterology,F,99204,912,27452,27448,131.98
+Gastroenterology,F,99205,267,5946,5946,181.22
+Gastroenterology,F,99211,3,62,59,9.22
+Gastroenterology,F,99212,85,4235,3902,35.32
+Gastroenterology,F,99213,838,33307,28672,64.76
+Gastroenterology,F,99214,1752,93204,75958,96.31
+Gastroenterology,F,99215,726,30988,24454,145.38
+Gastroenterology,O,99202,640,20199,20197,73.3
+Gastroenterology,O,99203,5142,227498,227488,113.19
+Gastroenterology,O,99204,8326,444594,444556,168.2
+Gastroenterology,O,99205,906,25938,25936,223.46
+Gastroenterology,O,99211,112,6788,5273,23.74
+Gastroenterology,O,99212,1031,40750,35360,56.32
+Gastroenterology,O,99213,8034,778075,612964,91.27
+Gastroenterology,O,99214,10156,1248403,919146,128.82
+Gastroenterology,O,99215,2241,104252,81144,181.93
+General Practice,F,99202,3,47,47,47.58
+General Practice,F,99203,13,412,412,82.23
+General Practice,F,99204,16,385,385,126.25
+General Practice,F,99205,7,155,155,172.91
+General Practice,F,99212,20,776,573,34.47
+General Practice,F,99213,58,6514,3611,63.84
+General Practice,F,99214,52,7042,3763,90.77
+General Practice,F,99215,13,822,529,139.31
+General Practice,O,99202,36,1738,1738,71.46
+General Practice,O,99203,347,16049,16046,112.73
+General Practice,O,99204,461,20985,20981,167.22
+General Practice,O,99205,106,4054,4054,214.97
+General Practice,O,99211,117,20836,6905,24.97
+General Practice,O,99212,291,24601,13253,55.52
+General Practice,O,99213,1818,366124,151914,90.27
+General Practice,O,99214,1769,394161,171099,125.36
+General Practice,O,99215,413,37699,20380,178.01
+General Surgery,F,99202,130,3152,3152,46.13
+General Surgery,F,99203,1239,34951,34947,79.77
+General Surgery,F,99204,1578,47922,47911,129.69
+General Surgery,F,99205,735,19142,19140,178.74
+General Surgery,F,99211,23,925,558,8.65
+General Surgery,F,99212,808,42163,24670,34.27
+General Surgery,F,99213,2243,148051,83262,64.53
+General Surgery,F,99214,1831,86598,58162,95.03
+General Surgery,F,99215,600,16879,13527,142.54
+General Surgery,O,99202,725,19973,19970,69.15
+General Surgery,O,99203,5763,205027,205009,108.24
+General Surgery,O,99204,7100,267455,267425,163.73
+General Surgery,O,99205,2224,63555,63550,216.47
+General Surgery,O,99211,117,6128,3730,21.46
+General Surgery,O,99212,2854,122709,90817,53.23
+General Surgery,O,99213,7912,545828,385978,87.46
+General Surgery,O,99214,6893,375052,280847,125.3
+General Surgery,O,99215,1772,63216,49497,179.12
+Geriatric Medicine,F,99203,8,152,151,82.06
+Geriatric Medicine,F,99204,47,1318,1318,133.71
+Geriatric Medicine,F,99205,143,4521,4521,180.49
+Geriatric Medicine,F,99211,1,94,19,8.5
+Geriatric Medicine,F,99212,3,180,120,34.24
+Geriatric Medicine,F,99213,104,5286,4044,63.82
+Geriatric Medicine,F,99214,260,29398,18023,89.21
+Geriatric Medicine,F,99215,212,16659,10758,132.91
+Geriatric Medicine,O,99202,5,414,414,70.99
+Geriatric Medicine,O,99203,46,1509,1509,110.96
+Geriatric Medicine,O,99204,272,8456,8456,162.47
+Geriatric Medicine,O,99205,373,15347,15346,216.58
+Geriatric Medicine,O,99211,40,3552,1707,24.35
+Geriatric Medicine,O,99212,97,5207,3461,56.59
+Geriatric Medicine,O,99213,589,66767,41029,88.46
+Geriatric Medicine,O,99214,843,218534,109062,120.85
+Geriatric Medicine,O,99215,619,69046,44640,167.28
+Geriatric Psychiatry,F,99204,1,24,24,130.24
+Geriatric Psychiatry,F,99205,4,193,193,180.22
+Geriatric Psychiatry,F,99211,1,243,32,8.57
+Geriatric Psychiatry,F,99212,1,24,13,39.36
+Geriatric Psychiatry,F,99213,12,908,360,68.98
+Geriatric Psychiatry,F,99214,23,3733,1406,102.76
+Geriatric Psychiatry,F,99215,12,1159,684,146.32
+Geriatric Psychiatry,O,99204,4,73,73,171.0
+Geriatric Psychiatry,O,99205,15,680,680,221.07
+Geriatric Psychiatry,O,99211,1,39,24,23.5
+Geriatric Psychiatry,O,99212,5,402,126,56.45
+Geriatric Psychiatry,O,99213,41,9002,2538,90.48
+Geriatric Psychiatry,O,99214,78,16198,5495,124.29
+Geriatric Psychiatry,O,99215,32,3683,1555,175.7
+Gynecological Oncology,F,99202,1,45,45,50.86
+Gynecological Oncology,F,99203,13,245,245,80.91
+Gynecological Oncology,F,99204,103,2366,2366,129.91
+Gynecological Oncology,F,99205,211,5494,5494,177.43
+Gynecological Oncology,F,99212,25,749,653,35.04
+Gynecological Oncology,F,99213,254,14269,10668,64.42
+Gynecological Oncology,F,99214,334,23564,13962,95.55
+Gynecological Oncology,F,99215,224,14321,6711,141.45
+Gynecological Oncology,O,99202,2,25,25,73.4
+Gynecological Oncology,O,99203,74,1528,1528,110.63
+Gynecological Oncology,O,99204,307,8794,8791,164.2
+Gynecological Oncology,O,99205,447,14477,14476,215.72
+Gynecological Oncology,O,99211,3,149,79,22.31
+Gynecological Oncology,O,99212,74,2417,1981,50.42
+Gynecological Oncology,O,99213,580,44007,31627,87.76
+Gynecological Oncology,O,99214,651,60480,35328,124.05
+Gynecological Oncology,O,99215,393,26145,12567,170.64
+Hand Surgery,F,99202,6,123,123,46.59
+Hand Surgery,F,99203,104,5447,5445,80.61
+Hand Surgery,F,99204,112,7081,7081,133.83
+Hand Surgery,F,99205,8,168,168,181.84
+Hand Surgery,F,99212,20,651,564,34.24
+Hand Surgery,F,99213,131,10674,8211,65.03
+Hand Surgery,F,99214,116,10324,8443,96.7
+Hand Surgery,F,99215,10,293,276,141.57
+Hand Surgery,O,99202,82,3131,3131,72.3
+Hand Surgery,O,99203,1309,127912,127904,110.2
+Hand Surgery,O,99204,1300,123298,123290,166.09
+Hand Surgery,O,99205,91,2627,2627,219.57
+Hand Surgery,O,99211,4,119,110,23.49
+Hand Surgery,O,99212,449,22106,18938,54.66
+Hand Surgery,O,99213,1459,281961,201882,89.74
+Hand Surgery,O,99214,1373,219881,166951,127.7
+Hand Surgery,O,99215,123,4918,4283,180.24
+Hematology,F,99203,9,237,236,82.33
+Hematology,F,99204,89,2356,2356,130.8
+Hematology,F,99205,253,6558,6557,178.58
+Hematology,F,99211,1,17,17,8.21
+Hematology,F,99212,1,19,16,32.46
+Hematology,F,99213,161,11536,7773,65.56
+Hematology,F,99214,361,49670,24285,95.94
+Hematology,F,99215,338,40987,16999,143.67
+Hematology,O,99202,3,52,52,64.56
+Hematology,O,99203,27,664,664,105.09
+Hematology,O,99204,147,5142,5142,159.07
+Hematology,O,99205,262,9442,9442,211.24
+Hematology,O,99211,12,610,411,24.16
+Hematology,O,99212,20,437,380,56.62
+Hematology,O,99213,261,31214,19649,86.37
+Hematology,O,99214,458,104310,47284,124.41
+Hematology,O,99215,373,48971,20931,166.52
+Hematology-Oncology,F,99202,5,100,100,46.07
+Hematology-Oncology,F,99203,180,4254,4254,78.96
+Hematology-Oncology,F,99204,1085,31599,31595,129.15
+Hematology-Oncology,F,99205,2100,65758,65752,177.86
+Hematology-Oncology,F,99211,30,2277,1029,8.82
+Hematology-Oncology,F,99212,110,5341,3322,34.65
+Hematology-Oncology,F,99213,1754,167253,114094,63.77
+Hematology-Oncology,F,99214,3230,667596,315692,94.6
+Hematology-Oncology,F,99215,2905,409739,168941,141.98
+Hematology-Oncology,O,99202,18,677,677,70.22
+Hematology-Oncology,O,99203,716,21469,21467,107.18
+Hematology-Oncology,O,99204,3156,130117,130106,160.94
+Hematology-Oncology,O,99205,3938,156021,156006,213.02
+Hematology-Oncology,O,99211,499,27489,15618,23.08
+Hematology-Oncology,O,99212,532,35753,22400,56.07
+Hematology-Oncology,O,99213,4516,938515,556118,87.36
+Hematology-Oncology,O,99214,6102,2404827,1047124,122.96
+Hematology-Oncology,O,99215,4986,799553,349178,171.28
+Hematopoietic Cell Transplantation and Cellular Therapy,F,99204,8,134,134,132.19
+Hematopoietic Cell Transplantation and Cellular Therapy,F,99205,37,926,926,177.0
+Hematopoietic Cell Transplantation and Cellular Therapy,F,99212,1,22,11,33.87
+Hematopoietic Cell Transplantation and Cellular Therapy,F,99213,25,1535,1028,62.93
+Hematopoietic Cell Transplantation and Cellular Therapy,F,99214,74,9476,4602,94.85
+Hematopoietic Cell Transplantation and Cellular Therapy,F,99215,93,11527,4591,143.67
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99202,1,23,23,74.61
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99203,3,74,74,107.88
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99204,8,196,196,150.96
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99205,19,515,515,204.65
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99211,2,24,24,22.47
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99212,2,53,49,55.58
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99213,21,1602,974,81.74
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99214,46,5446,2709,117.76
+Hematopoietic Cell Transplantation and Cellular Therapy,O,99215,43,2975,1530,171.32
+Hospice and Palliative Care,F,99203,3,112,112,80.01
+Hospice and Palliative Care,F,99204,37,911,911,129.54
+Hospice and Palliative Care,F,99205,130,3348,3348,182.23
+Hospice and Palliative Care,F,99212,6,230,158,34.4
+Hospice and Palliative Care,F,99213,54,2669,1716,64.08
+Hospice and Palliative Care,F,99214,161,10256,5533,94.65
+Hospice and Palliative Care,F,99215,201,10914,5813,145.16
+Hospice and Palliative Care,O,99202,2,40,40,58.31
+Hospice and Palliative Care,O,99203,15,430,430,101.51
+Hospice and Palliative Care,O,99204,71,1885,1882,160.62
+Hospice and Palliative Care,O,99205,248,7281,7277,215.82
+Hospice and Palliative Care,O,99211,4,127,83,34.5
+Hospice and Palliative Care,O,99212,18,995,457,54.93
+Hospice and Palliative Care,O,99213,130,7669,5308,86.84
+Hospice and Palliative Care,O,99214,342,30383,14326,123.35
+Hospice and Palliative Care,O,99215,354,25260,13209,176.47
+Hospitalist,F,99202,3,41,41,48.31
+Hospitalist,F,99203,45,1149,1149,81.1
+Hospitalist,F,99204,228,9288,9288,129.51
+Hospitalist,F,99205,119,4935,4933,178.96
+Hospitalist,F,99211,1,26,11,8.97
+Hospitalist,F,99212,18,996,568,33.4
+Hospitalist,F,99213,153,6988,5243,64.31
+Hospitalist,F,99214,434,22874,17022,93.46
+Hospitalist,F,99215,185,10476,7990,139.83
+Hospitalist,O,99202,7,333,333,69.67
+Hospitalist,O,99203,123,3617,3615,111.46
+Hospitalist,O,99204,334,14484,14480,164.13
+Hospitalist,O,99205,157,5398,5396,221.05
+Hospitalist,O,99211,26,4481,1490,24.63
+Hospitalist,O,99212,69,2902,2096,52.39
+Hospitalist,O,99213,617,53437,37033,89.39
+Hospitalist,O,99214,783,140828,76325,123.09
+Hospitalist,O,99215,317,24859,16035,172.04
+Infectious Disease,F,99202,3,43,43,46.74
+Infectious Disease,F,99203,73,1474,1474,80.38
+Infectious Disease,F,99204,231,4859,4859,131.6
+Infectious Disease,F,99205,202,3780,3780,179.54
+Infectious Disease,F,99211,1,24,13,41.15
+Infectious Disease,F,99212,63,2592,1562,34.95
+Infectious Disease,F,99213,503,29405,15791,64.7
+Infectious Disease,F,99214,1107,58526,34517,95.95
+Infectious Disease,F,99215,535,20129,13537,144.43
+Infectious Disease,O,99202,9,277,277,76.28
+Infectious Disease,O,99203,179,4362,4361,110.01
+Infectious Disease,O,99204,794,21250,21240,165.61
+Infectious Disease,O,99205,509,11660,11660,220.29
+Infectious Disease,O,99211,49,4479,1707,22.42
+Infectious Disease,O,99212,161,6968,4047,55.52
+Infectious Disease,O,99213,1540,105940,63966,87.79
+Infectious Disease,O,99214,2556,242053,129367,125.27
+Infectious Disease,O,99215,1023,55098,34582,178.96
+Intensive Cardiac Rehabilitation,O,99204,1,256,256,179.55
+Intensive Cardiac Rehabilitation,O,99205,1,12,12,236.12
+Intensive Cardiac Rehabilitation,O,99213,1,136,135,98.46
+Intensive Cardiac Rehabilitation,O,99214,1,1896,1625,138.64
+Intensive Cardiac Rehabilitation,O,99215,1,175,146,194.4
+Internal Medicine,F,99202,16,532,532,46.14
+Internal Medicine,F,99203,328,9040,9038,79.82
+Internal Medicine,F,99204,1354,44712,44708,129.29
+Internal Medicine,F,99205,841,25948,25934,177.74
+Internal Medicine,F,99211,37,1352,646,11.75
+Internal Medicine,F,99212,280,13103,8708,34.62
+Internal Medicine,F,99213,3840,265712,191665,64.44
+Internal Medicine,F,99214,5614,749841,452628,93.01
+Internal Medicine,F,99215,2540,175766,112408,139.43
+Internal Medicine,O,99202,265,8135,8130,72.61
+Internal Medicine,O,99203,3716,139069,139037,112.24
+Internal Medicine,O,99204,12499,440725,440644,165.84
+Internal Medicine,O,99205,3539,107576,107553,218.31
+Internal Medicine,O,99211,2624,204807,99689,24.12
+Internal Medicine,O,99212,5767,355614,223488,57.12
+Internal Medicine,O,99213,38403,6386226,3616796,89.42
+Internal Medicine,O,99214,44442,14025896,6881909,122.97
+Internal Medicine,O,99215,17171,1473271,978242,172.89
+Interventional Cardiology,F,99202,5,109,109,45.87
+Interventional Cardiology,F,99203,94,2639,2639,77.87
+Interventional Cardiology,F,99204,708,29281,29277,127.77
+Interventional Cardiology,F,99205,341,11142,11141,177.13
+Interventional Cardiology,F,99211,11,463,282,8.46
+Interventional Cardiology,F,99212,40,1750,1591,34.12
+Interventional Cardiology,F,99213,474,34481,29637,62.78
+Interventional Cardiology,F,99214,1155,178605,133104,92.83
+Interventional Cardiology,F,99215,576,26392,22750,140.73
+Interventional Cardiology,O,99202,18,523,523,72.42
+Interventional Cardiology,O,99203,546,16490,16490,107.79
+Interventional Cardiology,O,99204,3063,171388,171370,162.94
+Interventional Cardiology,O,99205,1047,40013,40009,219.55
+Interventional Cardiology,O,99211,234,15120,7378,22.97
+Interventional Cardiology,O,99212,168,11063,8917,55.01
+Interventional Cardiology,O,99213,2126,271427,215409,88.12
+Interventional Cardiology,O,99214,3757,1617803,1042988,125.43
+Interventional Cardiology,O,99215,1778,157174,120226,180.18
+Interventional Pain Management,F,99202,1,53,53,43.2
+Interventional Pain Management,F,99203,29,991,991,77.5
+Interventional Pain Management,F,99204,71,5331,5331,127.76
+Interventional Pain Management,F,99205,5,127,127,181.84
+Interventional Pain Management,F,99212,16,754,605,33.07
+Interventional Pain Management,F,99213,82,11584,6355,61.88
+Interventional Pain Management,F,99214,87,13692,7526,93.89
+Interventional Pain Management,F,99215,8,255,219,149.89
+Interventional Pain Management,O,99202,9,444,444,74.25
+Interventional Pain Management,O,99203,417,19390,19386,109.44
+Interventional Pain Management,O,99204,965,71336,71327,162.73
+Interventional Pain Management,O,99205,147,6093,6092,218.93
+Interventional Pain Management,O,99211,36,3629,1796,21.66
+Interventional Pain Management,O,99212,180,11693,8301,54.2
+Interventional Pain Management,O,99213,1085,357874,148228,88.24
+Interventional Pain Management,O,99214,1198,569116,203577,124.24
+Interventional Pain Management,O,99215,176,16739,9516,174.41
+Interventional Radiology,F,99202,3,45,45,44.8
+Interventional Radiology,F,99203,22,681,678,84.48
+Interventional Radiology,F,99204,57,1462,1456,130.26
+Interventional Radiology,F,99205,35,906,906,176.66
+Interventional Radiology,F,99212,21,653,495,35.7
+Interventional Radiology,F,99213,76,2803,2227,64.54
+Interventional Radiology,F,99214,88,3829,2772,96.38
+Interventional Radiology,F,99215,39,1008,829,144.42
+Interventional Radiology,O,99202,26,691,691,74.24
+Interventional Radiology,O,99203,155,6257,6256,112.16
+Interventional Radiology,O,99204,206,9725,9725,170.09
+Interventional Radiology,O,99205,64,2050,2050,228.93
+Interventional Radiology,O,99211,6,90,81,24.22
+Interventional Radiology,O,99212,93,4188,2868,55.31
+Interventional Radiology,O,99213,253,29157,16319,92.32
+Interventional Radiology,O,99214,248,21827,13902,128.16
+Interventional Radiology,O,99215,73,2694,2065,181.45
+Licensed Clinical Social Worker,O,99204,1,17,17,122.32
+Licensed Clinical Social Worker,O,99213,2,162,73,65.76
+Licensed Clinical Social Worker,O,99214,2,61,41,81.22
+Licensed Professional Counselor,F,99213,1,42,19,37.91
+Licensed Professional Counselor,O,99211,1,181,12,17.16
+Licensed Professional Counselor,O,99213,1,346,11,66.44
+Mass Immunizer Roster Biller,O,99211,1,56,55,26.2
+Maxillofacial Surgery,F,99202,3,73,73,47.9
+Maxillofacial Surgery,F,99203,28,704,704,81.98
+Maxillofacial Surgery,F,99204,22,580,580,135.22
+Maxillofacial Surgery,F,99205,4,133,133,174.73
+Maxillofacial Surgery,F,99212,16,498,390,34.59
+Maxillofacial Surgery,F,99213,41,1996,1524,67.55
+Maxillofacial Surgery,F,99214,29,1638,1183,96.83
+Maxillofacial Surgery,F,99215,5,347,223,140.13
+Maxillofacial Surgery,O,99202,168,4185,4183,69.53
+Maxillofacial Surgery,O,99203,148,4606,4604,109.24
+Maxillofacial Surgery,O,99204,86,2513,2512,163.37
+Maxillofacial Surgery,O,99205,28,835,835,218.34
+Maxillofacial Surgery,O,99211,2,62,54,21.24
+Maxillofacial Surgery,O,99212,64,3211,2158,54.12
+Maxillofacial Surgery,O,99213,106,6633,4078,88.54
+Maxillofacial Surgery,O,99214,82,4766,3351,123.74
+Maxillofacial Surgery,O,99215,21,786,555,178.56
+Medical Genetics and Genomics,F,99203,2,60,60,83.48
+Medical Genetics and Genomics,F,99204,5,104,104,131.83
+Medical Genetics and Genomics,F,99205,18,450,450,186.96
+Medical Genetics and Genomics,F,99213,1,21,21,62.88
+Medical Genetics and Genomics,F,99214,3,74,68,100.15
+Medical Genetics and Genomics,F,99215,8,189,150,148.62
+Medical Genetics and Genomics,O,99202,3,40,40,67.84
+Medical Genetics and Genomics,O,99203,3,140,140,118.66
+Medical Genetics and Genomics,O,99204,13,311,311,167.77
+Medical Genetics and Genomics,O,99205,23,765,765,214.46
+Medical Genetics and Genomics,O,99212,1,11,11,53.1
+Medical Genetics and Genomics,O,99213,4,130,113,87.01
+Medical Genetics and Genomics,O,99214,8,299,235,125.89
+Medical Genetics and Genomics,O,99215,16,457,409,170.86
+Medical Oncology,F,99202,1,11,11,43.95
+Medical Oncology,F,99203,49,1010,1010,78.19
+Medical Oncology,F,99204,320,8942,8942,128.87
+Medical Oncology,F,99205,1003,30256,30252,180.17
+Medical Oncology,F,99211,7,353,309,8.42
+Medical Oncology,F,99212,38,1013,838,34.97
+Medical Oncology,F,99213,641,52529,36025,64.42
+Medical Oncology,F,99214,1371,226437,108818,95.56
+Medical Oncology,F,99215,1346,190751,77484,144.6
+Medical Oncology,O,99202,6,134,134,67.76
+Medical Oncology,O,99203,178,5250,5250,104.85
+Medical Oncology,O,99204,854,30765,30760,158.41
+Medical Oncology,O,99205,1507,53237,53228,208.51
+Medical Oncology,O,99211,114,7300,3969,22.27
+Medical Oncology,O,99212,169,11186,7564,53.07
+Medical Oncology,O,99213,1491,262972,154546,86.01
+Medical Oncology,O,99214,2343,719766,312134,120.74
+Medical Oncology,O,99215,1953,268384,118036,168.37
+Medical Toxicology,O,99203,1,30,30,125.12
+Medical Toxicology,O,99204,1,15,15,166.75
+Medical Toxicology,O,99213,1,31,30,101.39
+Medical Toxicology,O,99214,1,22,21,134.81
+Micrographic Dermatologic Surgery,F,99202,1,12,12,45.85
+Micrographic Dermatologic Surgery,F,99203,12,735,735,77.64
+Micrographic Dermatologic Surgery,F,99204,7,261,261,128.65
+Micrographic Dermatologic Surgery,F,99211,1,28,23,8.38
+Micrographic Dermatologic Surgery,F,99212,15,608,523,34.91
+Micrographic Dermatologic Surgery,F,99213,26,1699,1433,64.49
+Micrographic Dermatologic Surgery,F,99214,20,844,719,96.64
+Micrographic Dermatologic Surgery,F,99215,1,21,14,154.64
+Micrographic Dermatologic Surgery,O,99202,66,2280,2279,73.33
+Micrographic Dermatologic Surgery,O,99203,216,17994,17993,111.7
+Micrographic Dermatologic Surgery,O,99204,124,10867,10865,167.54
+Micrographic Dermatologic Surgery,O,99205,3,110,110,233.35
+Micrographic Dermatologic Surgery,O,99211,16,915,764,22.46
+Micrographic Dermatologic Surgery,O,99212,262,28362,22432,56.4
+Micrographic Dermatologic Surgery,O,99213,327,102315,73574,90.32
+Micrographic Dermatologic Surgery,O,99214,230,36171,27307,128.83
+Micrographic Dermatologic Surgery,O,99215,7,335,323,192.49
+Nephrology,F,99202,3,56,56,46.51
+Nephrology,F,99203,35,782,782,78.98
+Nephrology,F,99204,381,11275,11274,130.02
+Nephrology,F,99205,271,6595,6595,179.93
+Nephrology,F,99211,5,127,77,8.98
+Nephrology,F,99212,15,662,497,34.62
+Nephrology,F,99213,362,17434,13463,63.65
+Nephrology,F,99214,1448,151162,94063,94.2
+Nephrology,F,99215,931,83100,47651,141.54
+Nephrology,O,99202,6,100,100,73.52
+Nephrology,O,99203,519,13320,13318,109.54
+Nephrology,O,99204,3906,143587,143567,164.19
+Nephrology,O,99205,1753,56270,56267,218.54
+Nephrology,O,99211,102,5913,3361,21.8
+Nephrology,O,99212,171,9946,6128,56.73
+Nephrology,O,99213,3335,337687,232986,85.66
+Nephrology,O,99214,6853,1736925,958448,117.31
+Nephrology,O,99215,3019,266833,162485,164.44
+Neurology,F,99202,8,116,116,46.7
+Neurology,F,99203,163,4312,4312,79.79
+Neurology,F,99204,1256,41622,41618,129.87
+Neurology,F,99205,1695,53478,53472,179.28
+Neurology,F,99211,3,94,75,8.8
+Neurology,F,99212,88,3036,2485,34.61
+Neurology,F,99213,1184,55054,45667,64.24
+Neurology,F,99214,2686,205587,154507,94.87
+Neurology,F,99215,2452,144804,108918,143.45
+Neurology,O,99202,56,5041,5041,72.96
+Neurology,O,99203,1087,42010,42008,110.98
+Neurology,O,99204,5000,340952,340931,165.54
+Neurology,O,99205,5224,267066,267048,218.36
+Neurology,O,99211,66,8036,4351,22.75
+Neurology,O,99212,572,31204,20855,55.86
+Neurology,O,99213,5329,585815,414827,89.29
+Neurology,O,99214,8908,1811186,1136721,126.16
+Neurology,O,99215,7043,690378,475983,179.21
+Neuropsychiatry,F,99203,2,52,52,81.16
+Neuropsychiatry,F,99204,6,153,153,130.58
+Neuropsychiatry,F,99205,15,422,422,189.73
+Neuropsychiatry,F,99212,1,22,11,39.78
+Neuropsychiatry,F,99213,11,548,424,65.53
+Neuropsychiatry,F,99214,27,1074,774,96.63
+Neuropsychiatry,F,99215,25,1431,1057,154.94
+Neuropsychiatry,O,99203,7,232,232,107.3
+Neuropsychiatry,O,99204,27,1400,1400,164.75
+Neuropsychiatry,O,99205,40,1459,1459,219.33
+Neuropsychiatry,O,99211,1,11,11,17.91
+Neuropsychiatry,O,99212,4,189,62,55.44
+Neuropsychiatry,O,99213,58,7253,3567,91.03
+Neuropsychiatry,O,99214,92,12829,6800,124.36
+Neuropsychiatry,O,99215,65,4571,2878,179.85
+Neurosurgery,F,99202,30,687,687,47.36
+Neurosurgery,F,99203,335,10481,10480,80.68
+Neurosurgery,F,99204,659,25225,25222,131.11
+Neurosurgery,F,99205,243,7511,7511,181.64
+Neurosurgery,F,99211,8,205,167,8.5
+Neurosurgery,F,99212,140,4918,4188,34.44
+Neurosurgery,F,99213,622,30495,25422,65.25
+Neurosurgery,F,99214,704,31985,26951,95.88
+Neurosurgery,F,99215,277,10182,8726,143.75
+Neurosurgery,O,99202,118,3978,3978,72.23
+Neurosurgery,O,99203,1381,57369,57366,107.86
+Neurosurgery,O,99204,2455,128064,128053,162.32
+Neurosurgery,O,99205,917,37687,37687,219.95
+Neurosurgery,O,99211,25,1026,874,21.78
+Neurosurgery,O,99212,718,32128,26249,54.41
+Neurosurgery,O,99213,2610,194845,149268,87.49
+Neurosurgery,O,99214,2814,225893,168135,123.92
+Neurosurgery,O,99215,1104,55620,44639,178.67
+Nuclear Medicine,F,99203,3,44,44,82.72
+Nuclear Medicine,F,99204,6,213,213,131.58
+Nuclear Medicine,F,99205,6,103,103,184.46
+Nuclear Medicine,F,99212,2,37,34,34.87
+Nuclear Medicine,F,99213,4,495,216,60.97
+Nuclear Medicine,F,99214,11,883,509,96.93
+Nuclear Medicine,F,99215,9,287,227,152.46
+Nuclear Medicine,O,99203,9,292,292,112.45
+Nuclear Medicine,O,99204,25,1398,1398,169.81
+Nuclear Medicine,O,99205,13,299,299,232.27
+Nuclear Medicine,O,99211,5,249,77,22.1
+Nuclear Medicine,O,99212,3,313,196,59.13
+Nuclear Medicine,O,99213,22,2583,1846,92.42
+Nuclear Medicine,O,99214,35,16434,9657,130.37
+Nuclear Medicine,O,99215,23,1946,1395,185.8
+Nurse Practitioner,F,99202,132,4402,4401,39.45
+Nurse Practitioner,F,99203,1738,49100,48972,67.14
+Nurse Practitioner,F,99204,2834,95738,95721,109.16
+Nurse Practitioner,F,99205,1000,28498,28491,151.34
+Nurse Practitioner,F,99211,109,6107,3178,7.71
+Nurse Practitioner,F,99212,1980,94525,65034,29.17
+Nurse Practitioner,F,99213,11144,925709,656494,54.01
+Nurse Practitioner,F,99214,15136,1639609,1091149,79.57
+Nurse Practitioner,F,99215,6694,430694,296641,119.86
+Nurse Practitioner,O,99202,2330,62937,62934,59.75
+Nurse Practitioner,O,99203,22697,886711,886625,91.69
+Nurse Practitioner,O,99204,24463,871382,871285,136.71
+Nurse Practitioner,O,99205,3492,91654,91635,182.54
+Nurse Practitioner,O,99211,1454,85098,43070,19.43
+Nurse Practitioner,O,99212,11240,572130,421321,45.47
+Nurse Practitioner,O,99213,82324,8519171,6253637,72.93
+Nurse Practitioner,O,99214,91330,12853546,7909976,101.86
+Nurse Practitioner,O,99215,19416,1062556,755368,144.16
+Obstetrics & Gynecology,F,99202,17,282,282,45.76
+Obstetrics & Gynecology,F,99203,203,4127,4127,80.18
+Obstetrics & Gynecology,F,99204,276,8514,8513,132.18
+Obstetrics & Gynecology,F,99205,157,4356,4356,179.63
+Obstetrics & Gynecology,F,99211,2,29,23,9.01
+Obstetrics & Gynecology,F,99212,121,3639,2703,34.48
+Obstetrics & Gynecology,F,99213,904,37108,26662,64.58
+Obstetrics & Gynecology,F,99214,654,32651,23389,95.99
+Obstetrics & Gynecology,F,99215,201,8037,4936,142.2
+Obstetrics & Gynecology,O,99202,193,3538,3538,71.62
+Obstetrics & Gynecology,O,99203,2573,51898,51895,110.46
+Obstetrics & Gynecology,O,99204,2612,97740,97729,166.23
+Obstetrics & Gynecology,O,99205,642,22884,22884,216.83
+Obstetrics & Gynecology,O,99211,133,6245,3739,22.81
+Obstetrics & Gynecology,O,99212,1751,59078,45824,55.58
+Obstetrics & Gynecology,O,99213,11835,648904,474957,90.15
+Obstetrics & Gynecology,O,99214,6988,483090,364818,127.36
+Obstetrics & Gynecology,O,99215,994,52878,39855,177.49
+Ophthalmology,F,99202,7,140,140,47.95
+Ophthalmology,F,99203,247,6811,6811,80.74
+Ophthalmology,F,99204,628,23371,23371,132.15
+Ophthalmology,F,99205,72,1992,1992,182.76
+Ophthalmology,F,99211,2,47,46,8.44
+Ophthalmology,F,99212,86,3682,2527,34.99
+Ophthalmology,F,99213,1046,107591,79291,65.42
+Ophthalmology,F,99214,1095,151364,107081,97.32
+Ophthalmology,F,99215,156,6458,5238,143.8
+Ophthalmology,O,99202,267,7473,7473,69.91
+Ophthalmology,O,99203,3375,128209,128201,109.07
+Ophthalmology,O,99204,9748,878884,878806,165.47
+Ophthalmology,O,99205,800,27738,27736,222.26
+Ophthalmology,O,99211,172,11167,8863,22.94
+Ophthalmology,O,99212,2929,202427,159162,55.75
+Ophthalmology,O,99213,10465,2605101,1769133,90.07
+Ophthalmology,O,99214,11057,3277114,2370569,127.28
+Ophthalmology,O,99215,954,68469,56416,181.79
+Opioid Treatment Program,O,99212,1,59,22,57.14
+Opioid Treatment Program,O,99213,1,94,25,91.46
+Opioid Treatment Program,O,99214,1,32,19,128.78
+Optometry,F,99202,14,457,457,47.06
+Optometry,F,99203,87,2359,2358,81.82
+Optometry,F,99204,91,2624,2624,131.02
+Optometry,F,99205,17,602,602,184.47
+Optometry,F,99212,63,2194,1924,34.69
+Optometry,F,99213,323,26052,20808,64.9
+Optometry,F,99214,248,16859,14447,95.71
+Optometry,F,99215,39,2249,1921,147.43
+Optometry,O,99202,277,5669,5669,70.12
+Optometry,O,99203,3419,90792,90785,106.56
+Optometry,O,99204,5070,217917,217901,161.44
+Optometry,O,99205,200,7393,7393,214.75
+Optometry,O,99211,101,4223,3163,21.99
+Optometry,O,99212,5552,224778,180580,53.94
+Optometry,O,99213,18904,1853038,1379518,87.24
+Optometry,O,99214,12702,1340916,1116710,123.12
+Optometry,O,99215,387,19727,16453,173.32
+Oral Medicine,O,99205,2,54,54,228.34
+Oral Surgery (Dentist only),F,99202,4,83,83,44.13
+Oral Surgery (Dentist only),F,99203,26,1156,1156,82.65
+Oral Surgery (Dentist only),F,99204,23,782,782,133.95
+Oral Surgery (Dentist only),F,99205,4,67,67,187.61
+Oral Surgery (Dentist only),F,99212,14,614,496,33.72
+Oral Surgery (Dentist only),F,99213,28,1907,1384,67.27
+Oral Surgery (Dentist only),F,99214,26,1826,1275,98.49
+Oral Surgery (Dentist only),F,99215,9,295,228,148.85
+Oral Surgery (Dentist only),O,99202,187,4282,4280,70.92
+Oral Surgery (Dentist only),O,99203,200,7574,7569,110.44
+Oral Surgery (Dentist only),O,99204,156,6086,6082,166.08
+Oral Surgery (Dentist only),O,99205,49,1466,1465,228.27
+Oral Surgery (Dentist only),O,99211,9,325,223,24.32
+Oral Surgery (Dentist only),O,99212,98,5321,2986,56.06
+Oral Surgery (Dentist only),O,99213,175,13697,8627,89.27
+Oral Surgery (Dentist only),O,99214,123,8439,5347,128.62
+Oral Surgery (Dentist only),O,99215,34,1238,920,167.97
+Oral and Maxillofacial Pathology,O,99203,2,309,308,107.24
+Oral and Maxillofacial Pathology,O,99204,3,58,58,173.18
+Oral and Maxillofacial Pathology,O,99213,4,289,179,90.47
+Oral and Maxillofacial Pathology,O,99214,3,121,89,135.34
+Orofacial Pain,F,99205,1,23,23,181.24
+Orofacial Pain,F,99214,1,41,31,97.42
+Orofacial Pain,O,99204,5,219,219,164.34
+Orofacial Pain,O,99205,1,15,15,206.68
+Orofacial Pain,O,99213,2,216,107,86.21
+Orofacial Pain,O,99214,5,503,330,133.81
+Orthopedic Surgery,F,99202,38,1095,1095,46.46
+Orthopedic Surgery,F,99203,1054,40708,40706,79.72
+Orthopedic Surgery,F,99204,1294,52336,52331,131.04
+Orthopedic Surgery,F,99205,149,4970,4970,182.44
+Orthopedic Surgery,F,99211,5,397,317,8.9
+Orthopedic Surgery,F,99212,435,19817,16438,34.06
+Orthopedic Surgery,F,99213,2015,178722,132037,63.99
+Orthopedic Surgery,F,99214,1683,130070,102772,95.1
+Orthopedic Surgery,F,99215,295,11444,10126,143.4
+Orthopedic Surgery,O,99202,478,14766,14764,70.34
+Orthopedic Surgery,O,99203,12327,716690,716611,109.57
+Orthopedic Surgery,O,99204,13651,844123,844004,165.26
+Orthopedic Surgery,O,99205,1342,41103,41100,220.81
+Orthopedic Surgery,O,99211,70,2925,1834,20.69
+Orthopedic Surgery,O,99212,5103,299650,245119,54.5
+Orthopedic Surgery,O,99213,17491,3415675,2334623,89.0
+Orthopedic Surgery,O,99214,16378,2657466,1929743,126.13
+Orthopedic Surgery,O,99215,2944,152869,129631,178.19
+Osteopathic Manipulative Medicine,F,99203,14,386,386,90.09
+Osteopathic Manipulative Medicine,F,99204,15,488,488,126.39
+Osteopathic Manipulative Medicine,F,99205,1,40,40,164.85
+Osteopathic Manipulative Medicine,F,99212,6,235,162,35.35
+Osteopathic Manipulative Medicine,F,99213,33,5429,2219,74.45
+Osteopathic Manipulative Medicine,F,99214,28,2422,1421,93.45
+Osteopathic Manipulative Medicine,F,99215,5,194,168,135.66
+Osteopathic Manipulative Medicine,O,99202,7,135,135,68.71
+Osteopathic Manipulative Medicine,O,99203,104,3333,3333,109.38
+Osteopathic Manipulative Medicine,O,99204,155,6575,6575,162.96
+Osteopathic Manipulative Medicine,O,99205,32,835,835,218.37
+Osteopathic Manipulative Medicine,O,99211,14,928,332,23.06
+Osteopathic Manipulative Medicine,O,99212,68,11056,3308,57.12
+Osteopathic Manipulative Medicine,O,99213,387,78713,26888,89.39
+Osteopathic Manipulative Medicine,O,99214,342,70882,28196,125.86
+Osteopathic Manipulative Medicine,O,99215,79,9337,3135,176.76
+Otolaryngology,F,99202,61,1440,1440,45.76
+Otolaryngology,F,99203,724,30166,30164,80.04
+Otolaryngology,F,99204,943,37566,37566,131.01
+Otolaryngology,F,99205,239,6630,6630,179.76
+Otolaryngology,F,99211,1,47,42,8.59
+Otolaryngology,F,99212,257,10452,8676,34.36
+Otolaryngology,F,99213,1225,96874,72204,64.89
+Otolaryngology,F,99214,1092,72732,55759,96.01
+Otolaryngology,F,99215,273,8563,7243,143.74
+Otolaryngology,O,99202,762,25909,25908,71.28
+Otolaryngology,O,99203,5990,548522,548473,111.52
+Otolaryngology,O,99204,6097,472600,472567,164.96
+Otolaryngology,O,99205,572,17114,17113,217.61
+Otolaryngology,O,99211,70,2526,1805,21.98
+Otolaryngology,O,99212,2225,132778,105684,55.66
+Otolaryngology,O,99213,7042,1578990,1099585,90.9
+Otolaryngology,O,99214,6505,1063918,752293,126.95
+Otolaryngology,O,99215,877,38668,30735,179.5
+Pain Management,F,99202,2,56,56,43.01
+Pain Management,F,99203,97,3075,3074,79.39
+Pain Management,F,99204,312,19458,19458,128.94
+Pain Management,F,99205,56,1825,1825,182.28
+Pain Management,F,99211,1,30,28,7.47
+Pain Management,F,99212,33,1454,1053,34.49
+Pain Management,F,99213,295,32378,19148,63.44
+Pain Management,F,99214,393,58888,32966,93.96
+Pain Management,F,99215,85,4049,3038,144.26
+Pain Management,O,99202,14,496,496,70.86
+Pain Management,O,99203,658,27189,27184,109.47
+Pain Management,O,99204,1766,139749,139731,163.12
+Pain Management,O,99205,315,12465,12462,220.54
+Pain Management,O,99211,38,5344,1907,24.29
+Pain Management,O,99212,272,13942,9760,55.6
+Pain Management,O,99213,1822,459821,205194,88.35
+Pain Management,O,99214,2127,909890,341254,124.49
+Pain Management,O,99215,387,28063,17584,180.46
+Pathology,F,99202,12,296,296,47.26
+Pathology,F,99203,12,314,314,85.67
+Pathology,F,99204,13,254,254,135.93
+Pathology,F,99205,4,96,96,187.83
+Pathology,F,99212,4,64,56,33.45
+Pathology,F,99213,10,548,279,69.14
+Pathology,F,99214,7,377,174,96.04
+Pathology,F,99215,4,55,48,139.65
+Pathology,O,99202,12,1610,1610,72.21
+Pathology,O,99203,30,2276,2276,107.6
+Pathology,O,99204,25,1464,1464,160.44
+Pathology,O,99205,3,69,69,229.33
+Pathology,O,99211,5,540,216,27.27
+Pathology,O,99212,25,1573,1346,55.4
+Pathology,O,99213,52,13525,9277,89.14
+Pathology,O,99214,39,6926,3969,130.04
+Pathology,O,99215,9,654,501,170.94
+Pediatric Medicine,F,99203,8,220,220,80.94
+Pediatric Medicine,F,99204,16,401,401,130.12
+Pediatric Medicine,F,99205,14,249,249,180.97
+Pediatric Medicine,F,99211,1,56,34,38.51
+Pediatric Medicine,F,99212,3,158,154,33.5
+Pediatric Medicine,F,99213,49,2815,1838,62.15
+Pediatric Medicine,F,99214,91,5138,3421,89.0
+Pediatric Medicine,F,99215,63,1869,1235,138.76
+Pediatric Medicine,O,99202,7,150,150,73.43
+Pediatric Medicine,O,99203,120,5147,5145,109.82
+Pediatric Medicine,O,99204,194,7784,7782,165.69
+Pediatric Medicine,O,99205,45,1207,1206,220.47
+Pediatric Medicine,O,99211,27,1645,926,21.41
+Pediatric Medicine,O,99212,53,2075,1550,56.65
+Pediatric Medicine,O,99213,518,48423,31886,88.89
+Pediatric Medicine,O,99214,601,86126,48658,120.79
+Pediatric Medicine,O,99215,198,8566,5757,172.07
+Periodontics,O,99204,1,11,11,171.65
+Peripheral Vascular Disease,F,99203,11,346,346,80.0
+Peripheral Vascular Disease,F,99204,15,884,884,125.77
+Peripheral Vascular Disease,F,99205,5,192,192,171.13
+Peripheral Vascular Disease,F,99212,2,45,44,33.74
+Peripheral Vascular Disease,F,99213,15,1004,905,63.61
+Peripheral Vascular Disease,F,99214,18,1401,1206,92.16
+Peripheral Vascular Disease,F,99215,5,339,271,134.29
+Peripheral Vascular Disease,O,99203,17,648,648,104.67
+Peripheral Vascular Disease,O,99204,31,1888,1888,162.5
+Peripheral Vascular Disease,O,99205,5,136,136,211.44
+Peripheral Vascular Disease,O,99211,3,341,218,21.56
+Peripheral Vascular Disease,O,99212,4,232,200,54.08
+Peripheral Vascular Disease,O,99213,34,3300,2464,84.84
+Peripheral Vascular Disease,O,99214,36,7992,5499,122.27
+Peripheral Vascular Disease,O,99215,12,485,416,169.43
+Physical Medicine and Rehabilitation,F,99202,16,450,450,46.69
+Physical Medicine and Rehabilitation,F,99203,208,6537,6536,80.75
+Physical Medicine and Rehabilitation,F,99204,418,20018,20017,130.7
+Physical Medicine and Rehabilitation,F,99205,138,3415,3415,180.93
+Physical Medicine and Rehabilitation,F,99211,1,32,18,8.23
+Physical Medicine and Rehabilitation,F,99212,99,4081,2886,34.65
+Physical Medicine and Rehabilitation,F,99213,565,41180,24711,64.53
+Physical Medicine and Rehabilitation,F,99214,713,63966,38988,95.28
+Physical Medicine and Rehabilitation,F,99215,289,11143,8561,143.42
+Physical Medicine and Rehabilitation,O,99202,154,8538,8536,70.17
+Physical Medicine and Rehabilitation,O,99203,1724,83504,83492,110.78
+Physical Medicine and Rehabilitation,O,99204,3191,225958,225947,165.65
+Physical Medicine and Rehabilitation,O,99205,694,25232,25232,217.9
+Physical Medicine and Rehabilitation,O,99211,45,4310,1596,20.54
+Physical Medicine and Rehabilitation,O,99212,654,38378,26150,55.83
+Physical Medicine and Rehabilitation,O,99213,3781,664496,334820,90.08
+Physical Medicine and Rehabilitation,O,99214,4195,1032619,464182,126.33
+Physical Medicine and Rehabilitation,O,99215,1158,70211,45584,178.55
+Physical Therapist in Private Practice,O,99204,1,43,43,151.12
+Physical Therapist in Private Practice,O,99214,1,59,39,113.01
+Physician Assistant,F,99202,103,2514,2514,38.75
+Physician Assistant,F,99203,1324,37910,37908,67.67
+Physician Assistant,F,99204,1585,48160,48157,109.9
+Physician Assistant,F,99205,424,11785,11783,149.88
+Physician Assistant,F,99211,33,1004,616,7.32
+Physician Assistant,F,99212,975,39858,31569,29.15
+Physician Assistant,F,99213,5697,421049,328461,54.31
+Physician Assistant,F,99214,6337,586977,426159,79.8
+Physician Assistant,F,99215,2535,143420,106424,118.71
+Physician Assistant,O,99202,2537,68595,68594,60.13
+Physician Assistant,O,99203,23166,1055770,1055684,93.05
+Physician Assistant,O,99204,20095,724608,724529,138.65
+Physician Assistant,O,99205,1486,39051,39048,183.44
+Physician Assistant,O,99211,536,22699,13450,19.81
+Physician Assistant,O,99212,11014,567142,476343,46.64
+Physician Assistant,O,99213,52500,6952840,5308155,74.67
+Physician Assistant,O,99214,50317,6207377,4278609,103.75
+Physician Assistant,O,99215,8624,403961,310236,144.45
+Plastic and Reconstructive Surgery,F,99202,29,726,725,45.96
+Plastic and Reconstructive Surgery,F,99203,233,7651,7649,80.94
+Plastic and Reconstructive Surgery,F,99204,229,6375,6374,131.12
+Plastic and Reconstructive Surgery,F,99205,72,1418,1417,185.55
+Plastic and Reconstructive Surgery,F,99212,126,5375,3428,34.8
+Plastic and Reconstructive Surgery,F,99213,327,30885,12461,65.42
+Plastic and Reconstructive Surgery,F,99214,196,10308,5708,97.32
+Plastic and Reconstructive Surgery,F,99215,34,1356,812,149.5
+Plastic and Reconstructive Surgery,O,99202,295,11611,11606,71.03
+Plastic and Reconstructive Surgery,O,99203,1337,58964,58952,109.49
+Plastic and Reconstructive Surgery,O,99204,1110,38903,38896,164.03
+Plastic and Reconstructive Surgery,O,99205,281,6664,6664,218.82
+Plastic and Reconstructive Surgery,O,99211,29,1679,941,23.28
+Plastic and Reconstructive Surgery,O,99212,813,42522,30891,54.72
+Plastic and Reconstructive Surgery,O,99213,1609,110343,75749,89.26
+Plastic and Reconstructive Surgery,O,99214,856,44796,32009,127.34
+Plastic and Reconstructive Surgery,O,99215,146,7351,4148,177.83
+Podiatry,F,99202,80,2229,2229,45.75
+Podiatry,F,99203,773,37266,37260,79.65
+Podiatry,F,99204,408,12650,12648,130.49
+Podiatry,F,99205,9,169,169,183.56
+Podiatry,F,99211,2,275,128,8.46
+Podiatry,F,99212,412,24513,15015,34.33
+Podiatry,F,99213,1508,197403,84670,64.76
+Podiatry,F,99214,712,49311,25119,95.04
+Podiatry,F,99215,52,1594,1087,144.78
+Podiatry,O,99202,2173,93004,92993,70.3
+Podiatry,O,99203,11326,956246,956098,109.86
+Podiatry,O,99204,5591,267369,267339,163.74
+Podiatry,O,99205,101,2509,2509,219.33
+Podiatry,O,99211,162,10012,6282,23.6
+Podiatry,O,99212,6344,786183,449855,56.33
+Podiatry,O,99213,12809,4280466,1992298,90.49
+Podiatry,O,99214,7275,781772,463575,125.7
+Podiatry,O,99215,319,11847,8237,173.3
+Preventive Medicine,F,99202,2,47,47,48.09
+Preventive Medicine,F,99203,14,424,424,78.59
+Preventive Medicine,F,99204,17,776,775,127.19
+Preventive Medicine,F,99205,5,87,87,179.82
+Preventive Medicine,F,99212,12,710,509,34.16
+Preventive Medicine,F,99213,28,7560,2316,61.95
+Preventive Medicine,F,99214,23,3691,1481,92.15
+Preventive Medicine,F,99215,11,730,467,141.12
+Preventive Medicine,O,99202,5,148,148,64.83
+Preventive Medicine,O,99203,34,1315,1315,109.47
+Preventive Medicine,O,99204,49,2182,2181,165.26
+Preventive Medicine,O,99205,20,592,592,224.71
+Preventive Medicine,O,99211,5,198,128,20.08
+Preventive Medicine,O,99212,11,601,529,54.91
+Preventive Medicine,O,99213,86,10140,6535,89.32
+Preventive Medicine,O,99214,104,14149,6950,126.53
+Preventive Medicine,O,99215,37,2343,1315,175.2
+Prosthodontics,F,99205,2,31,31,174.86
+Psychiatry,F,99202,2,34,34,48.11
+Psychiatry,F,99203,3,38,38,83.34
+Psychiatry,F,99204,32,714,714,134.89
+Psychiatry,F,99205,68,1728,1727,180.53
+Psychiatry,F,99211,19,3100,476,8.55
+Psychiatry,F,99212,97,8159,3332,34.9
+Psychiatry,F,99213,593,50715,18997,65.58
+Psychiatry,F,99214,1241,110750,43672,96.92
+Psychiatry,F,99215,302,17512,8439,143.21
+Psychiatry,O,99202,7,209,208,74.32
+Psychiatry,O,99203,55,3155,3154,97.06
+Psychiatry,O,99204,452,12987,12980,164.61
+Psychiatry,O,99205,609,17102,17099,216.66
+Psychiatry,O,99211,145,11945,4359,20.4
+Psychiatry,O,99212,683,99785,25622,54.31
+Psychiatry,O,99213,5024,925503,256577,86.94
+Psychiatry,O,99214,8366,1418791,415112,122.25
+Psychiatry,O,99215,1731,126689,48400,174.77
+"Psychologist, Clinical",F,99205,1,34,34,187.77
+"Psychologist, Clinical",F,99215,1,70,54,149.93
+"Psychologist, Clinical",O,99203,1,102,102,120.14
+"Psychologist, Clinical",O,99205,4,167,167,226.54
+"Psychologist, Clinical",O,99214,4,329,82,121.72
+"Psychologist, Clinical",O,99215,2,285,78,184.84
+Public Health or Welfare Agency,O,99211,1,486,35,22.75
+Public Health or Welfare Agency,O,99213,1,36,24,85.96
+Public Health or Welfare Agency,O,99214,1,69,32,120.17
+Pulmonary Disease,F,99202,10,191,191,46.9
+Pulmonary Disease,F,99203,239,6593,6592,78.71
+Pulmonary Disease,F,99204,1116,40928,40925,129.48
+Pulmonary Disease,F,99205,680,18726,18720,178.93
+Pulmonary Disease,F,99211,3,69,62,8.38
+Pulmonary Disease,F,99212,74,2648,2364,34.06
+Pulmonary Disease,F,99213,1041,70404,56777,63.97
+Pulmonary Disease,F,99214,2085,222303,156403,94.9
+Pulmonary Disease,F,99215,1278,76594,53821,143.0
+Pulmonary Disease,O,99202,28,607,607,74.54
+Pulmonary Disease,O,99203,1170,40523,40520,110.16
+Pulmonary Disease,O,99204,4718,260973,260950,164.57
+Pulmonary Disease,O,99205,2140,82395,82389,219.84
+Pulmonary Disease,O,99211,100,6782,5524,24.37
+Pulmonary Disease,O,99212,311,14889,11804,55.13
+Pulmonary Disease,O,99213,4438,581709,426567,89.68
+Pulmonary Disease,O,99214,6549,1753643,1054571,126.62
+Pulmonary Disease,O,99215,3558,307379,209570,178.9
+Radiation Oncology,F,99202,15,405,405,47.39
+Radiation Oncology,F,99203,135,3196,3196,80.78
+Radiation Oncology,F,99204,813,26789,26788,129.71
+Radiation Oncology,F,99205,2373,107047,107033,178.44
+Radiation Oncology,F,99211,15,618,455,8.83
+Radiation Oncology,F,99212,346,15738,12871,34.91
+Radiation Oncology,F,99213,1652,113122,88703,64.78
+Radiation Oncology,F,99214,1672,92426,71250,95.48
+Radiation Oncology,F,99215,1427,52770,42909,141.98
+Radiation Oncology,O,99202,13,283,283,70.62
+Radiation Oncology,O,99203,116,3501,3501,108.72
+Radiation Oncology,O,99204,689,27178,27173,161.79
+Radiation Oncology,O,99205,1724,86496,86481,209.76
+Radiation Oncology,O,99211,13,564,475,22.84
+Radiation Oncology,O,99212,379,20082,16357,50.97
+Radiation Oncology,O,99213,1436,107587,82017,85.24
+Radiation Oncology,O,99214,1336,79655,60824,121.39
+Radiation Oncology,O,99215,995,38582,32095,171.99
+Radiation Therapy Center,O,99215,1,99,78,171.75
+Rheumatology,F,99202,1,29,29,48.34
+Rheumatology,F,99203,49,1543,1543,83.07
+Rheumatology,F,99204,410,15048,15047,130.69
+Rheumatology,F,99205,310,8808,8806,176.3
+Rheumatology,F,99211,1,30,24,8.84
+Rheumatology,F,99212,24,1278,1015,34.73
+Rheumatology,F,99213,386,24962,19245,64.89
+Rheumatology,F,99214,949,143538,86188,95.44
+Rheumatology,F,99215,550,35024,24526,142.65
+Rheumatology,O,99202,8,139,139,72.82
+Rheumatology,O,99203,436,11571,11568,111.76
+Rheumatology,O,99204,2809,158708,158690,165.78
+Rheumatology,O,99205,1689,64804,64798,218.51
+Rheumatology,O,99211,68,4714,2667,24.25
+Rheumatology,O,99212,229,18327,8725,58.81
+Rheumatology,O,99213,2752,384963,245517,89.82
+Rheumatology,O,99214,4254,1737956,853440,126.03
+Rheumatology,O,99215,2316,194455,127841,177.56
+Sleep Medicine,F,99202,4,108,108,44.62
+Sleep Medicine,F,99203,35,1294,1294,78.71
+Sleep Medicine,F,99204,120,4627,4627,130.7
+Sleep Medicine,F,99205,36,1018,1018,177.65
+Sleep Medicine,F,99212,11,526,417,32.85
+Sleep Medicine,F,99213,90,7375,6500,63.69
+Sleep Medicine,F,99214,146,11282,9196,95.0
+Sleep Medicine,F,99215,59,3165,2594,141.45
+Sleep Medicine,O,99202,4,83,83,65.36
+Sleep Medicine,O,99203,191,8912,8911,108.31
+Sleep Medicine,O,99204,540,36935,36932,161.91
+Sleep Medicine,O,99205,172,7652,7652,217.75
+Sleep Medicine,O,99211,20,2118,1556,22.33
+Sleep Medicine,O,99212,43,1463,1256,52.91
+Sleep Medicine,O,99213,477,60544,49321,87.01
+Sleep Medicine,O,99214,674,123516,88204,124.17
+Sleep Medicine,O,99215,275,18471,14233,176.62
+Speech Language Pathologist,O,99204,1,50,50,132.72
+Speech Language Pathologist,O,99211,1,148,16,26.71
+Sports Medicine,F,99202,1,20,20,43.75
+Sports Medicine,F,99203,131,6270,6269,80.74
+Sports Medicine,F,99204,177,10141,10141,131.58
+Sports Medicine,F,99205,9,244,244,182.34
+Sports Medicine,F,99212,17,518,480,33.9
+Sports Medicine,F,99213,209,19714,13745,65.03
+Sports Medicine,F,99214,209,17937,13256,95.78
+Sports Medicine,F,99215,27,729,616,147.6
+Sports Medicine,O,99202,26,869,869,73.06
+Sports Medicine,O,99203,1164,73222,73218,108.54
+Sports Medicine,O,99204,1341,93967,93962,164.51
+Sports Medicine,O,99205,61,1739,1739,220.65
+Sports Medicine,O,99211,3,117,60,25.73
+Sports Medicine,O,99212,283,15629,12230,54.74
+Sports Medicine,O,99213,1602,249903,168830,88.61
+Sports Medicine,O,99214,1575,242177,160087,123.78
+Sports Medicine,O,99215,187,9822,6977,176.93
+Surgical Oncology,F,99202,3,47,47,45.98
+Surgical Oncology,F,99203,61,1404,1404,81.32
+Surgical Oncology,F,99204,186,4819,4816,131.77
+Surgical Oncology,F,99205,297,8855,8855,179.49
+Surgical Oncology,F,99211,2,44,41,9.07
+Surgical Oncology,F,99212,46,1721,1482,35.52
+Surgical Oncology,F,99213,277,16028,12996,65.69
+Surgical Oncology,F,99214,274,11060,8944,97.07
+Surgical Oncology,F,99215,193,6358,5069,143.64
+Surgical Oncology,O,99202,12,205,205,69.95
+Surgical Oncology,O,99203,136,3655,3655,111.63
+Surgical Oncology,O,99204,378,13694,13692,164.57
+Surgical Oncology,O,99205,505,18154,18153,214.51
+Surgical Oncology,O,99211,1,72,71,21.75
+Surgical Oncology,O,99212,107,5350,4526,53.67
+Surgical Oncology,O,99213,484,42306,34549,88.42
+Surgical Oncology,O,99214,508,32102,25263,124.65
+Surgical Oncology,O,99215,334,14019,10784,176.96
+Thoracic Surgery,F,99202,11,260,260,46.97
+Thoracic Surgery,F,99203,93,2516,2515,79.05
+Thoracic Surgery,F,99204,314,10175,10174,129.66
+Thoracic Surgery,F,99205,414,14431,14429,177.56
+Thoracic Surgery,F,99211,2,494,90,8.92
+Thoracic Surgery,F,99212,35,1106,902,34.03
+Thoracic Surgery,F,99213,248,11957,9268,64.93
+Thoracic Surgery,F,99214,256,10437,8436,94.75
+Thoracic Surgery,F,99215,167,5426,4469,141.95
+Thoracic Surgery,O,99202,28,736,736,70.48
+Thoracic Surgery,O,99203,251,7157,7154,111.47
+Thoracic Surgery,O,99204,748,27775,27770,166.27
+Thoracic Surgery,O,99205,819,31666,31660,217.67
+Thoracic Surgery,O,99211,12,476,431,22.91
+Thoracic Surgery,O,99212,133,6480,4737,55.73
+Thoracic Surgery,O,99213,619,38777,29092,90.04
+Thoracic Surgery,O,99214,689,37047,28179,125.76
+Thoracic Surgery,O,99215,375,13409,11074,181.51
+Undefined Physician type,F,99203,5,126,126,80.0
+Undefined Physician type,F,99204,14,776,776,131.87
+Undefined Physician type,F,99205,11,389,389,183.93
+Undefined Physician type,F,99211,1,50,12,9.01
+Undefined Physician type,F,99212,3,118,75,34.27
+Undefined Physician type,F,99213,13,974,713,66.63
+Undefined Physician type,F,99214,26,2181,1433,97.29
+Undefined Physician type,F,99215,20,994,726,144.93
+Undefined Physician type,O,99202,1,46,46,69.22
+Undefined Physician type,O,99203,33,2154,2154,113.0
+Undefined Physician type,O,99204,49,3664,3664,172.86
+Undefined Physician type,O,99205,20,761,760,229.49
+Undefined Physician type,O,99211,4,297,219,24.13
+Undefined Physician type,O,99212,16,1234,1013,55.02
+Undefined Physician type,O,99213,69,13881,9016,90.78
+Undefined Physician type,O,99214,79,13703,8789,130.58
+Undefined Physician type,O,99215,40,2742,2094,190.36
+Undersea and Hyperbaric Medicine,F,99202,2,24,24,44.93
+Undersea and Hyperbaric Medicine,F,99203,31,1109,1109,78.77
+Undersea and Hyperbaric Medicine,F,99204,32,1181,1181,128.43
+Undersea and Hyperbaric Medicine,F,99205,5,227,227,176.04
+Undersea and Hyperbaric Medicine,F,99212,28,2545,1418,33.95
+Undersea and Hyperbaric Medicine,F,99213,78,20081,5940,63.03
+Undersea and Hyperbaric Medicine,F,99214,57,6844,2858,92.75
+Undersea and Hyperbaric Medicine,F,99215,10,404,268,139.42
+Undersea and Hyperbaric Medicine,O,99202,1,46,46,68.99
+Undersea and Hyperbaric Medicine,O,99203,10,491,491,95.15
+Undersea and Hyperbaric Medicine,O,99204,11,524,524,152.24
+Undersea and Hyperbaric Medicine,O,99205,4,193,193,206.0
+Undersea and Hyperbaric Medicine,O,99211,3,427,77,20.58
+Undersea and Hyperbaric Medicine,O,99212,13,1575,879,45.32
+Undersea and Hyperbaric Medicine,O,99213,27,3883,1487,77.14
+Undersea and Hyperbaric Medicine,O,99214,20,2746,977,115.55
+Undersea and Hyperbaric Medicine,O,99215,4,123,108,157.14
+Unknown Supplier/Provider Specialty,O,99203,1,79,79,83.07
+Unknown Supplier/Provider Specialty,O,99204,2,83,83,141.8
+Unknown Supplier/Provider Specialty,O,99212,1,12,11,69.35
+Unknown Supplier/Provider Specialty,O,99213,2,214,124,72.14
+Unknown Supplier/Provider Specialty,O,99214,3,146,71,119.03
+Urology,F,99202,17,353,353,48.35
+Urology,F,99203,557,17930,17929,80.79
+Urology,F,99204,1168,53546,53543,131.13
+Urology,F,99205,267,8199,8197,180.87
+Urology,F,99211,46,2059,1213,8.78
+Urology,F,99212,244,8446,7137,35.09
+Urology,F,99213,1485,149042,120879,64.63
+Urology,F,99214,1632,194309,149332,95.29
+Urology,F,99215,510,19864,16517,143.05
+Urology,O,99202,118,3172,3172,69.96
+Urology,O,99203,3627,144147,144134,110.73
+Urology,O,99204,6752,532287,532228,166.62
+Urology,O,99205,899,28854,28851,218.69
+Urology,O,99211,978,52758,32563,23.33
+Urology,O,99212,1918,118094,94067,56.79
+Urology,O,99213,7272,1813566,1335905,91.02
+Urology,O,99214,7528,2767389,1837454,128.0
+Urology,O,99215,2784,160773,123967,178.33
+Vascular Surgery,F,99202,25,594,594,46.54
+Vascular Surgery,F,99203,387,11765,11765,80.55
+Vascular Surgery,F,99204,490,15363,15360,130.84
+Vascular Surgery,F,99205,101,2695,2695,179.6
+Vascular Surgery,F,99211,5,89,79,8.42
+Vascular Surgery,F,99212,161,7775,5380,35.26
+Vascular Surgery,F,99213,710,56655,37249,65.54
+Vascular Surgery,F,99214,591,39220,28866,96.11
+Vascular Surgery,F,99215,142,4838,3981,144.53
+Vascular Surgery,O,99202,172,5517,5514,72.12
+Vascular Surgery,O,99203,1794,89339,89310,112.39
+Vascular Surgery,O,99204,2152,113323,113313,166.9
+Vascular Surgery,O,99205,492,16299,16297,220.01
+Vascular Surgery,O,99211,43,1811,1342,22.51
+Vascular Surgery,O,99212,690,43380,32165,56.59
+Vascular Surgery,O,99213,2529,350058,251690,91.45
+Vascular Surgery,O,99214,2368,269648,197298,128.28
+Vascular Surgery,O,99215,643,28839,23804,180.78
