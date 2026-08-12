@@ -306,12 +306,21 @@ def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, An
 @app.get("/api/encounters/{encounter_id}/billing-tab")
 def billing_tab(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
     """F1 — the provider Billing Tab view: the same visit reorganized into a
-    billing reference; the clinical note is read, never altered."""
+    billing reference; the clinical note is read, never altered. Telehealth
+    encounters additionally run the F2 completeness rule pack pre-submission."""
     from .billing_tab import build_billing_tab_view
+    from .completeness import attestation_block, check_note
 
     bundle = _get_bundle(encounter_id)
     result = get_orchestrator().process(bundle, user_id=user_id)
-    return build_billing_tab_view(bundle, result, engine_version=_ENGINE_VERSION)
+    completeness = None
+    if "telehealth" in bundle.encounter_type or bundle.place_of_service in ("02", "10"):
+        results = check_note(bundle.signed_note)
+        completeness = {"rulepack": "telehealth.v1",
+                        "results": [r.to_json() for r in results],
+                        "attestation_block": attestation_block(results)}
+    return build_billing_tab_view(bundle, result, engine_version=_ENGINE_VERSION,
+                                  completeness=completeness)
 
 
 @app.post("/api/feedback")
