@@ -15,6 +15,7 @@ model and an authentic (public-domain) ICD-10 subset:
 pip install pandas pyarrow          # pyarrow only needed for the full code set
 python run_demo.py                  # prints the provider view + biller worksheet + feedback
 python prove_no_upcode.py           # proves the guardrail cannot upcode
+python run_chase_demo.py            # F9 insurance-data chase, end to end on mock athenaNet
 ```
 
 ## The pilot demo (API + web UI)

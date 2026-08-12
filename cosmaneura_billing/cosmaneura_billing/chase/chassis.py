@@ -40,7 +40,8 @@ class QueueType:
     SELF_PAY = "self_pay"
 
 
-# sequence_state graph (synthesis §F9b)
+# sequence_state graph (synthesis §F9b; §F5 items start at "draft")
+STATE_DRAFT = "draft"
 STATE_APPROVED = "staff_approved"
 STATE_SENT = "sent"
 STATE_REMINDED = "reminded"
@@ -50,6 +51,9 @@ STATE_ESCALATED = "escalated_to_staff"
 STATE_UNREACHABLE = "unreachable"
 
 _TRANSITIONS: dict[str, set[str]] = {
+    # F5 self-pay items begin as drafts: nothing leaves draft except by an
+    # explicit staff approval (or escalation)
+    STATE_DRAFT: {STATE_APPROVED, STATE_ESCALATED},
     # a patient may submit before any outreach — the item still auto-closes
     STATE_OPEN: {STATE_APPROVED, STATE_SUBMITTED, STATE_ESCALATED,
                  STATE_UNREACHABLE},
