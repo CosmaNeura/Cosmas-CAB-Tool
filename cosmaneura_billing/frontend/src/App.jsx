@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { ShieldCheck, Stethoscope, ClipboardCheck, Info, Wifi, WifiOff } from "lucide-react";
+import { ShieldCheck, Stethoscope, ClipboardCheck, DollarSign, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import BillingReview from "./BillingReview.jsx";
+import BillingTab from "./BillingTab.jsx";
 import CoderReview from "./CoderReview.jsx";
 
 function Pill({ tone, title, children }) {
@@ -74,6 +75,9 @@ export default function App() {
             <button className={tab(view === "billing")} onClick={() => setView("billing")}>
               <Stethoscope size={15} />Provider &amp; biller
             </button>
+            <button className={tab(view === "billing-tab")} onClick={() => setView("billing-tab")}>
+              <DollarSign size={15} />Billing tab
+            </button>
             <button className={tab(view === "coder")} onClick={() => setView("coder")}>
               <ClipboardCheck size={15} />Coder review
             </button>
@@ -93,9 +97,9 @@ export default function App() {
           )}
         </div>
 
-        {view === "billing"
-          ? <BillingReview encounterId={selected} live={!!health} />
-          : <CoderReview encounterId={selected} live={!!health} />}
+        {view === "billing" && <BillingReview encounterId={selected} live={!!health} />}
+        {view === "billing-tab" && <BillingTab encounterId={selected} live={!!health} />}
+        {view === "coder" && <CoderReview encounterId={selected} live={!!health} />}
 
         <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-400">
           <Info size={12} />
