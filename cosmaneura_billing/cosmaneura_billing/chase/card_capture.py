@@ -1,10 +1,11 @@
-"""Stand-in seam for the existing CardCapture pipeline.
+"""CardCapture seam — the interface the upstream capture pipeline implements.
 
-The real pipeline (extract → staff verify → idempotent Athena write incl.
-``ADMIN_INSURANCECARD`` attach → eligibility re-check) lives in unpushed work
-outside this repo tonight. The chase loop needs exactly two touchpoints, so
-this module defines them; when the real pipeline lands, this file becomes the
-adapter to it and nothing else in the chase package changes.
+Confirmed Aug 12: no prior CardCapture implementation exists to import (the
+workspace that produced it was reset), so this module IS the canonical
+interface going forward. The upstream pipeline (patient upload page →
+extraction → staff verification UI) is future work; it will emit
+``CardVerifiedEvent`` and consume ``submission_link``, and nothing else in
+the chase package changes when it lands.
 
 Nothing here ever holds a full member ID or card image — the verified event
 carries only the payer name and a masked tail, mirroring the real pipeline's
