@@ -164,3 +164,7 @@ class BillingResult:
     feedback_events: list[FeedbackEvent] = field(default_factory=list)
     # captured vs. defensibly-supported, in code terms (revenue is downstream of this)
     revenue_integrity_note: str = ""
+    # the extracted MDM facts the E/M level was computed from — exposed so
+    # render layers (provider Billing Tab) can show level = f(facts) with
+    # evidence, per the "E/M is an output, never a target" constraint
+    facts: dict = field(default_factory=dict)

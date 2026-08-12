@@ -303,6 +303,17 @@ def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, An
     return view
 
 
+@app.get("/api/encounters/{encounter_id}/billing-tab")
+def billing_tab(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
+    """F1 — the provider Billing Tab view: the same visit reorganized into a
+    billing reference; the clinical note is read, never altered."""
+    from .billing_tab import build_billing_tab_view
+
+    bundle = _get_bundle(encounter_id)
+    result = get_orchestrator().process(bundle, user_id=user_id)
+    return build_billing_tab_view(bundle, result, engine_version=_ENGINE_VERSION)
+
+
 @app.post("/api/feedback")
 def submit_feedback(fb: FeedbackModel) -> dict[str, Any]:
     store = get_feedback_store()

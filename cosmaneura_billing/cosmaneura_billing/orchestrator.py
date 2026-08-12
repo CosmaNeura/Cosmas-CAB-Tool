@@ -114,4 +114,5 @@ class BillingOrchestrator:
         return BillingResult(
             provider_card=card, biller_worksheet=worksheet,
             feedback_events=events, revenue_integrity_note=integrity_note,
+            facts=facts,
         )
