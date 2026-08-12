@@ -1,0 +1,107 @@
+import React, { useEffect, useState } from "react";
+import { ShieldCheck, Stethoscope, ClipboardCheck, Info, Wifi, WifiOff } from "lucide-react";
+import { api } from "./api.js";
+import BillingReview from "./BillingReview.jsx";
+import CoderReview from "./CoderReview.jsx";
+
+function Pill({ tone, title, children }) {
+  return (
+    <span title={title} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>
+      {children}
+    </span>
+  );
+}
+
+const tab = (active) =>
+  `inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+    active ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`;
+
+export default function App() {
+  const [view, setView] = useState("billing");          // billing | coder
+  const [health, setHealth] = useState(null);           // null = probing, false = offline
+  const [encounters, setEncounters] = useState([]);
+  const [selected, setSelected] = useState("ENC-100237");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const h = await api("/api/health");
+        setHealth(h);
+        const encs = await api("/api/encounters");
+        setEncounters(encs);
+        if (encs.length && !encs.some((e) => e.id === selected)) setSelected(encs[0].id);
+      } catch {
+        setHealth(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900"
+         style={{ fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial" }}>
+      <div className="mx-auto max-w-5xl">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white">
+              <ShieldCheck size={20} />
+            </span>
+            <div>
+              <h1 className="text-lg font-medium tracking-tight">CosmaNeura · Billing review</h1>
+              <p className="text-xs text-slate-500">Evidence-grounded coding for independent practices</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {health === null && <Pill tone="bg-slate-100 text-slate-500 ring-slate-300">connecting…</Pill>}
+            {health === false && (
+              <Pill tone="bg-amber-50 text-amber-700 ring-amber-200">
+                <WifiOff size={12} className="mr-1" />engine offline · mock data
+              </Pill>
+            )}
+            {health && (
+              <Pill tone="bg-emerald-50 text-emerald-700 ring-emerald-200"
+                    title={health.cptStatus}>
+                <Wifi size={12} className="mr-1" />
+                live engine · NCCI {health.ncciLoaded ? "✓" : "–"} · coverage {health.coverageLoaded ? "✓" : "–"} ·
+                CPT {health.cptDescriptors > 0 ? "✓" : "–"}
+              </Pill>
+            )}
+          </div>
+        </header>
+
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-slate-200">
+            <button className={tab(view === "billing")} onClick={() => setView("billing")}>
+              <Stethoscope size={15} />Provider &amp; biller
+            </button>
+            <button className={tab(view === "coder")} onClick={() => setView("coder")}>
+              <ClipboardCheck size={15} />Coder review
+            </button>
+          </div>
+          {encounters.length > 0 && (
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              Encounter
+              <select value={selected} onChange={(e) => setSelected(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm shadow-sm">
+                {encounters.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.id}{e.submittedEm ? ` · submitted ${e.submittedEm}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+
+        {view === "billing"
+          ? <BillingReview encounterId={selected} live={!!health} />
+          : <CoderReview encounterId={selected} live={!!health} />}
+
+        <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-400">
+          <Info size={12} />
+          Decision support only — a certified coder or the provider approves every claim.
+        </p>
+      </div>
+    </div>
+  );
+}

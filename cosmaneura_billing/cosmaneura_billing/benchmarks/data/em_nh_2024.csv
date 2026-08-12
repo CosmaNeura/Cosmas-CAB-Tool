@@ -1,0 +1,401 @@
+specialty,hcpcs,providers,total_services,avg_allowed_weighted
+Adult Congenital Heart Disease,99214,1,53,98.66
+Allergy/ Immunology,99203,9,284,106.46
+Allergy/ Immunology,99204,14,493,155.39
+Allergy/ Immunology,99205,1,26,167.17
+Allergy/ Immunology,99213,10,465,86.78
+Allergy/ Immunology,99214,14,1298,118.02
+Allergy/ Immunology,99215,1,109,136.81
+Anesthesiology,99203,7,340,109.15
+Anesthesiology,99204,10,507,144.34
+Anesthesiology,99205,1,13,165.27
+Anesthesiology,99212,4,72,48.37
+Anesthesiology,99213,12,1973,85.94
+Anesthesiology,99214,15,2281,110.01
+Anesthesiology,99215,5,97,149.81
+Cardiac Surgery,99202,1,56,45.94
+Cardiac Surgery,99203,1,31,131.94
+Cardiac Surgery,99204,4,111,147.9
+Cardiac Surgery,99205,4,79,191.35
+Cardiac Surgery,99212,1,15,34.27
+Cardiac Surgery,99213,1,44,106.62
+Cardiac Surgery,99214,1,13,149.55
+Cardiac Surgery,99215,2,42,152.88
+Cardiology,99202,1,14,45.91
+Cardiology,99203,8,179,95.59
+Cardiology,99204,94,3809,146.67
+Cardiology,99205,27,787,195.16
+Cardiology,99211,13,508,21.85
+Cardiology,99213,60,3378,82.77
+Cardiology,99214,117,27956,111.94
+Cardiology,99215,55,4411,166.63
+Certified Clinical Nurse Specialist,99214,3,247,111.21
+Certified Registered Nurse Anesthetist (CRNA),99204,2,53,130.35
+Certified Registered Nurse Anesthetist (CRNA),99205,2,31,196.96
+Certified Registered Nurse Anesthetist (CRNA),99212,3,52,41.79
+Certified Registered Nurse Anesthetist (CRNA),99213,5,259,70.97
+Certified Registered Nurse Anesthetist (CRNA),99214,4,386,116.36
+Clinical Cardiac Electrophysiology,99204,8,356,139.24
+Clinical Cardiac Electrophysiology,99205,5,110,186.79
+Clinical Cardiac Electrophysiology,99213,8,315,69.9
+Clinical Cardiac Electrophysiology,99214,9,661,105.88
+Clinical Cardiac Electrophysiology,99215,4,68,139.2
+Colorectal Surgery (Proctology),99203,4,121,89.2
+Colorectal Surgery (Proctology),99204,4,81,155.88
+Colorectal Surgery (Proctology),99205,3,139,189.4
+Colorectal Surgery (Proctology),99211,1,86,23.69
+Colorectal Surgery (Proctology),99213,4,107,72.22
+Colorectal Surgery (Proctology),99214,5,131,119.39
+Colorectal Surgery (Proctology),99215,2,53,138.06
+Critical Care (Intensivists),99204,2,62,151.81
+Critical Care (Intensivists),99213,1,199,89.96
+Critical Care (Intensivists),99214,2,300,123.55
+Critical Care (Intensivists),99215,1,16,137.19
+Dermatology,99202,22,602,64.06
+Dermatology,99203,60,4994,102.31
+Dermatology,99204,42,2108,150.87
+Dermatology,99211,1,84,23.58
+Dermatology,99212,56,6094,50.82
+Dermatology,99213,68,37091,83.29
+Dermatology,99214,63,16704,115.56
+Dermatology,99215,1,16,179.29
+Diagnostic Radiology,99203,2,55,101.68
+Diagnostic Radiology,99204,1,67,166.28
+Diagnostic Radiology,99213,2,64,78.0
+Diagnostic Radiology,99214,2,86,121.99
+Emergency Medicine,99203,16,532,91.39
+Emergency Medicine,99204,9,173,140.15
+Emergency Medicine,99205,1,13,217.74
+Emergency Medicine,99211,2,64,23.85
+Emergency Medicine,99212,6,96,42.49
+Emergency Medicine,99213,48,3223,72.64
+Emergency Medicine,99214,34,2142,114.31
+Emergency Medicine,99215,4,252,172.95
+Endocrinology,99203,4,89,80.4
+Endocrinology,99204,25,1105,139.38
+Endocrinology,99205,23,1092,193.78
+Endocrinology,99211,4,68,23.45
+Endocrinology,99213,13,1089,79.0
+Endocrinology,99214,43,9739,109.53
+Endocrinology,99215,35,3429,161.34
+Family Practice,99203,31,810,102.87
+Family Practice,99204,63,1474,158.41
+Family Practice,99205,7,89,187.26
+Family Practice,99211,34,1206,22.67
+Family Practice,99212,22,1495,41.12
+Family Practice,99213,334,30817,80.05
+Family Practice,99214,352,89290,113.64
+Family Practice,99215,162,8398,159.51
+Gastroenterology,99202,1,16,74.65
+Gastroenterology,99203,24,943,110.74
+Gastroenterology,99204,30,1141,163.12
+Gastroenterology,99205,7,139,198.89
+Gastroenterology,99212,2,39,52.76
+Gastroenterology,99213,50,3576,86.24
+Gastroenterology,99214,67,4773,118.13
+Gastroenterology,99215,22,525,163.93
+General Practice,99212,2,55,54.07
+General Practice,99213,3,525,89.09
+General Practice,99214,3,886,125.77
+General Practice,99215,2,99,168.55
+General Surgery,99202,8,264,52.27
+General Surgery,99203,44,1449,93.47
+General Surgery,99204,55,1751,143.46
+General Surgery,99205,18,498,181.96
+General Surgery,99212,22,1060,37.94
+General Surgery,99213,64,4867,72.21
+General Surgery,99214,57,2304,108.62
+General Surgery,99215,18,523,155.26
+Geriatric Medicine,99204,4,76,144.48
+Geriatric Medicine,99205,6,268,188.23
+Geriatric Medicine,99211,1,302,23.42
+Geriatric Medicine,99213,6,302,79.9
+Geriatric Medicine,99214,9,3686,106.67
+Geriatric Medicine,99215,8,630,148.48
+Geriatric Psychiatry,99205,1,191,217.71
+Geriatric Psychiatry,99211,2,282,10.63
+Geriatric Psychiatry,99213,5,517,81.32
+Geriatric Psychiatry,99214,9,1619,117.92
+Geriatric Psychiatry,99215,5,420,171.61
+Gynecological Oncology,99205,2,64,192.94
+Gynecological Oncology,99212,1,53,66.82
+Gynecological Oncology,99213,4,287,87.81
+Gynecological Oncology,99214,4,200,102.11
+Gynecological Oncology,99215,2,118,140.12
+Hand Surgery,99203,6,534,110.6
+Hand Surgery,99204,6,780,165.53
+Hand Surgery,99212,3,78,56.47
+Hand Surgery,99213,6,917,90.27
+Hand Surgery,99214,6,999,127.33
+Hematology,99204,2,45,128.3
+Hematology,99205,3,66,171.89
+Hematology,99213,2,39,65.54
+Hematology,99214,8,715,93.93
+Hematology,99215,7,1036,137.17
+Hematology-Oncology,99204,22,651,142.31
+Hematology-Oncology,99205,32,1031,188.47
+Hematology-Oncology,99211,1,12,23.52
+Hematology-Oncology,99213,23,2126,69.76
+Hematology-Oncology,99214,43,10777,102.46
+Hematology-Oncology,99215,34,4029,150.15
+Hospice and Palliative Care,99204,1,11,129.61
+Hospice and Palliative Care,99205,10,182,193.46
+Hospice and Palliative Care,99214,2,33,127.05
+Hospice and Palliative Care,99215,16,1087,167.53
+Hospitalist,99214,2,35,112.35
+Hospitalist,99215,3,717,173.54
+Infectious Disease,99203,1,22,80.09
+Infectious Disease,99204,6,91,162.12
+Infectious Disease,99205,3,52,197.77
+Infectious Disease,99212,3,108,51.23
+Infectious Disease,99213,12,453,81.17
+Infectious Disease,99214,26,1167,110.97
+Infectious Disease,99215,16,614,163.48
+Internal Medicine,99202,2,30,72.29
+Internal Medicine,99203,10,208,104.86
+Internal Medicine,99204,45,1312,147.96
+Internal Medicine,99205,21,554,186.85
+Internal Medicine,99211,8,268,28.67
+Internal Medicine,99212,20,567,50.95
+Internal Medicine,99213,194,23846,79.78
+Internal Medicine,99214,225,59208,110.09
+Internal Medicine,99215,96,5626,150.87
+Interventional Cardiology,99203,3,76,114.61
+Interventional Cardiology,99204,13,633,158.34
+Interventional Cardiology,99205,3,77,185.72
+Interventional Cardiology,99211,3,128,23.6
+Interventional Cardiology,99213,9,588,86.75
+Interventional Cardiology,99214,17,3577,109.49
+Interventional Cardiology,99215,4,162,161.62
+Interventional Pain Management,99203,1,11,111.81
+Interventional Pain Management,99205,1,81,211.78
+Interventional Pain Management,99211,1,79,22.35
+Interventional Pain Management,99212,1,17,56.34
+Interventional Pain Management,99213,1,99,86.26
+Interventional Pain Management,99214,2,1926,124.68
+Interventional Radiology,99203,2,41,80.25
+Interventional Radiology,99213,1,66,64.87
+Interventional Radiology,99214,1,34,95.38
+Maxillofacial Surgery,99204,1,15,172.56
+Medical Oncology,99204,10,259,156.43
+Medical Oncology,99205,23,642,195.36
+Medical Oncology,99211,2,33,23.51
+Medical Oncology,99212,3,81,50.8
+Medical Oncology,99213,17,2429,82.39
+Medical Oncology,99214,26,6311,117.41
+Medical Oncology,99215,22,2498,145.64
+Micrographic Dermatologic Surgery,99203,1,24,78.77
+Micrographic Dermatologic Surgery,99212,2,66,34.3
+Micrographic Dermatologic Surgery,99213,2,127,63.77
+Nephrology,99203,1,22,77.52
+Nephrology,99204,11,413,145.98
+Nephrology,99205,9,441,198.0
+Nephrology,99212,1,12,57.8
+Nephrology,99213,11,949,92.73
+Nephrology,99214,25,6252,115.71
+Nephrology,99215,15,1189,142.3
+Neurology,99202,1,20,46.09
+Neurology,99203,7,328,103.26
+Neurology,99204,39,1863,150.92
+Neurology,99205,45,2311,189.63
+Neurology,99211,1,33,13.75
+Neurology,99212,2,25,48.03
+Neurology,99213,37,3612,79.33
+Neurology,99214,78,10147,109.66
+Neurology,99215,64,6371,156.17
+Neurosurgery,99202,2,54,58.57
+Neurosurgery,99203,12,601,106.45
+Neurosurgery,99204,13,575,162.99
+Neurosurgery,99205,6,134,188.68
+Neurosurgery,99212,5,232,50.95
+Neurosurgery,99213,20,1716,88.71
+Neurosurgery,99214,17,938,123.25
+Neurosurgery,99215,10,320,164.06
+Nurse Practitioner,99202,9,380,58.38
+Nurse Practitioner,99203,163,6413,90.12
+Nurse Practitioner,99204,214,9370,133.16
+Nurse Practitioner,99205,65,1616,167.4
+Nurse Practitioner,99211,30,1755,20.28
+Nurse Practitioner,99212,81,3554,40.15
+Nurse Practitioner,99213,701,68395,68.44
+Nurse Practitioner,99214,873,119860,95.56
+Nurse Practitioner,99215,294,17304,131.32
+Obstetrics & Gynecology,99202,1,21,46.47
+Obstetrics & Gynecology,99203,16,306,99.52
+Obstetrics & Gynecology,99204,20,413,145.78
+Obstetrics & Gynecology,99205,7,243,203.16
+Obstetrics & Gynecology,99212,10,253,47.0
+Obstetrics & Gynecology,99213,98,4391,82.75
+Obstetrics & Gynecology,99214,65,3016,115.14
+Obstetrics & Gynecology,99215,11,559,161.53
+Ophthalmology,99202,2,63,72.51
+Ophthalmology,99203,18,811,101.68
+Ophthalmology,99204,58,4132,157.48
+Ophthalmology,99205,2,28,198.03
+Ophthalmology,99211,1,18,8.5
+Ophthalmology,99212,21,1577,55.93
+Ophthalmology,99213,70,15629,86.47
+Ophthalmology,99214,67,23028,122.13
+Ophthalmology,99215,2,74,167.63
+Optometry,99202,2,31,73.82
+Optometry,99203,24,635,110.27
+Optometry,99204,33,1000,162.98
+Optometry,99211,2,401,24.61
+Optometry,99212,38,1453,55.8
+Optometry,99213,154,15566,89.13
+Optometry,99214,103,12913,124.87
+Optometry,99215,2,74,169.76
+Oral Surgery (Dentist only),99202,1,34,71.76
+Oral Surgery (Dentist only),99203,1,12,110.36
+Oral Surgery (Dentist only),99204,2,81,144.77
+Oral Surgery (Dentist only),99205,1,16,217.06
+Oral Surgery (Dentist only),99213,1,107,68.9
+Oral Surgery (Dentist only),99214,2,245,103.86
+Orthopedic Surgery,99202,3,43,66.46
+Orthopedic Surgery,99203,101,5571,103.85
+Orthopedic Surgery,99204,105,5253,156.3
+Orthopedic Surgery,99205,11,351,195.22
+Orthopedic Surgery,99212,40,1923,55.14
+Orthopedic Surgery,99213,136,27562,86.35
+Orthopedic Surgery,99214,125,22134,120.28
+Orthopedic Surgery,99215,27,1260,164.13
+Osteopathic Manipulative Medicine,99203,2,32,94.89
+Osteopathic Manipulative Medicine,99204,5,105,165.27
+Osteopathic Manipulative Medicine,99211,1,20,23.46
+Osteopathic Manipulative Medicine,99212,1,447,56.51
+Osteopathic Manipulative Medicine,99213,4,398,90.82
+Osteopathic Manipulative Medicine,99214,7,957,123.59
+Osteopathic Manipulative Medicine,99215,3,327,185.03
+Otolaryngology,99202,3,53,51.51
+Otolaryngology,99203,36,2630,97.94
+Otolaryngology,99204,38,2055,144.55
+Otolaryngology,99205,9,175,179.89
+Otolaryngology,99212,13,677,49.25
+Otolaryngology,99213,48,8132,81.05
+Otolaryngology,99214,41,3502,112.02
+Otolaryngology,99215,8,498,142.66
+Pain Management,99203,4,127,89.52
+Pain Management,99204,17,862,149.07
+Pain Management,99205,6,148,197.84
+Pain Management,99212,1,21,56.53
+Pain Management,99213,14,1079,74.67
+Pain Management,99214,19,6073,121.45
+Pain Management,99215,8,415,165.22
+Pathology,99204,1,40,129.28
+Pathology,99213,1,20,90.57
+Pathology,99214,1,36,93.36
+Pediatric Medicine,99203,1,30,111.05
+Pediatric Medicine,99204,1,34,166.45
+Pediatric Medicine,99211,1,67,23.84
+Pediatric Medicine,99213,2,41,90.48
+Pediatric Medicine,99214,2,78,127.61
+Physical Medicine and Rehabilitation,99202,5,170,71.8
+Physical Medicine and Rehabilitation,99203,12,721,108.61
+Physical Medicine and Rehabilitation,99204,16,1067,159.78
+Physical Medicine and Rehabilitation,99205,5,163,203.37
+Physical Medicine and Rehabilitation,99212,10,411,54.83
+Physical Medicine and Rehabilitation,99213,23,2805,88.62
+Physical Medicine and Rehabilitation,99214,21,4803,123.93
+Physical Medicine and Rehabilitation,99215,11,595,173.17
+Physician Assistant,99202,22,552,57.26
+Physician Assistant,99203,252,10462,87.07
+Physician Assistant,99204,197,8482,131.19
+Physician Assistant,99205,20,509,168.94
+Physician Assistant,99211,8,258,14.0
+Physician Assistant,99212,114,4865,42.18
+Physician Assistant,99213,501,60910,69.55
+Physician Assistant,99214,496,52682,94.59
+Physician Assistant,99215,106,4134,132.96
+Plastic and Reconstructive Surgery,99202,1,11,44.95
+Plastic and Reconstructive Surgery,99203,8,336,87.99
+Plastic and Reconstructive Surgery,99204,3,122,137.2
+Plastic and Reconstructive Surgery,99205,2,66,186.19
+Plastic and Reconstructive Surgery,99212,7,182,34.44
+Plastic and Reconstructive Surgery,99213,10,701,79.0
+Plastic and Reconstructive Surgery,99214,3,66,109.6
+Plastic and Reconstructive Surgery,99215,1,14,180.31
+Podiatry,99202,9,391,64.47
+Podiatry,99203,37,4782,102.44
+Podiatry,99204,15,986,154.5
+Podiatry,99205,1,20,218.15
+Podiatry,99211,1,13,23.49
+Podiatry,99212,28,2423,49.97
+Podiatry,99213,42,11738,82.52
+Podiatry,99214,24,1806,116.41
+Podiatry,99215,1,43,178.55
+Preventive Medicine,99204,1,38,164.83
+Preventive Medicine,99213,1,23,92.2
+Preventive Medicine,99214,1,80,126.87
+Psychiatry,99204,3,56,159.7
+Psychiatry,99205,7,109,204.75
+Psychiatry,99211,6,998,10.2
+Psychiatry,99212,5,566,54.09
+Psychiatry,99213,42,4833,79.57
+Psychiatry,99214,82,11386,116.05
+Psychiatry,99215,23,1137,166.1
+Pulmonary Disease,99203,9,221,113.01
+Pulmonary Disease,99204,41,1926,150.24
+Pulmonary Disease,99205,30,1013,184.47
+Pulmonary Disease,99211,1,11,23.43
+Pulmonary Disease,99212,2,70,49.36
+Pulmonary Disease,99213,36,2824,85.07
+Pulmonary Disease,99214,60,10207,111.88
+Pulmonary Disease,99215,43,2750,150.98
+Radiation Oncology,99203,1,24,74.08
+Radiation Oncology,99204,10,309,127.5
+Radiation Oncology,99205,27,1379,175.7
+Radiation Oncology,99211,1,42,8.0
+Radiation Oncology,99212,7,365,32.99
+Radiation Oncology,99213,23,1703,65.62
+Radiation Oncology,99214,19,1012,92.55
+Radiation Oncology,99215,15,344,141.96
+Rheumatology,99203,4,73,101.44
+Rheumatology,99204,20,987,151.15
+Rheumatology,99205,19,778,193.41
+Rheumatology,99212,1,88,56.14
+Rheumatology,99213,23,2671,85.44
+Rheumatology,99214,42,9652,113.88
+Rheumatology,99215,27,2966,152.25
+Sleep Medicine,99203,2,68,110.86
+Sleep Medicine,99204,4,369,144.36
+Sleep Medicine,99205,1,11,226.04
+Sleep Medicine,99213,6,560,85.88
+Sleep Medicine,99214,5,677,117.62
+Sleep Medicine,99215,2,49,168.14
+Sports Medicine,99203,6,369,110.68
+Sports Medicine,99204,7,272,162.59
+Sports Medicine,99212,2,170,56.43
+Sports Medicine,99213,9,896,87.47
+Sports Medicine,99214,9,1185,125.0
+Sports Medicine,99215,3,173,171.61
+Thoracic Surgery,99202,1,13,46.06
+Thoracic Surgery,99203,3,169,100.77
+Thoracic Surgery,99204,7,204,153.69
+Thoracic Surgery,99205,14,399,195.76
+Thoracic Surgery,99212,1,11,34.39
+Thoracic Surgery,99213,8,437,70.97
+Thoracic Surgery,99214,12,465,116.13
+Thoracic Surgery,99215,5,73,160.56
+Undersea and Hyperbaric Medicine,99203,1,18,80.5
+Undersea and Hyperbaric Medicine,99204,1,16,131.1
+Undersea and Hyperbaric Medicine,99212,1,195,34.66
+Undersea and Hyperbaric Medicine,99213,1,153,64.78
+Undersea and Hyperbaric Medicine,99214,1,34,95.31
+Undersea and Hyperbaric Medicine,99215,1,28,141.73
+Urology,99203,25,842,93.42
+Urology,99204,44,2903,151.55
+Urology,99205,7,115,178.34
+Urology,99211,13,390,23.74
+Urology,99212,15,352,44.73
+Urology,99213,55,9157,77.98
+Urology,99214,55,12310,114.98
+Urology,99215,16,801,151.93
+Vascular Surgery,99202,2,39,65.62
+Vascular Surgery,99203,19,667,90.7
+Vascular Surgery,99204,22,687,153.47
+Vascular Surgery,99205,2,23,176.2
+Vascular Surgery,99211,1,15,23.41
+Vascular Surgery,99212,5,146,57.53
+Vascular Surgery,99213,29,2272,76.61
+Vascular Surgery,99214,26,1716,112.49
+Vascular Surgery,99215,5,106,154.64
