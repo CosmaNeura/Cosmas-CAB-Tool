@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from cosmaneura_billing.athena_client import MockAthenaNet
 from cosmaneura_billing.chase import (
     ChaseQueue, QueueType, detect, on_card_verified, pretty_metrics,
-    simulate_patient_submission, summarize,
+    simulate_patient_submission, summarize, tick,
 )
 
 NOW = datetime(2026, 8, 12, 21, 0, tzinfo=timezone.utc)
@@ -93,6 +93,29 @@ def main() -> None:
     assert replay["duplicate"] is True and replay["closed_items"] == []
     print("    replayed the first card event → duplicate=True, nothing "
           "double-written, nothing double-closed")
+
+    # 4b ── auto-continue: the system does the chasing ----------------------
+    print("\n[4b] Auto-continue (a config switch, pending your call on who "
+          "approves sends):")
+    print("     staff enroll a patient ONCE; the system keeps the outreach "
+          "going on your cadence\n     until the card lands — or hands the "
+          "patient back to you:")
+    queue.config.outreach_mode = "auto_continue"
+    target = next(i for i in workable[3:] if i.sequence_state == "open")
+    queue.approve(target.chase_id, staff_id=STAFF, now=NOW)
+    queue.send(target.chase_id, template_id="card_request.v0",
+               now=NOW + timedelta(hours=2), sent_by=STAFF)
+    print(f"    enrolled {target.patient_ref} ({target.trigger}) — one staff "
+          "approval, then hands off")
+    for day in (3, 6, 9):
+        result = tick(queue, now=NOW + timedelta(hours=2, days=day))
+        if result["reminded"]:
+            print(f"    day {day}: reminder auto-sent (no staff action; "
+                  "logged with the enrolling approver)")
+        if result["escalated"]:
+            print(f"    day {day}: reminder limit reached with no submission "
+                  "→ auto-escalated back to staff")
+    assert target.sequence_state == "escalated_to_staff"
 
     # 5 ── metrics ----------------------------------------------------------
     print("\n[5] " + pretty_metrics(summarize(queue.items.values(),

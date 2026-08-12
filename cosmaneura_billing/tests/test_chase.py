@@ -265,3 +265,73 @@ def test_direct_contract_patient_can_never_enter_self_pay_queue(tmp_path):
     with pytest.raises(SequenceError, match="direct-contract"):
         q.enqueue(item, now=NOW)
     assert q.items == {}                               # nothing entered
+
+
+# ------------------------------------------------------------------ #
+# auto-continue mode: the system runs the follow-ups (config, §8 Q3)
+# ------------------------------------------------------------------ #
+def test_tick_is_noop_in_default_staff_triggered_mode(tmp_path):
+    from cosmaneura_billing.chase import tick
+    _, q, item = _one_open_item(tmp_path)
+    q.approve(item.chase_id, staff_id="s1", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+    result = tick(q, now=NOW + timedelta(days=30))
+    assert result == {"mode": "staff_triggered", "reminded": [], "escalated": []}
+    assert len(item.attempts) == 1                     # nothing auto-fired
+
+
+def test_auto_continue_chases_until_compliance_or_escalation(tmp_path):
+    """Enroll once → the technology facilitates continued outreach: cadenced
+    reminders fire with no staff action, then the item escalates back to
+    staff when the limit is reached without a submission."""
+    from cosmaneura_billing.chase import tick
+    _, q, item = _one_open_item(tmp_path)
+    q.config.outreach_mode = "auto_continue"
+    q.approve(item.chase_id, staff_id="grace-demo", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW,
+           sent_by="grace-demo")
+
+    assert tick(q, now=NOW + timedelta(days=1))["reminded"] == []   # not due yet
+    r1 = tick(q, now=NOW + timedelta(days=3))
+    assert r1["reminded"] == [item.chase_id]
+    assert item.attempts[-1]["approved_by"] == "auto:cadence(enrolled_by=grace-demo)"
+    r2 = tick(q, now=NOW + timedelta(days=6))
+    assert r2["reminded"] == [item.chase_id]
+    r3 = tick(q, now=NOW + timedelta(days=9))
+    assert r3["escalated"] == [item.chase_id]
+    assert item.sequence_state == "escalated_to_staff"
+    assert item.resolution["reason"].startswith("reminder limit reached")
+
+
+def test_auto_continue_stops_the_moment_a_card_lands(tmp_path):
+    from cosmaneura_billing.chase import tick
+    athena, q, item = _one_open_item(tmp_path)
+    q.config.outreach_mode = "auto_continue"
+    q.approve(item.chase_id, staff_id="s1", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+    tick(q, now=NOW + timedelta(days=3))               # one auto reminder
+    event = simulate_patient_submission(item.patient_ref,
+                                        now=NOW + timedelta(days=4))
+    on_card_verified(q, athena, event, now=NOW + timedelta(days=4))
+    assert item.sequence_state == "verified_closed"
+    later = tick(q, now=NOW + timedelta(days=30))
+    assert later == {"mode": "auto_continue", "reminded": [], "escalated": []}
+
+
+def test_auto_continue_never_touches_unapproved_or_review_items(tmp_path):
+    from cosmaneura_billing.chase import tick
+    athena = _athena()
+    athena._patients = {
+        "PT-OPEN": _patient("PT-OPEN", outcome=ELIGIBILITY_INACTIVE),
+        "PT-DC-0001": _patient("PT-DC-0001", insurance=None),
+    }
+    items = detect(athena, list_source=_list_source(tmp_path), now=NOW)
+    q = ChaseQueue(QueueType.CARD_CHASE, list_source=_list_source(tmp_path))
+    q.config.outreach_mode = "auto_continue"
+    for it in items:
+        q.enqueue(it, now=NOW)
+    result = tick(q, now=NOW + timedelta(days=30))
+    assert result["reminded"] == [] and result["escalated"] == []
+    states = {i.patient_ref: i.sequence_state for i in q.items.values()}
+    assert states["PT-OPEN"] == "open"                 # never staff-approved
+    assert states["PT-DC-0001"] == "human_review"      # gate bucket untouched

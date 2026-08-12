@@ -81,6 +81,14 @@ class ChaseConfig:
     card_capture_base_url: str = "https://cardcapture.example.test/submit"
     channels: tuple[str, ...] = ("email",)         # consent policy: Aug 13 (§8 Q10)
     max_reminders: int = 2                          # cadence: Aug 13
+    cadence_days: int = 3                           # cadence: Aug 13
+    # Who drives the follow-ups after staff enroll a patient (Aug 13, §8 Q3):
+    #   "staff_triggered" — a staff member fires every message (default);
+    #   "auto_continue"   — staff approve once, then the system sends cadenced
+    #                       reminders itself until the card lands, the limit is
+    #                       reached (auto-escalates back to staff), or the
+    #                       patient proves unreachable.
+    outreach_mode: str = "staff_triggered"
     templates: dict = field(default_factory=lambda: {
         "card_request.v0": (
             "Hi {display_name}, ahead of your upcoming visit {practice_name} "
@@ -236,3 +244,36 @@ class ChaseQueue:
                    chase_id: str) -> None:
         self.staff_actions.append({"at": now.isoformat(), "staff_id": staff_id,
                                    "action": action, "chase_id": chase_id})
+
+
+def tick(queue: ChaseQueue, *, now: datetime) -> dict:
+    """One cadence pass — the "technology facilitates continued outreach"
+    mode. In ``auto_continue`` queues: any enrolled item (already staff-
+    approved and first-sent) whose last touch is ≥ ``cadence_days`` old gets
+    the next reminder sent by the system itself, with the enrolling approver
+    recorded on the attempt; items that exhaust ``max_reminders`` without a
+    submission auto-escalate back to staff. A ``staff_triggered`` queue (the
+    default until the Aug 13 answer) is a no-op. Closed, review-bucket, and
+    never-approved items are never touched."""
+    if queue.config.outreach_mode != "auto_continue":
+        return {"mode": queue.config.outreach_mode, "reminded": [], "escalated": []}
+    reminded, escalated = [], []
+    for item in list(queue.items.values()):
+        if item.sequence_state not in (STATE_SENT, STATE_REMINDED):
+            continue
+        last_touch = max(a["sent_at"] for a in item.attempts)
+        age_days = (now - datetime.fromisoformat(last_touch)).total_seconds() / 86400
+        if age_days < queue.config.cadence_days:
+            continue
+        reminders = sum(1 for a in item.attempts
+                        if a["template_id"].startswith("card_reminder"))
+        if reminders >= queue.config.max_reminders:
+            queue.escalate(item.chase_id, staff_id="auto:cadence", now=now,
+                           reason="reminder limit reached without a submission")
+            escalated.append(item.chase_id)
+        else:
+            enrolled_by = item.attempts[0]["approved_by"]
+            queue.send(item.chase_id, template_id="card_reminder.v0", now=now,
+                       sent_by=f"auto:cadence(enrolled_by={enrolled_by})")
+            reminded.append(item.chase_id)
+    return {"mode": "auto_continue", "reminded": reminded, "escalated": escalated}
