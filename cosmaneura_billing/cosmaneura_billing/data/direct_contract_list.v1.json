@@ -1,0 +1,9 @@
+{
+  "version": "practice_list.v1",
+  "comment": "SYNTHETIC direct-contract patient list for development and demo. The real list's location and owner are an Aug 13 question (synthesis §8 Q5); only this file's source adapter changes when that lands.",
+  "patient_refs": [
+    "PT-DC-0001",
+    "PT-DC-0002",
+    "PT-DC-0003"
+  ]
+}
