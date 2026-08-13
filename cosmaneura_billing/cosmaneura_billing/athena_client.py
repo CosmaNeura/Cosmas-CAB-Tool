@@ -74,6 +74,10 @@ class PatientRecord:
     documents: list[AttachedDocument] = field(default_factory=list)
     # seeded 271 outcome; flips to ACTIVE after a verified insurance write
     eligibility_outcome: str = ELIGIBILITY_ACTIVE
+    # synthetic contact details for the chase worklist — 555 numbers and
+    # example.test addresses only, so nothing here can ever reach a real person
+    phone: str = ""
+    email: str = ""
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,9 @@ class MockAthenaNet:
         for i in range(1, n_patients + 1):
             ref = f"PT-{1000 + i}"
             p = PatientRecord(patient_ref=ref,
-                              display_name=f"Synthetic Patient {i:03d}")
+                              display_name=f"Synthetic Patient {i:03d}",
+                              phone=f"(603) 555-{1000 + i:04d}",
+                              email=f"patient{i:03d}@example.test")
             r = rng.random()
             if r < 0.15:
                 p.insurance = None                      # never collected
@@ -133,7 +139,9 @@ class MockAthenaNet:
         # direct-contract patients: upcoming appointment, no insurance package
         for j, ref in enumerate(direct_contract_refs, start=1):
             p = PatientRecord(patient_ref=ref,
-                              display_name=f"Synthetic DC Patient {j:03d}")
+                              display_name=f"Synthetic DC Patient {j:03d}",
+                              phone=f"(603) 555-{9000 + j:04d}",
+                              email=f"dcpatient{j:03d}@example.test")
             p.appointments.append(Appointment(
                 appointment_id=f"AP-{ref}-1", patient_ref=ref,
                 scheduled_at=(self.now + timedelta(days=1, hours=9)).isoformat(),

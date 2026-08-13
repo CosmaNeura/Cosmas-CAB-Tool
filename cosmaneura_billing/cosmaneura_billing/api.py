@@ -412,3 +412,13 @@ def feedback_summary() -> dict[str, Any]:
         "tuningBacklog": coder_feedback.tuning_signals(feedbacks),
         "goldRows": len(coder_feedback.export_gold(feedbacks)),
     }
+
+
+# --------------------------------------------------------------------------- #
+# F9 — biller-facing Card Chase worklist (mock athenaNet; synthetic data only).
+# Mutating chase routes share the feedback-token guard: open in local dev,
+# locked wherever COSMANEURA_FEEDBACK_TOKEN is set.
+# --------------------------------------------------------------------------- #
+from . import chase_api as _chase_api  # noqa: E402
+
+_chase_api.register(app, dependencies=[Depends(require_feedback_token)])

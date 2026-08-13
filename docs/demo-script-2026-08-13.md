@@ -35,7 +35,31 @@ Then open http://localhost:5173 and click the **$ Billing tab**. (If either isn'
 
 ## Act 1 — the insurance-card chase (~6 min)
 
-Run it:
+**Show it in the browser**: http://localhost:5173 → the **Card chase** tab.
+This is the billers' own screen — walk it live:
+
+1. **The collated list.** "Nobody built this list — the system watched the
+   schedule and the insurance data and collated your problem patients:
+   missing cards, expired coverage, inactive eligibility, payer timeouts.
+   Sorted by how soon the appointment is."
+2. **Work a row.** Click **Approve & email card request** on the top patient
+   — the state flips to *emailed* and the actual message shows on screen:
+   patient's name, the practice, a secure upload link. Never any card data.
+3. **The phone path.** Click **Record card info (call)** on another row:
+   "You called, the patient reads you the card — type the payer and the LAST
+   FOUR only, click Verify & write. You're the verifier; it writes to Athena
+   and the row closes itself." (Do it — the row flips to *closed ✓* with the
+   package id.)
+4. **The upload path.** Click **Simulate patient upload** on a third row —
+   same self-closing loop through the CardCapture link.
+5. **The gate.** Scroll to the violet rows: "These two are direct-contract
+   patients. The system refuses to chase them — a person decides. That's
+   Grace's guarantee, enforced in code."
+6. **The metrics strip** updates live as you work — staff touches and
+   machine touches counted separately.
+
+Prefer the terminal? The same engine runs as a script (auto-continue mode
+included):
 
 ```bash
 .venv/bin/python run_chase_demo.py

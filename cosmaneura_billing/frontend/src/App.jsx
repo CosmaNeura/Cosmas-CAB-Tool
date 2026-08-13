@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { ShieldCheck, Stethoscope, ClipboardCheck, DollarSign, Info, Wifi, WifiOff } from "lucide-react";
+import { ShieldCheck, Stethoscope, ClipboardCheck, DollarSign, Info, Phone, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import BillingReview from "./BillingReview.jsx";
 import BillingTab from "./BillingTab.jsx";
+import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
 
 function Pill({ tone, title, children }) {
@@ -81,6 +82,9 @@ export default function App() {
             <button className={tab(view === "coder")} onClick={() => setView("coder")}>
               <ClipboardCheck size={15} />Coder review
             </button>
+            <button className={tab(view === "card-chase")} onClick={() => setView("card-chase")}>
+              <Phone size={15} />Card chase
+            </button>
           </div>
           {encounters.length > 0 && (
             <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -100,6 +104,7 @@ export default function App() {
         {view === "billing" && <BillingReview encounterId={selected} live={!!health} />}
         {view === "billing-tab" && <BillingTab encounterId={selected} live={!!health} />}
         {view === "coder" && <CoderReview encounterId={selected} live={!!health} />}
+        {view === "card-chase" && <CardChase live={!!health} />}
 
         <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-400">
           <Info size={12} />
