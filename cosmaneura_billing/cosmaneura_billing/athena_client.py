@@ -31,6 +31,9 @@ ELIGIBILITY_INACTIVE = "INACTIVE"
 ELIGIBILITY_TIMEOUT = "TIMEOUT"
 
 DOC_TYPE_INSURANCE_CARD = "ADMIN_INSURANCECARD"
+# internal marker doc_type for write idempotency — kept in its own namespace so
+# a caller-supplied document_ref can never be mistaken for a write marker
+DOC_TYPE_IDEMPOTENCY_MARKER = "_idempotency_marker"
 
 _SYNTHETIC_PAYERS = [
     "Synthetic Health Plan", "Acme Mutual (Test)", "Granite Test PPO",
@@ -188,7 +191,9 @@ class MockAthenaNet:
         ``idempotency_key`` — a repeat with the same key reports duplicate."""
         p = self._patients[patient_ref]
         key_marker = f"ins-write:{idempotency_key}"
-        if any(d.document_ref == key_marker for d in p.documents):
+        if any(d.document_ref == key_marker
+               and d.doc_type == DOC_TYPE_IDEMPOTENCY_MARKER
+               for d in p.documents):
             return {"written": False, "duplicate": True,
                     "package_id": p.insurance.package_id if p.insurance else None}
         ts = (now or self.now)
@@ -202,9 +207,9 @@ class MockAthenaNet:
             status="active",
         )
         p.eligibility_outcome = ELIGIBILITY_ACTIVE   # verified card ⇒ coverage live
-        p.documents.append(AttachedDocument(document_ref=key_marker,
-                                            doc_type="_idempotency_marker",
-                                            attached_at=ts.isoformat()))
+        p.documents.append(AttachedDocument(
+            document_ref=key_marker, doc_type=DOC_TYPE_IDEMPOTENCY_MARKER,
+            attached_at=ts.isoformat()))
         return {"written": True, "duplicate": False,
                 "package_id": p.insurance.package_id}
 

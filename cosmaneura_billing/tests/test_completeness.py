@@ -87,9 +87,71 @@ def test_ambiguous_modality_never_passes():
 
 
 def test_implausible_duration_does_not_count():
+    """An out-of-range duration never satisfies the rule. It surfaces as
+    ambiguous rather than missing so the provider sees the implausible
+    mention they wrote — either way the note cannot complete."""
     note = "Telehealth video visit lasting 999 minutes. Patient located at home; provider located at the clinic."
-    r = _by_rule(check_note(note))
-    assert r["telehealth.duration"].status == "missing"
+    results = check_note(note)
+    dur = _by_rule(results)["telehealth.duration"]
+    assert dur.status != "present"
+    assert not is_complete(results)
+    assert attestation_block(results) is None
+
+
+NEGATED_AND_UNANCHORED = [
+    # (note, rule that must NOT be 'present')
+    ("No video visit occurred; patient was seen in person for 20 minutes "
+     "total. Patient located at home; provider located at the clinic.",
+     "telehealth.modality"),
+    ("This was not a telehealth encounter. Total visit time 20 minutes. "
+     "Patient located at home; provider located at the clinic.",
+     "telehealth.modality"),
+    ("Patient seen in office today; this was a nontelehealth encounter.",
+     "telehealth.modality"),
+    ("Telehealth video visit. Patient reports chest pain for 20 minutes. "
+     "Patient located at home; provider located at the clinic.",
+     "telehealth.duration"),
+    ("Telehealth video visit. Apply ice to the knee for 20 minutes twice "
+     "daily. Patient located at home; provider located at the clinic.",
+     "telehealth.duration"),
+    ("Telehealth video visit, total visit time 20 minutes. Patient referred "
+     "from home health agency for wound care. Provider located at clinic.",
+     "telehealth.patient_location"),
+    ("Telehealth video visit, total visit time 20 minutes. Clinician joined "
+     "from home. Provider located at the clinic.",
+     "telehealth.patient_location"),
+]
+
+
+@pytest.mark.parametrize("note,rule_id", NEGATED_AND_UNANCHORED)
+def test_no_false_complete_on_negation_or_unanchored_mentions(note, rule_id):
+    """The F2 acceptance bar is ZERO false 'complete'. Negated statements and
+    plausible-but-unrelated phrases (symptom durations, care instructions,
+    'home health', the provider's own location) must not satisfy a rule."""
+    results = check_note(note)
+    assert _by_rule(results)[rule_id].status != "present", \
+        f"{rule_id} falsely passed on: {note!r}"
+    assert not is_complete(results)
+    assert attestation_block(results) is None
+
+
+def test_negated_consent_never_attests():
+    note = (COMPLETE_NOTE + " Verbal consent was not obtained for telehealth.")
+    results = check_note(note, pack=telehealth_v1(require_consent=True))
+    assert _by_rule(results)["telehealth.consent"].status != "present"
+    assert not is_complete(results)
+
+
+def test_anchored_visit_time_phrasings_still_pass():
+    for note in (
+        "Telehealth video visit. Total visit time 22 minutes. Patient located at home; provider located at the clinic.",
+        "Telehealth video visit. Time spent: 18 minutes. Patient located at home; provider located at the clinic.",
+        "Telehealth video visit. Visit lasted 30 minutes. Patient located at home; provider located at the clinic.",
+        "Telehealth video visit, 25 minutes total. Patient located at home; provider located at the clinic.",
+        "Telehealth video visit of 15 minutes. Patient located at home; provider located at the clinic.",
+    ):
+        assert _by_rule(check_note(note))["telehealth.duration"].status == "present", \
+            f"anchored duration should pass: {note!r}"
 
 
 def test_override_requires_reason_and_logs_feedback():

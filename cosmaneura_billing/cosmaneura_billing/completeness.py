@@ -84,17 +84,29 @@ TELEHEALTH_V1_RULES: tuple[Rule, ...] = (
     ),
     Rule(
         rule_id="telehealth.duration",
-        fix_hint="State total visit time in minutes.",
-        strong=(r"\b(\d{1,3})\s*(?:minutes?|mins?)\b",
-                r"\btotal time[:\s]+(\d{1,3})\b"),
+        fix_hint="State total visit time in minutes (e.g. \"total visit time 22 minutes\").",
+        # Visit time must be ANCHORED to the visit. A bare "20 minutes" is
+        # usually a symptom duration or a care instruction ("ice for 20
+        # minutes") — those only make the rule ambiguous, never complete.
+        strong=(r"\btotal(?: visit)? time[:\s]+(\d{1,3})\s*(?:minutes?|mins?)?\b",
+                r"\btime spent[:\s]+(\d{1,3})\s*(?:minutes?|mins?)?\b",
+                r"\b(?:visit|encounter|call)\s+(?:time|duration)[:\s]+(\d{1,3})\s*(?:minutes?|mins?)?\b",
+                r"\b(?:visit|encounter|call)\s+(?:lasted|lasting)\s+(\d{1,3})\s*(?:minutes?|mins?)\b",
+                r"\b(\d{1,3})\s*(?:minutes?|mins?)\s+(?:total|spent)\b",
+                r"\b(?:telehealth|telemedicine|video|virtual)[^.;\n]{0,40}?\b(\d{1,3})\s*(?:minutes?|mins?)\b"),
+        weak=(r"\b(\d{1,3})\s*(?:minutes?|mins?)\b",),
         validate=_duration_plausible,
     ),
     Rule(
         rule_id="telehealth.patient_location",
         fix_hint="Document where the patient was located during the visit (e.g. \"patient located at home in NH\").",
+        # Subject-anchored only: a bare "from home" also matches "referred
+        # from home health agency" and credits the provider's location to
+        # the patient.
         strong=(r"\bpatient (?:is |was )?locat(?:ed|ion)\b",
                 r"\bpatient (?:at|in) (?:home|work|school)\b",
-                r"\bfrom (?:home|their home|his home|her home)\b"),
+                r"\bpatient[^.;\n]{0,40}\bfrom (?:home|their home|his home|her home)\b(?!\s*health)"),
+        weak=(r"\bfrom (?:home|their home|his home|her home)\b(?!\s*health)",),
     ),
     Rule(
         rule_id="telehealth.provider_location",
@@ -128,35 +140,91 @@ def telehealth_v1(*, require_consent: bool = False) -> RulePack:
 # --------------------------------------------------------------------------- #
 # the checker — deterministic adjudication, fail closed
 # --------------------------------------------------------------------------- #
-def _first_verified_match(note: str, patterns: tuple[str, ...],
-                          validate) -> Optional[re.Match]:
+# A match inside a negated clause asserts the OPPOSITE of the element. Scan
+# back to the start of the sentence and refuse the match if a negation cue
+# governs it — "no video visit occurred" must never satisfy modality.
+_NEGATION = re.compile(
+    r"\b(?:no|not|never|non|without|den(?:y|ies|ied)|declin(?:e|ed|es)|"
+    r"unable|absent|neither|nor|refus(?:e|ed|es))\b", re.IGNORECASE)
+_SENTENCE_BREAK = re.compile(r"[.;:!?\n]")
+
+
+def _is_negated(note: str, start: int, end: Optional[int] = None) -> bool:
+    """True when a negation cue governs the match's own clause — in either
+    direction, because clinical phrasing negates on both sides ("no video
+    visit occurred", "verbal consent was not obtained"). Erring toward
+    negation is the fail-closed direction: the rule reports ambiguous and the
+    provider is prompted, rather than the system attesting something the note
+    denies."""
+    end = start if end is None else end
+    breaks_before = [m.end() for m in _SENTENCE_BREAK.finditer(note, 0, start)]
+    clause_start = breaks_before[-1] if breaks_before else 0
+    nxt = _SENTENCE_BREAK.search(note, end)
+    clause_end = nxt.start() if nxt else len(note)
+    return (_NEGATION.search(note, clause_start, start) is not None
+            or _NEGATION.search(note, end, clause_end) is not None)
+
+
+def _iter_matches(note: str, patterns: tuple[str, ...], validate,
+                  lo: int = 0, hi: Optional[int] = None):
+    """Every match of any pattern inside note[lo:hi], in pattern order, that
+    passes the rule's validator and is not negated."""
+    hi = len(note) if hi is None else hi
     for pat in patterns:
         for m in re.finditer(pat, note, re.IGNORECASE):
-            if validate is None or validate(m):
-                return m
-    return None
+            if m.start() < lo or m.end() > hi:
+                continue
+            if validate is not None and not validate(m):
+                continue
+            if _is_negated(note, m.start(), m.end()):
+                continue
+            yield m
+
+
+def _first_verified_match(note: str, patterns: tuple[str, ...],
+                          validate) -> Optional[re.Match]:
+    return next(_iter_matches(note, patterns, validate), None)
 
 
 def _adjudicate(rule: Rule, note: str,
                 candidates: list[str]) -> tuple[str, Optional[dict]]:
-    # locator candidates count only if they verify against the note AND match
-    # the rule's own strong patterns — everything else is ignored (fail closed)
+    # Locator candidates are adjudicated IN CONTEXT: the rule's patterns run
+    # against the full note and the match must fall inside the candidate's
+    # span. Matching the candidate in isolation would let word boundaries
+    # match at the fragment's edges (e.g. "telehealth" inside
+    # "nontelehealth"), which is exactly the fail-open the seam must not have.
     for cand in candidates:
         cand = (cand or "").strip()
-        idx = note.find(cand) if cand else -1
-        if idx < 0:
+        if not cand:
             continue
-        if _first_verified_match(cand, rule.strong, rule.validate):
-            return STATUS_PRESENT, {"text": cand,
-                                    "loc": f"note:{idx}-{idx + len(cand)}"}
+        idx = note.find(cand)
+        while idx >= 0:
+            m = next(_iter_matches(note, rule.strong, rule.validate,
+                                   idx, idx + len(cand)), None)
+            if m is not None:
+                return STATUS_PRESENT, {"text": cand,
+                                        "loc": f"note:{idx}-{idx + len(cand)}"}
+            idx = note.find(cand, idx + 1)
     m = _first_verified_match(note, rule.strong, rule.validate)
     if m is not None:
         return STATUS_PRESENT, {"text": m.group(0),
                                 "loc": f"note:{m.start()}-{m.end()}"}
-    w = _first_verified_match(note, rule.weak, None) if rule.weak else None
+    w = _first_verified_match(note, rule.weak, rule.validate) if rule.weak else None
+    if w is None and rule.weak:
+        # a negated or implausible mention is still worth showing the provider
+        w = next((m for pat in rule.weak
+                  for m in re.finditer(pat, note, re.IGNORECASE)), None)
     if w is not None:
         return STATUS_AMBIGUOUS, {"text": w.group(0),
                                   "loc": f"note:{w.start()}-{w.end()}"}
+    # a negated strong mention is not evidence of presence, but it is a
+    # signal the provider should look at — surface it as ambiguous
+    negated = next((m for pat in rule.strong
+                    for m in re.finditer(pat, note, re.IGNORECASE)
+                    if _is_negated(note, m.start(), m.end())), None)
+    if negated is not None:
+        return STATUS_AMBIGUOUS, {"text": negated.group(0),
+                                  "loc": f"note:{negated.start()}-{negated.end()}"}
     return STATUS_MISSING, None
 
 

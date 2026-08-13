@@ -16,7 +16,7 @@ auto-sequence, until the Aug 13 policy answer (§8 Q11).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from ..athena_client import (
@@ -48,6 +48,9 @@ class ChaseItem:
     attempts: list[dict] = field(default_factory=list)
     resolution: Optional[dict] = None
     queue_type: str = "card_chase"
+    # greeting name for outreach; the detector fills it from the patient
+    # record so sends are personalized without re-reading athenaNet
+    display_name: Optional[str] = None
 
     def to_json(self) -> dict:
         return {
@@ -93,16 +96,31 @@ def rule_eligibility(p: PatientRecord, athena: MockAthenaNet,
     return None
 
 
+def _as_aware(value: datetime) -> datetime:
+    """Treat a naive timestamp as UTC. Callers pass ``now`` from many places
+    (jobs, tests, the demo); a naive value must not raise mid-pass."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _next_appointment(p: PatientRecord, now: datetime) -> Optional[str]:
-    upcoming = sorted(a.scheduled_at for a in p.appointments
-                      if a.scheduled_at >= now.isoformat())
+    """Earliest upcoming appointment. Compares parsed instants, never ISO
+    strings — '2026-08-12T18:00:00-05:00' is later than '…T21:00:00+00:00'
+    in time but earlier lexicographically, which would silently drop the
+    patient from the chase."""
+    now = _as_aware(now)
+    upcoming = sorted(
+        (a.scheduled_at for a in p.appointments
+         if _as_aware(datetime.fromisoformat(a.scheduled_at)) >= now),
+        key=lambda s: _as_aware(datetime.fromisoformat(s)),
+    )
     return upcoming[0] if upcoming else None
 
 
 def _priority(appointment_at: Optional[str], now: datetime) -> str:
     if appointment_at is None:
         return "P2"
-    days = (datetime.fromisoformat(appointment_at) - now).total_seconds() / 86400
+    days = (_as_aware(datetime.fromisoformat(appointment_at))
+            - _as_aware(now)).total_seconds() / 86400
     if days < 2:
         return "P0"
     if days < 7:
@@ -118,7 +136,7 @@ def detect(athena: MockAthenaNet, *, list_source: PracticeListSource | None = No
            manual_flags: tuple[str, ...] = ()) -> list[ChaseItem]:
     """One pass over the practice. Precedence per patient:
     manual > no_card > expired > eligibility. One item per patient."""
-    now = now or athena.now
+    now = _as_aware(now or athena.now)
     source = list_source if list_source is not None else PracticeListSource()
     items: list[ChaseItem] = []
 
@@ -147,6 +165,7 @@ def detect(athena: MockAthenaNet, *, list_source: PracticeListSource | None = No
                 "routed_to_review": routed_to_review,
             },
             sequence_state=STATE_HUMAN_REVIEW if routed_to_review else STATE_OPEN,
+            display_name=p.display_name,
         ))
 
     order = {"P0": 0, "P1": 1, "P2": 2}

@@ -114,6 +114,9 @@ class ChaseQueue:
         self._list_source = list_source
         self.items: dict[str, ChaseItem] = {}
         self.staff_actions: list[dict] = []          # instrumented from day one
+        # system-initiated actions (auto-continue) are logged separately so
+        # they can never inflate the staff-minutes metrics
+        self.machine_actions: list[dict] = []
 
     # ------------------------------------------------------------------ #
     # intake
@@ -130,6 +133,17 @@ class ChaseQueue:
                 raise SequenceError(
                     f"direct-contract gate: {item.patient_ref} cannot enter a "
                     f"self-pay sequence (status={gate.status})")
+        # Intake is FIRST-WRITE-WINS. The detector builds deterministic
+        # chase_ids, so a later pass re-yields an item already in flight;
+        # overwriting it would resurrect terminal states, wipe the contact
+        # log, and reset the reminder cap. Existing decisions always win; a
+        # non-terminal item only refreshes the scheduling context.
+        existing = self.items.get(item.chase_id)
+        if existing is not None:
+            if existing.sequence_state not in _TERMINAL:
+                existing.appointment_at = item.appointment_at
+                existing.priority = item.priority
+            return existing
         self.items[item.chase_id] = item
         return item
 
@@ -144,11 +158,17 @@ class ChaseQueue:
         return item
 
     def send(self, chase_id: str, *, template_id: str, channel: str = "email",
-             now: datetime, sent_by: str) -> str:
+             now: datetime, sent_by: str, display_name: Optional[str] = None,
+             staff_approved: bool = True) -> str:
         """Send the (simulated) message. Requires prior staff approval —
         enforced by the transition table: only staff_approved may move to
-        sent. Returns the rendered body so callers/tests can inspect it."""
+        sent. ``display_name`` personalizes the greeting (falls back to the
+        name the detector recorded on the item, then to a neutral greeting).
+        ``staff_approved=False`` marks a system-initiated auto-continue send
+        so attempts and metrics never miscount it as a human touch. Returns
+        the rendered body so callers/tests can inspect it."""
         item = self.items[chase_id]
+        display_name = display_name or item.display_name
         if channel not in self.config.channels:
             raise SequenceError(f"channel {channel!r} not enabled (consent "
                                 "policy is an Aug 13 input)")
@@ -158,17 +178,28 @@ class ChaseQueue:
                 raise SequenceError(
                     f"send requires staff approval first (state="
                     f"{item.sequence_state})")
-            reminders = sum(1 for a in item.attempts
-                            if a["template_id"].startswith("card_reminder"))
-            if reminders >= self.config.max_reminders:
+            # Every contact after the first counts against the cap, whatever
+            # template it uses — the bound on how often a patient is
+            # contacted must not depend on template naming.
+            if len(item.attempts) - 1 >= self.config.max_reminders:
                 raise SequenceError("max reminders reached — escalate to staff")
-        body = self.render_message(template_id, item)
+        body = self.render_message(template_id, item, display_name=display_name)
         self._transition(chase_id, STATE_SENT if first_send else STATE_REMINDED)
         item.attempts.append({
             "channel": channel, "template_id": template_id,
-            "sent_at": now.isoformat(), "approved_by": sent_by,
+            "sent_at": now.isoformat(),
+            # who authorized this contact: a staff id, or None when the
+            # system sent it under a standing auto-continue enrollment
+            "approved_by": sent_by if staff_approved else None,
+            "sent_by": sent_by,
+            "staff_approved": staff_approved,
         })
-        self._log_staff(now, sent_by, "send", chase_id)
+        if staff_approved:
+            self._log_staff(now, sent_by, "send", chase_id)
+        else:
+            self.machine_actions.append({"at": now.isoformat(),
+                                         "actor": sent_by, "action": "send",
+                                         "chase_id": chase_id})
         return body
 
     def patient_submitted(self, chase_id: str, *, now: datetime) -> ChaseItem:
@@ -179,6 +210,20 @@ class ChaseQueue:
                        now: datetime) -> ChaseItem:
         item = self._transition(chase_id, STATE_CLOSED)
         item.resolution = dict(resolution, closed_at=now.isoformat())
+        return item
+
+    def mark_unreachable(self, chase_id: str, *, staff_id: str,
+                         now: datetime, reason: str) -> ChaseItem:
+        """Close an item because the patient cannot be reached (bad contact
+        details, bounced channel). Terminal, like escalation, but recorded as
+        a distinct outcome so the chase metrics don't read it as a staff
+        escalation."""
+        if not reason.strip():
+            raise SequenceError("marking unreachable requires a reason")
+        item = self._transition(chase_id, STATE_UNREACHABLE)
+        item.resolution = {"unreachable": True, "reason": reason.strip(),
+                           "closed_at": now.isoformat()}
+        self._log_staff(now, staff_id, "unreachable", chase_id)
         return item
 
     def escalate(self, chase_id: str, *, staff_id: str, now: datetime,
@@ -250,14 +295,17 @@ def tick(queue: ChaseQueue, *, now: datetime) -> dict:
     """One cadence pass — the "technology facilitates continued outreach"
     mode. In ``auto_continue`` queues: any enrolled item (already staff-
     approved and first-sent) whose last touch is ≥ ``cadence_days`` old gets
-    the next reminder sent by the system itself, with the enrolling approver
-    recorded on the attempt; items that exhaust ``max_reminders`` without a
-    submission auto-escalate back to staff. A ``staff_triggered`` queue (the
-    default until the Aug 13 answer) is a no-op. Closed, review-bucket, and
-    never-approved items are never touched."""
+    the next reminder sent by the system itself, recorded against the staff
+    member who enrolled the patient but never counted as a staff touch;
+    items that exhaust ``max_reminders`` without a submission auto-escalate
+    back to staff. A ``staff_triggered`` queue (the default until the Aug 13
+    answer) is a no-op. Closed, review-bucket, and never-approved items are
+    never touched. A single item's failure never aborts the pass."""
     if queue.config.outreach_mode != "auto_continue":
-        return {"mode": queue.config.outreach_mode, "reminded": [], "escalated": []}
-    reminded, escalated = [], []
+        return {"mode": queue.config.outreach_mode, "reminded": [],
+                "escalated": [], "failed": []}
+    channel = queue.config.channels[0] if queue.config.channels else "email"
+    reminded, escalated, failed = [], [], []
     for item in list(queue.items.values()):
         if item.sequence_state not in (STATE_SENT, STATE_REMINDED):
             continue
@@ -265,15 +313,21 @@ def tick(queue: ChaseQueue, *, now: datetime) -> dict:
         age_days = (now - datetime.fromisoformat(last_touch)).total_seconds() / 86400
         if age_days < queue.config.cadence_days:
             continue
-        reminders = sum(1 for a in item.attempts
-                        if a["template_id"].startswith("card_reminder"))
-        if reminders >= queue.config.max_reminders:
-            queue.escalate(item.chase_id, staff_id="auto:cadence", now=now,
-                           reason="reminder limit reached without a submission")
-            escalated.append(item.chase_id)
-        else:
-            enrolled_by = item.attempts[0]["approved_by"]
-            queue.send(item.chase_id, template_id="card_reminder.v0", now=now,
-                       sent_by=f"auto:cadence(enrolled_by={enrolled_by})")
-            reminded.append(item.chase_id)
-    return {"mode": "auto_continue", "reminded": reminded, "escalated": escalated}
+        try:
+            if len(item.attempts) - 1 >= queue.config.max_reminders:
+                queue.escalate(
+                    item.chase_id, staff_id="auto:cadence", now=now,
+                    reason="reminder limit reached without a submission")
+                escalated.append(item.chase_id)
+            else:
+                enrolled_by = item.attempts[0].get("sent_by") or "staff"
+                queue.send(item.chase_id, template_id="card_reminder.v0",
+                           channel=channel, now=now,
+                           sent_by=f"auto:cadence(enrolled_by={enrolled_by})",
+                           staff_approved=False)
+                reminded.append(item.chase_id)
+        except SequenceError as exc:
+            # one bad item must not silence the whole practice's cadence
+            failed.append({"chase_id": item.chase_id, "reason": str(exc)})
+    return {"mode": "auto_continue", "reminded": reminded,
+            "escalated": escalated, "failed": failed}

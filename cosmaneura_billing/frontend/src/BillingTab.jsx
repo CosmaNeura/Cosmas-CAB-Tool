@@ -60,7 +60,14 @@ function CopyButton({ text, id, copied, setCopied, label = "Copy" }) {
   const done = copied === id;
   return (
     <button
-      onClick={async () => { if (await copyText(text)) { setCopied(id); setTimeout(() => setCopied(null), 1400); } }}
+      onClick={async () => {
+        if (await copyText(text)) {
+          setCopied(id);
+          // clear only OUR indicator — copying a second code within the
+          // window must not wipe the newer confirmation
+          setTimeout(() => setCopied((cur) => (cur === id ? null : cur)), 1400);
+        }
+      }}
       className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium ring-1 ring-inset transition ${
         done ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
              : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50"}`}>
@@ -110,10 +117,10 @@ function CandidateRow({ c, copied, setCopied }) {
         </span>
       </div>
 
-      {c.alternates.length > 0 && (
+      {(c.alternates || []).length > 0 && (
         <p className="mt-1 text-xs text-slate-500">
           Also maps to:{" "}
-          {c.alternates.map((a) => <code key={a} className="mr-1 rounded bg-slate-100 px-1">{a}</code>)}
+          {(c.alternates || []).map((a) => <code key={a} className="mr-1 rounded bg-slate-100 px-1">{a}</code>)}
           <span className="text-slate-400">(same finding — rendered once)</span>
         </p>
       )}
@@ -122,12 +129,12 @@ function CandidateRow({ c, copied, setCopied }) {
       )}
       {open && (
         <>
-          <EvidenceSpans spans={c.evidence_spans} />
+          <EvidenceSpans spans={c.evidence_spans || []} />
           {c.coverage_note && <p className="mt-1 text-xs text-sky-700">Coverage: {c.coverage_note}</p>}
-          {c.linked_plan_items.length > 0 && (
+          {(c.linked_plan_items || []).length > 0 && (
             <p className="mt-1 text-xs text-slate-500">
               <span className="font-medium text-slate-600">Plan under this code:</span>{" "}
-              {c.linked_plan_items.join(" · ")}
+              {(c.linked_plan_items || []).join(" · ")}
             </p>
           )}
         </>
@@ -139,7 +146,11 @@ function CandidateRow({ c, copied, setCopied }) {
 function EMCard({ em, copied, setCopied }) {
   const [showFacts, setShowFacts] = useState(false);
   if (!em || !em.suggested_level) return null;
-  const recovered = em.provider_selected_level &&
+  const facts = em.mdm_facts || [];
+  const held = em.status && em.status !== "suggested";
+  // Only a code that actually cleared the guardrail may claim the
+  // documentation supports it — a held E/M is a question, not a finding.
+  const recovered = !held && em.provider_selected_level &&
     em.suggested_level > em.provider_selected_level;
   return (
     <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
@@ -152,7 +163,14 @@ function EMCard({ em, copied, setCopied }) {
             <ArrowUp size={11} />documentation supports {em.suggested_level} (selected {em.provider_selected_level})
           </Pill>
         )}
-        {!recovered && em.provider_selected_level && (
+        {held && (
+          <Pill tone={STATUS_TONE[em.status] || STATUS_TONE.held}
+                title={em.status_reason || "Provider confirmation required."}>
+            <FileWarning size={11} />
+            {em.status} — provider confirmation needed
+          </Pill>
+        )}
+        {!recovered && !held && em.provider_selected_level && (
           <Pill tone="bg-slate-100 text-slate-500 ring-slate-300">selected {em.provider_selected_level}</Pill>
         )}
         <Pill tone="bg-slate-100 text-slate-500 ring-slate-300" title="Time-based pathway pending (Aug 13).">
@@ -166,11 +184,11 @@ function EMCard({ em, copied, setCopied }) {
       </div>
       <button onClick={() => setShowFacts(!showFacts)}
               className="mt-2 text-xs text-slate-400 underline-offset-2 hover:underline">
-        {showFacts ? "hide the facts behind this level" : `show the ${em.mdm_facts.length} documented facts behind this level`}
+        {showFacts ? "hide the facts behind this level" : `show the ${facts.length} documented facts behind this level`}
       </button>
       {showFacts && (
         <ul className="mt-2 space-y-1.5">
-          {em.mdm_facts.map((f, i) => (
+          {facts.map((f, i) => (
             <li key={i} className="flex items-start gap-2 text-xs">
               <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium uppercase tracking-wide text-slate-500">{f.element}</span>
               <span className="text-slate-600">
@@ -179,7 +197,7 @@ function EMCard({ em, copied, setCopied }) {
               </span>
             </li>
           ))}
-          {em.guardrail_actions.map((a, i) => (
+          {(em.guardrail_actions || []).map((a, i) => (
             <li key={`g${i}`} className="flex items-start gap-2 text-xs text-slate-500">
               <ShieldCheck size={12} className="mt-0.5 shrink-0 text-slate-400" />{a}
             </li>
@@ -223,9 +241,14 @@ export default function BillingTab({ encounterId, live }) {
   useEffect(() => {
     setView(null); setError(null);
     if (!live) return;
+    // Each request runs the full engine pipeline, so latency varies; without
+    // this guard a slow earlier encounter can land after a newer one and show
+    // the wrong visit's codes.
+    let stale = false;
     api(`/api/encounters/${encounterId}/billing-tab`)
-      .then(setView)
-      .catch((e) => setError(String(e)));
+      .then((v) => { if (!stale) setView(v); })
+      .catch((e) => { if (!stale) setError(String(e)); });
+    return () => { stale = true; };
   }, [encounterId, live]);
 
   if (!live) {
@@ -239,8 +262,8 @@ export default function BillingTab({ encounterId, live }) {
   if (error) return <div className="rounded-2xl bg-rose-50 p-4 text-sm text-rose-700 ring-1 ring-rose-200">{error}</div>;
   if (!view) return <div className="p-6 text-sm text-slate-400">Running the engine pipeline…</div>;
 
-  const icd = view.icd_candidates;
-  const cpt = view.cpt_candidates;
+  const icd = view.icd_candidates || [];
+  const cpt = view.cpt_candidates || [];
 
   return (
     <div className="space-y-4">

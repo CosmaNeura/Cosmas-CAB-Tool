@@ -59,10 +59,14 @@ Then point at the two `human_review` rows:
 > "Patient taps the link, uploads the card, staff verify what was read off it — a human always confirms before anything is written. Then watch: the card writes to Athena once — resending can't duplicate it — eligibility re-checks ACTIVE, and the queue item closes *itself*. Johanna, that's your Athena-sync ask: the write and the attachment happen in the same motion, nobody re-keys it."
 
 **[4b] Auto-continue — the punchline:**
-> "And here's the part that takes the chasing off your plate entirely, if you want it. Flip one setting: you approve a patient once, and the *system* does the follow-ups — a reminder every few days, on whatever cadence you tell us, until the card lands. And when someone ignores every reminder? It doesn't nag forever — it hands them back to you as an escalation. You stay in charge; it does the legwork. Whether you want to approve every message or approve once per patient is literally a setting — you tell us today which way you want it."
+> "And here's the part that takes the chasing off your plate entirely, if you want it. Flip one setting: you approve a patient once, and the *system* does the follow-ups — a reminder every few days, on whatever cadence you tell us, until the card lands. And when someone ignores every reminder? It doesn't nag forever — it hands them back to you as an escalation. You stay in charge; it does the legwork."
+
+Then the honest caveat, in your voice — it's a decision you want from them today:
+
+> "Right now the safe default is on: a person approves every message. This auto mode is built but switched off, because *you* should decide the rule — approve every message, or approve once per patient and let it run? That's the setting, and I'd rather you pick it than me."
 
 **[5] Metrics:**
-> "From day one it counts what you'd judge it by: cards outstanding, completion rate, attempts per card, time to card, staff touches. Which is why I need your month-end numbers today — cards chased this month, minutes per card, balances outstanding. Those become the baseline this gets measured against. If it doesn't beat your numbers, it doesn't deserve to exist."
+> "From day one it counts what you'd judge it by: cards outstanding, completion rate, attempts per card, time to card. And look at the last two lines — staff touches and machine touches are counted *separately*. Eight things a human did, six the system did on its own. When we tell you staff minutes went down, that number won't be hiding machine work inside it. Which is why I need your month-end numbers today — cards chased this month, minutes per card, balances outstanding. Those become the baseline this gets measured against. If it doesn't beat your numbers, it doesn't deserve to exist."
 
 ---
 
@@ -84,7 +88,7 @@ In the browser, **$ Billing tab**, encounter ENC-100237:
 
 1. **Baseline** — month-end close numbers: coder minutes per claim, denial counts by reason, cards chased/month, minutes per card, self-pay balances outstanding.
 2. **Card chase today** — who does it, what channels, how many touches, how many cards are outstanding right now?
-3. **Channels & consent** — can you text patients? Portal messages? What tone/cadence would you want — and per-message approval, or approve-once-per-patient?
+3. **Channels & consent** — can you text patients? Portal messages? What tone/cadence would you want — and per-message approval, or approve-once-per-patient? *(This one is load-bearing: our written rule today says every message gets human approval, so choosing approve-once means we change that rule deliberately, with you on record.)*
 4. **Direct-contract list** — where does it live, who maintains it? And should direct-contract patients ever be card-chased at all, or suppressed entirely?
 5. **Self-pay mechanics** — sequencing, tone, escalation, who approves. (The rails are built; the behavior waits on you.)
 6. **Modifiers** — the workflow you deferred from last time; walk me through it.

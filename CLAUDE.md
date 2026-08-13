@@ -16,7 +16,11 @@ Two generations in one repo:
 
 ```bash
 cd cosmaneura_billing
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # or: pip install pytest numpy fastapi uvicorn httpx pandas pyarrow
+python3 -m venv .venv
+# On Python 3.13+ (matches pyproject):  .venv/bin/pip install -e ".[dev]"
+# On an older interpreter (e.g. stock macOS 3.9) the >=3.10 pin blocks the
+# editable install — install the deps directly instead:
+.venv/bin/pip install pytest numpy fastapi uvicorn httpx pandas pyarrow eval_type_backport
 .venv/bin/python -m pytest tests/ -q      # full suite must stay green
 .venv/bin/python run_demo.py              # engine demo, offline, no keys
 .venv/bin/python prove_no_upcode.py       # guardrail invariant proof
@@ -58,6 +62,18 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # or: pip install p
    match/package, provider confirmation for extracted lab values. Never
    auto-select, never auto-write. Every patient contact requires explicit
    staff approval before send.
+
+   > **Open tension — owner decision pending (Aug 13, §8 Q3/Q10).** The
+   > `auto_continue` outreach mode (`ChaseConfig.outreach_mode`) implements
+   > approve-**once-per-patient**: staff enroll a patient, then the system
+   > sends cadenced reminders without a fresh approval per message. That is
+   > narrower than the sentence above, which reads per-message. It ships
+   > **off by default** (`staff_triggered`), its sends are recorded as
+   > machine actions (never counted as staff approvals or staff touches),
+   > and it auto-escalates back to a human at the reminder cap. If the
+   > practice chooses approve-once, amend this constraint explicitly and
+   > record who decided; until then the per-message rule stands as written
+   > and the mode stays a proposal.
 9. **Determinism boundary:** LLMs extract; deterministic Python adjudicates.
    Any new check lands on the deterministic side with tests.
 10. **Evidence spans on everything** a user sees suggested — no span, no

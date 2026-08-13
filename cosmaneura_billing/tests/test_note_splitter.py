@@ -110,3 +110,44 @@ def test_sections_serialize_with_locations():
     j = split_note(SAMPLE_VISIT.signed_note)[1].to_json()
     assert set(j) == {"target", "header", "text", "copy_text", "loc"}
     assert j["loc"].startswith("note:")
+
+
+# ------------------------------------------------------------------ #
+# regression from the Aug 12 adversarial review
+# ------------------------------------------------------------------ #
+TITLE_CASE_NOTE = """Chief Complaint: cough for three days.
+
+History of Present Illness:
+Productive cough, no fever. Denies shortness of breath.
+
+Review of Systems:
+Otherwise negative.
+
+Physical Exam:
+Lungs clear to auscultation.
+
+Assessment and Plan:
+1. Acute bronchitis - supportive care, fluids, rest.
+
+Instructions:
+Return if fever develops.
+"""
+
+
+def test_title_case_headers_are_recognized():
+    """Real EHR templates emit Title Case headers. Missing them collapsed the
+    whole note into one section, so every copy payload was wrong."""
+    sections = split_note(TITLE_CASE_NOTE)
+    targets = [s.target for s in sections]
+    # the four paste targets appear in note order; Physical Exam and
+    # Instructions/Return-if stay visible as unplaced blocks
+    assert [t for t in targets if t != TARGET_UNPLACED] == [
+        "chief_complaint", "hpi_subjective", "ros", "assessment_plan"]
+    assert TARGET_UNPLACED in targets
+    by_target = {s.target: s for s in sections if s.target != TARGET_UNPLACED}
+    assert by_target["chief_complaint"].copy_text == "cough for three days."
+    assert by_target["hpi_subjective"].copy_text.startswith("Productive cough")
+    assert "bronchitis" in by_target["assessment_plan"].copy_text
+    # the instructions block must not be swallowed into the plan payload
+    assert "Return if fever" not in by_target["assessment_plan"].copy_text
+    assert reassemble(sections) == TITLE_CASE_NOTE

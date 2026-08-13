@@ -163,3 +163,111 @@ def test_api_endpoint_serves_the_view():
     body = r.json()
     assert body["em"]["suggested_level"] == "99214"
     assert body["icd_candidates"][0]["code"] == "K62.5"
+
+
+# ------------------------------------------------------------------ #
+# regressions from the Aug 12 adversarial review
+# ------------------------------------------------------------------ #
+def test_dedupe_keeper_is_order_independent():
+    """Production emission order is arbitrary. The primary-flagged code must
+    keep the row whichever order the model emits it in — never be demoted to
+    a bare alternate."""
+    from cosmaneura_billing.billing_tab import _candidate, _dedupe
+    bundle = copy.deepcopy(SAMPLE_VISIT)
+    ev = [Evidence("intake_text", "When I eat spicy food, I poop blood", "sym")]
+
+    def pair(code, label, primary):
+        s = CodeSuggestion(kind=CodeKind.ICD10, code=code, label=label,
+                           disposition=Disposition.CAPTURED,
+                           evidence=[Evidence(e.source, e.quote, e.rationale)
+                                     for e in ev],
+                           notes=["primary_candidate"] if primary else [])
+        return (_candidate(bundle, s), s)
+
+    for order in ((True, False), (False, True)):
+        rows = [pair("K62.5", "Hemorrhage of anus and rectum", order[0]),
+                pair("K92.1", "Melena", order[1])]
+        # whichever is flagged primary keeps the row
+        deduped = _dedupe(rows)
+        assert len(deduped) == 1
+        keeper = deduped[0][0]
+        expected = "K62.5" if order[0] else "K92.1"
+        assert keeper["code"] == expected, f"order {order} demoted the primary"
+
+
+def test_primary_flag_survives_same_code_merge():
+    from cosmaneura_billing.billing_tab import _candidate, _dedupe
+    bundle = copy.deepcopy(SAMPLE_VISIT)
+    quote = "When I eat spicy food, I poop blood"
+    plain = CodeSuggestion(kind=CodeKind.ICD10, code="K62.5", label="Hemorrhage",
+                           disposition=Disposition.CAPTURED,
+                           evidence=[Evidence("intake_text", quote, "s")])
+    flagged = CodeSuggestion(kind=CodeKind.ICD10, code="K62.5", label="Hemorrhage",
+                             disposition=Disposition.CAPTURED,
+                             evidence=[Evidence("intake_text", quote, "s")],
+                             notes=["primary_candidate"])
+    deduped = _dedupe([(_candidate(bundle, plain), plain),
+                       (_candidate(bundle, flagged), flagged)])
+    assert len(deduped) == 1
+    assert "primary_candidate" in deduped[0][1].notes
+
+
+def test_evidence_spans_are_located_in_the_source_that_holds_them(view_and_bundle):
+    """A quote living in the transcript must not be labeled 'note', and an
+    elided quote must still resolve to real character offsets — the headline
+    E/M facts are the ones the Sherin demo puts on screen."""
+    view, bundle, _ = view_and_bundle
+    for f in view["em"]["mdm_facts"]:
+        span = f["evidence_span"]
+        if span is None:
+            continue
+        field = {"note": bundle.signed_note, "transcript": bundle.transcript,
+                 "intake": bundle.intake_text, "vitals": ""}[span["source"]]
+        head = span["text"].split("...")[0].strip()
+        assert head.lower() in field.lower(), \
+            f"{f['element']} span labeled {span['source']} but not found there"
+        assert span["loc"] is not None, f"{f['element']} span has no location"
+
+    for c in view["icd_candidates"] + view["cpt_candidates"]:
+        for span in c["evidence_spans"]:
+            field = {"note": bundle.signed_note, "transcript": bundle.transcript,
+                     "intake": bundle.intake_text, "vitals": ""}[span["source"]]
+            head = span["text"].split("...")[0].strip()
+            assert head.lower() in field.lower(), \
+                f"{c['code']} span mislabeled {span['source']}"
+
+
+def test_removed_row_survives_a_case_shifted_or_elided_denial_quote():
+    """The render layer must not be stricter than the compliance gate: a
+    rejected code whose rationale quote is elided or case-shifted must still
+    render (with its reason) instead of silently disappearing."""
+    from cosmaneura_billing.billing_tab import _candidate
+    bundle = copy.deepcopy(SAMPLE_VISIT)
+    s = CodeSuggestion(
+        kind=CodeKind.ICD10, code="Z80.0",
+        label="Family history of malignant neoplasm of digestive organs",
+        disposition=Disposition.REJECTED,
+        rationale=('Patient explicitly denied this family history '
+                   '("i do not have a family history ... colon cancer"). '
+                   'Coding it would be unsupported.'))
+    row = _candidate(bundle, s)
+    assert row is not None, "removed row vanished — transparency lost"
+    assert row["status"] == "removed"
+    assert row["evidence_spans"]
+    assert "denied" in row["status_reason"].lower()
+
+
+def test_held_em_carries_a_reason_like_the_candidates():
+    """A held E/M must not read as an assertion — it ships a status_reason so
+    the UI can say 'confirmation needed' instead of 'documentation supports'."""
+    bundle = copy.deepcopy(SAMPLE_VISIT)
+    result = BillingOrchestrator().process(bundle)
+    em = next(s for s in (result.provider_card.captured_codes
+                          + result.provider_card.declined_codes)
+              if s.kind == CodeKind.EM)
+    em.disposition = Disposition.REVIEW          # simulate a held E/M
+    em.rationale = "missing evidence or necessity; provider to confirm"
+    view = build_billing_tab_view(bundle, result, generated_at=GENERATED_AT)
+    assert view["em"]["status"] == "held"
+    assert view["em"]["status_reason"]
+    assert view["em"]["suggested_level"] not in view["copy_all_text"]

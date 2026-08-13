@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from functools import lru_cache
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -34,8 +35,22 @@ from .orchestrator import BillingOrchestrator
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
 
 app = FastAPI(title="CosmaNeura Billing Engine", version="0.1.0")
+# Explicit origin allowlist, not a wildcard: POST /api/feedback mutates the
+# learned preference layer (which can HOLD codes practice-wide), so any web
+# page a coder happens to have open must not be able to reach it.
+# COSMANEURA_CORS_ORIGINS is a comma-separated list; the default is the local
+# Vite dev server only.
+_CORS_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "COSMANEURA_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["content-type", "x-feedback-token"],
 )
 
 _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
@@ -323,7 +338,20 @@ def billing_tab(encounter_id: str, user_id: Optional[str] = None) -> dict[str, A
                                   completeness=completeness)
 
 
-@app.post("/api/feedback")
+def require_feedback_token(x_feedback_token: Optional[str] = Header(None)) -> None:
+    """Guard the only mutating endpoint. Coder feedback trains the preference
+    layer, which can hold codes for the whole practice — so writes must be
+    attributable, not anonymous. Set COSMANEURA_FEEDBACK_TOKEN in any shared
+    or deployed environment; when unset (local dev) the guard stays open and
+    says so in /api/health."""
+    expected = os.environ.get("COSMANEURA_FEEDBACK_TOKEN")
+    if not expected:
+        return
+    if not x_feedback_token or not secrets.compare_digest(x_feedback_token, expected):
+        raise HTTPException(status_code=401, detail="invalid feedback token")
+
+
+@app.post("/api/feedback", dependencies=[Depends(require_feedback_token)])
 def submit_feedback(fb: FeedbackModel) -> dict[str, Any]:
     store = get_feedback_store()
     record = EncounterFeedback(

@@ -160,8 +160,12 @@ def test_approved_send_logs_attempt_and_contact(tmp_path):
     assert item.attempts == [{"channel": "email",
                               "template_id": "card_request.v0",
                               "sent_at": NOW.isoformat(),
-                              "approved_by": "grace-demo"}]
+                              "approved_by": "grace-demo",
+                              "sent_by": "grace-demo",
+                              "staff_approved": True}]
     assert "https://cardcapture.example.test/submit/" in body
+    # personalized from the name the detector recorded on the item
+    assert body.startswith("Hi Synthetic PT-INACT,")
 
 
 def test_message_bodies_never_carry_insurance_values(tmp_path):
@@ -276,7 +280,8 @@ def test_tick_is_noop_in_default_staff_triggered_mode(tmp_path):
     q.approve(item.chase_id, staff_id="s1", now=NOW)
     q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
     result = tick(q, now=NOW + timedelta(days=30))
-    assert result == {"mode": "staff_triggered", "reminded": [], "escalated": []}
+    assert result == {"mode": "staff_triggered", "reminded": [],
+                      "escalated": [], "failed": []}
     assert len(item.attempts) == 1                     # nothing auto-fired
 
 
@@ -294,7 +299,12 @@ def test_auto_continue_chases_until_compliance_or_escalation(tmp_path):
     assert tick(q, now=NOW + timedelta(days=1))["reminded"] == []   # not due yet
     r1 = tick(q, now=NOW + timedelta(days=3))
     assert r1["reminded"] == [item.chase_id]
-    assert item.attempts[-1]["approved_by"] == "auto:cadence(enrolled_by=grace-demo)"
+    auto = item.attempts[-1]
+    # a machine send is never booked as a human approval, but stays traceable
+    # to the staff member who enrolled the patient
+    assert auto["staff_approved"] is False
+    assert auto["approved_by"] is None
+    assert auto["sent_by"] == "auto:cadence(enrolled_by=grace-demo)"
     r2 = tick(q, now=NOW + timedelta(days=6))
     assert r2["reminded"] == [item.chase_id]
     r3 = tick(q, now=NOW + timedelta(days=9))
@@ -315,7 +325,8 @@ def test_auto_continue_stops_the_moment_a_card_lands(tmp_path):
     on_card_verified(q, athena, event, now=NOW + timedelta(days=4))
     assert item.sequence_state == "verified_closed"
     later = tick(q, now=NOW + timedelta(days=30))
-    assert later == {"mode": "auto_continue", "reminded": [], "escalated": []}
+    assert later == {"mode": "auto_continue", "reminded": [],
+                     "escalated": [], "failed": []}
 
 
 def test_auto_continue_never_touches_unapproved_or_review_items(tmp_path):
@@ -335,3 +346,145 @@ def test_auto_continue_never_touches_unapproved_or_review_items(tmp_path):
     states = {i.patient_ref: i.sequence_state for i in q.items.values()}
     assert states["PT-OPEN"] == "open"                 # never staff-approved
     assert states["PT-DC-0001"] == "human_review"      # gate bucket untouched
+
+
+# ------------------------------------------------------------------ #
+# regressions from the Aug 12 adversarial review
+# ------------------------------------------------------------------ #
+def test_redetection_never_clobbers_an_inflight_or_terminal_item(tmp_path):
+    """The detector emits deterministic chase_ids, so a second pass re-yields
+    an item already in flight. Intake must be first-write-wins: staff
+    decisions, the contact log, and the reminder cap all survive."""
+    athena, q, item = _one_open_item(tmp_path)
+    src = _list_source(tmp_path)
+    q.approve(item.chase_id, staff_id="s1", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+
+    later = NOW + timedelta(days=1)
+    for again in detect(athena, list_source=src, now=later):
+        q.enqueue(again, now=later)
+
+    kept = q.items[item.chase_id]
+    assert kept is item                              # same object, not replaced
+    assert kept.sequence_state == "sent"             # not reset to open
+    assert len(kept.attempts) == 1                   # contact log intact
+
+    q.escalate(item.chase_id, staff_id="s1", now=later, reason="no response")
+    for again in detect(athena, list_source=src, now=later + timedelta(days=1)):
+        q.enqueue(again, now=later + timedelta(days=1))
+    assert q.items[item.chase_id].sequence_state == "escalated_to_staff"
+    with pytest.raises(SequenceError, match="terminal"):
+        q.approve(item.chase_id, staff_id="s1", now=later + timedelta(days=2))
+
+
+def test_reminder_cap_counts_every_contact_not_just_reminder_templates(tmp_path):
+    """The bound on patient contact must not depend on template naming."""
+    _, q, item = _one_open_item(tmp_path)
+    q.approve(item.chase_id, staff_id="s1", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+    for n in range(q.config.max_reminders):
+        q.send(item.chase_id, template_id="card_request.v0",
+               now=NOW + timedelta(days=n + 1), sent_by="s1")
+    with pytest.raises(SequenceError, match="max reminders"):
+        q.send(item.chase_id, template_id="card_request.v0",
+               now=NOW + timedelta(days=9), sent_by="s1")
+    assert len(item.attempts) == 1 + q.config.max_reminders
+
+
+def test_tick_uses_a_configured_channel_and_isolates_failures(tmp_path):
+    """A practice that texts instead of emailing must still get its cadence:
+    tick sends on a configured channel, and one bad item cannot abort the pass."""
+    from cosmaneura_billing.chase import tick
+    athena = _athena()
+    athena._patients = {
+        "PT-A": _patient("PT-A", outcome=ELIGIBILITY_INACTIVE),
+        "PT-B": _patient("PT-B", insurance=None, appt_days=2),
+    }
+    src = _list_source(tmp_path)
+    q = ChaseQueue(QueueType.CARD_CHASE, list_source=src)
+    q.config.channels = ("sms",)
+    q.config.outreach_mode = "auto_continue"
+    items = [q.enqueue(i, now=NOW) for i in detect(athena, list_source=src, now=NOW)]
+    for it in items:
+        q.approve(it.chase_id, staff_id="s1", now=NOW)
+        q.send(it.chase_id, template_id="card_request.v0", channel="sms",
+               now=NOW, sent_by="s1")
+
+    result = tick(q, now=NOW + timedelta(days=3))
+    assert set(result["reminded"]) == {i.chase_id for i in items}
+    assert result["failed"] == []
+    assert all(a["channel"] == "sms" for i in items for a in i.attempts)
+
+
+def test_machine_sends_never_count_as_staff_touches(tmp_path):
+    """Auto-continue exists to cut staff minutes — machine work must not be
+    booked as human work in the metric the Aug 13 baseline is judged against."""
+    from cosmaneura_billing.chase import tick
+    _, q, item = _one_open_item(tmp_path)
+    q.config.outreach_mode = "auto_continue"
+    q.approve(item.chase_id, staff_id="s1", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+    tick(q, now=NOW + timedelta(days=3))
+    tick(q, now=NOW + timedelta(days=6))
+
+    m = summarize(q.items.values(), q.staff_actions, q.machine_actions)
+    assert m["staff_touches"] == 2                  # approve + the human send
+    assert m["machine_touches"] == 2                # the two auto reminders
+
+
+def test_completion_rate_never_exceeds_100_percent(tmp_path):
+    """A patient who submits before any outreach closes the item but was never
+    chased — counting them in the chase's completion rate produced 200%."""
+    athena = _athena()
+    athena._patients = {
+        "PT-SELF1": _patient("PT-SELF1", insurance=None, appt_days=3),
+        "PT-SELF2": _patient("PT-SELF2", insurance=None, appt_days=4),
+        "PT-CHASED": _patient("PT-CHASED", outcome=ELIGIBILITY_INACTIVE),
+    }
+    src = _list_source(tmp_path)
+    q = ChaseQueue(QueueType.CARD_CHASE, list_source=src)
+    items = {i.patient_ref: q.enqueue(i, now=NOW)
+             for i in detect(athena, list_source=src, now=NOW)}
+
+    chased = items["PT-CHASED"]
+    q.approve(chased.chase_id, staff_id="s1", now=NOW)
+    q.send(chased.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+    for ref in ("PT-SELF1", "PT-SELF2"):            # no outreach at all
+        on_card_verified(q, athena,
+                         simulate_patient_submission(ref, now=NOW),
+                         now=NOW + timedelta(hours=2))
+
+    m = summarize(q.items.values(), q.staff_actions, q.machine_actions)
+    assert m["completed"] == 2
+    assert m["closed_without_outreach"] == 2
+    assert 0.0 <= m["completion_rate"] <= 1.0
+    assert m["completion_rate"] == 0.0              # the chased one is still open
+
+
+def test_naive_now_and_offset_appointments_are_handled(tmp_path):
+    """A tz-naive `now` must not crash the pass, and an appointment written in
+    a non-UTC offset must not be misread as past by string comparison."""
+    athena = _athena()
+    p = PatientRecord(patient_ref="PT-TZ", display_name="Synthetic TZ")
+    p.appointments.append(Appointment(
+        appointment_id="AP-TZ", patient_ref="PT-TZ",
+        # 18:00-05:00 == 23:00Z: later than NOW in time, earlier as a string
+        scheduled_at="2026-08-12T18:00:00-05:00"))
+    athena._patients = {"PT-TZ": p}
+
+    items = detect(athena, list_source=_list_source(tmp_path),
+                   now=NOW.replace(tzinfo=None))    # naive: must not raise
+    assert [i.trigger for i in items] == [TRIGGER_NO_CARD]
+    assert items[0].priority == "P0"
+
+
+def test_unreachable_is_a_recordable_outcome(tmp_path):
+    _, q, item = _one_open_item(tmp_path)
+    q.approve(item.chase_id, staff_id="s1", now=NOW)
+    q.send(item.chase_id, template_id="card_request.v0", now=NOW, sent_by="s1")
+    q.mark_unreachable(item.chase_id, staff_id="s1", now=NOW + timedelta(days=2),
+                       reason="phone disconnected, email bouncing")
+    assert item.sequence_state == "unreachable"
+    assert item.resolution["unreachable"] is True
+    with pytest.raises(SequenceError):              # terminal
+        q.approve(item.chase_id, staff_id="s1", now=NOW + timedelta(days=3))

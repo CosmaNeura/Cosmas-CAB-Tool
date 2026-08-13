@@ -33,9 +33,11 @@ TARGET_UNPLACED = "unplaced"
 DEFAULT_TARGET_PATTERNS: dict[str, tuple[str, ...]] = {
     "chief_complaint": (r"CC:", r"CHIEF COMPLAINT:?", r"Chief Complaint:"),
     "hpi_subjective": (r"HPI:", r"HISTORY OF PRESENT ILLNESS:?",
+                       r"History of Present Illness:",
                        r"Subjective:", r"SUBJECTIVE:?"),
-    "ros": (r"ROS:", r"REVIEW OF SYSTEMS:?"),
+    "ros": (r"ROS:", r"REVIEW OF SYSTEMS:?", r"Review of Systems:"),
     "assessment_plan": (r"Assessment/Plan:", r"ASSESSMENT AND PLAN:?",
+                        r"Assessment and Plan:", r"Assessment & Plan:",
                         r"A/P:"),
     "assessment": (r"Assessment:", r"ASSESSMENT:?"),
     "plan": (r"Plan:", r"PLAN:?"),
@@ -44,9 +46,12 @@ DEFAULT_TARGET_PATTERNS: dict[str, tuple[str, ...]] = {
 # headers that end the previous section but have no Athena paste target —
 # their content stays visible under "unplaced"
 _BREAK_ONLY_PATTERNS: tuple[str, ...] = (
-    r"Data:", r"Vitals:", r"VITALS:?", r"PHYSICAL EXAM:?", r"PE:",
-    r"EXAM:?", r"MEDICATIONS:?", r"ALLERGIES:?", r"RESULTS:?",
-    r"INSTRUCTIONS:?", r"Return if\b", r"Electronically signed",
+    r"Data:", r"Vitals:", r"VITALS:?", r"PHYSICAL EXAM:?",
+    r"Physical Exam:", r"PE:",
+    r"EXAM:?", r"Exam:", r"MEDICATIONS:?", r"Medications:",
+    r"ALLERGIES:?", r"Allergies:", r"RESULTS:?", r"Results:",
+    r"INSTRUCTIONS:?", r"Instructions:",
+    r"Return if\b", r"Electronically signed",
 )
 
 

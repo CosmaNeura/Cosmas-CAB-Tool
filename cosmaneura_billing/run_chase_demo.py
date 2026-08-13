@@ -107,19 +107,25 @@ def main() -> None:
                now=NOW + timedelta(hours=2), sent_by=STAFF)
     print(f"    enrolled {target.patient_ref} ({target.trigger}) — one staff "
           "approval, then hands off")
+    print("    (the switch applies to every already-enrolled patient, not "
+          "just this one)")
     for day in (3, 6, 9):
         result = tick(queue, now=NOW + timedelta(hours=2, days=day))
-        if result["reminded"]:
-            print(f"    day {day}: reminder auto-sent (no staff action; "
-                  "logged with the enrolling approver)")
-        if result["escalated"]:
-            print(f"    day {day}: reminder limit reached with no submission "
-                  "→ auto-escalated back to staff")
+        for cid in result["reminded"]:
+            print(f"    day {day}: reminder auto-sent to "
+                  f"{queue.items[cid].patient_ref} (no staff action; traced "
+                  "to the enrolling approver)")
+        for cid in result["escalated"]:
+            print(f"    day {day}: {queue.items[cid].patient_ref} hit the "
+                  "reminder limit with no submission → auto-escalated back "
+                  "to staff")
+        assert result["failed"] == [], result["failed"]
     assert target.sequence_state == "escalated_to_staff"
 
     # 5 ── metrics ----------------------------------------------------------
     print("\n[5] " + pretty_metrics(summarize(queue.items.values(),
-                                              queue.staff_actions)))
+                                              queue.staff_actions,
+                                              queue.machine_actions)))
     print("\nDemo complete — all rails held (approval-gated sends, "
           "direct-contract review bucket, idempotent writes).")
 
