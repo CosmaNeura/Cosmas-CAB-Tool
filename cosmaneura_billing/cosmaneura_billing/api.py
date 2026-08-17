@@ -27,7 +27,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from . import coder_feedback
+from .billing_tab import build_billing_tab_view
 from .coder_feedback import EncounterFeedback, FeedbackStore
+from .completeness import OverrideRequiresReason, applicable_rulepack, check_note
 from .corpus.acibench import load_acibench
 from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
@@ -192,6 +194,16 @@ class ProcessRequest(BaseModel):
     userId: Optional[str] = None      # reviewer identity for learned preferences
 
 
+class CompletenessRequest(BaseModel):
+    note: str = ""
+    placeOfService: str = "10"
+    encounterType: str = "telehealth_established"
+    rulepack: Optional[str] = None
+    # rule_id -> reason. A blank reason is rejected (422): the reason is the
+    # record of why the rule did not apply to this note.
+    overrides: Optional[dict[str, str]] = None
+
+
 class DecisionModel(BaseModel):
     kind: str
     engine_code: Optional[str] = None
@@ -312,6 +324,38 @@ def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, An
         elif key in prefs.refine:
             row["history"] = prefs.refine[key].hint()
     return view
+
+
+@app.get("/api/encounters/{encounter_id}/billing-tab")
+def billing_tab(encounter_id: str, user_id: Optional[str] = None,
+                generated_at: str = "") -> dict[str, Any]:
+    """The provider billing tab (F1): the same visit reorganised as a billing
+    reference. The clinical note is never altered — this is a view over it."""
+    bundle = _get_bundle(encounter_id)
+    result = get_orchestrator().process(bundle, user_id=user_id)
+    return build_billing_tab_view(
+        bundle, result, engine_version=_ENGINE_VERSION, generated_at=generated_at)
+
+
+@app.post("/api/completeness")
+def completeness(req: CompletenessRequest) -> dict[str, Any]:
+    """Run a note-completeness rule pack before the claim reaches a coder.
+
+    This is the pre-submission check: fixing a gap here means it never becomes a
+    denial, and never costs a coder a review minute.
+    """
+    pack = req.rulepack or applicable_rulepack(req.placeOfService, req.encounterType)
+    if pack is None:
+        return {"rulepack": None, "complete": None, "results": [],
+                "attestationBlock": None,
+                "detail": "No rule pack covers this encounter type yet."}
+    try:
+        report = check_note(req.note, rulepack=pack, overrides=req.overrides or None)
+    except OverrideRequiresReason as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=f"unknown rule pack '{pack}'") from e
+    return report.to_dict(pos=req.placeOfService)
 
 
 @app.post("/api/feedback")

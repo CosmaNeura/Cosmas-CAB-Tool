@@ -37,6 +37,42 @@ and submit feedback that lands in the JSONL store for `scripts/analyze_feedback.
 Coder feedback is persisted to `coder_feedback.jsonl` (override with
 `COSMANEURA_FEEDBACK_PATH`).
 
+**Offline mode covers one encounter.** Without `ANTHROPIC_API_KEY` the engine
+runs a deterministic model that only knows the bundled GI-bleed demo visit. On
+any other encounter it extracts nothing and proposes nothing — correctly, and
+by design. Every response says which inference path ran (`inferenceMode`,
+`inferenceModel`) and, when a run produced nothing for that reason, carries a
+`degraded` object explaining it, so an empty claim is never presented as a
+finding.
+
+## Provider billing tab and note completeness
+
+```
+GET  /api/encounters/{id}/billing-tab   the provider-facing billing view (F1)
+POST /api/completeness                  run a note rule pack pre-submission (F2)
+```
+
+The **billing tab** reshapes one pipeline result into a billing reference over
+the same visit: E/M with its MDM facts and pathway, ICD and CPT candidates each
+carrying verbatim evidence spans, plan items linked to the code that justifies
+them, multi-mapped findings deduped with alternates listed, coverage-aware
+ordering, and per-code plus copy-all clipboard text. The clinical note is never
+altered — it is a view over it (`clinical_note_modified` is always `false`).
+
+The **completeness checker** evaluates a note against a deterministic rule pack
+before the claim reaches a coder. `telehealth.v1` covers the omissions behind
+real Optum/UHC denials: modality, duration, patient location, provider location,
+consent. Each result is `present` / `missing` / `ambiguous` with the span it
+matched and a plain-language fix hint. Providers can override any rule, but an
+override requires a reason (a blank reason is a 422) and is recorded. The
+ready-to-insert attestation header renders only once every rule passes or is
+overridden — attesting over a known gap would assert something untrue.
+
+```bash
+curl -s localhost:8000/api/completeness -H 'content-type: application/json' -d '{
+  "note": "Telehealth visit. Patient consented.", "placeOfService": "10"}' | jq
+```
+
 Production inference (clinical fact extraction via Claude) turns on automatically
 when a key is present, and the full AHRQ code set loads from a path you point at:
 
@@ -86,8 +122,12 @@ cosmaneura_billing/
   schemas.py                 dataclasses; the "evidence-or-it-isn't-billable" rule lives here
   llm.py                     LLMClient protocol + offline MockLLM + AnthropicLLM adapter
   orchestrator.py            runs the agents and assembles both role views
+  billing_tab.py             provider billing-tab adapter (F1) — a view, never a second engine
+  completeness.py            note rule packs + attestation block (F2)
+  guardrail_fuzz.py          adversarial cases behind the anti-inflation invariant
   knowledge/
-    em_ruleset.py            2021+ E/M leveling (MDM grid + time), rule-based and explainable
+    em_ruleset.py            2021+ E/M leveling (MDM grid + total time), rule-based and explainable
+    procedures.py            procedure/add-on candidates from documented language (CPT 99058)
     icd10_ccsr.py            ICD-10 <-> CCSR lookup on the AHRQ data (+ ported embedding search)
   agents/
     coding.py                proposes E/M + ICD-10, always with a documentation span
