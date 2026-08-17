@@ -33,15 +33,20 @@ on that line, which is why they carry the coding lane's rules while being yours 
 
 ### Pilot critical path
 
-In rough order, the shortest route to something Cindy, Maggie and Grace can actually use:
+The shortest route to something Cindy, Maggie and Grace can actually use:
 
-1. **§4 P0** — chase worklist off the in-memory singleton (loses data today)
+0. **Start the Athena sandbox application — day one.** The only long-lead item with a
+   third party on the other side, and it blocks nothing while pending. Everything below
+   proceeds without it; §7.8 is what lands when it arrives.
+1. **§4 P0** — chase worklist off the in-memory singleton (it loses data today)
 2. **§4 P1–P2** — deployment + auth (gates every real user)
-3. **§7 claim export** — without it a coder cannot act on the engine's output at all
-4. **§4 P3–P4** — Postgres, then ACS + the scheduler (makes F9 real rather than a demo)
-5. **§7 CPT descriptors** — credentials only; turns generic labels into real ones
-6. **§7 F4 splitter** — kills most of the manual note-chopping today, zero gates
+3. **§4 P3–P4** — Postgres, then ACS **email** + the scheduler. This is what turns F9 from
+   a demo into the thing the two staff actually work from
+4. **§7.2 CPT descriptors** — credentials only; turns generic labels into real ones
+5. **§7.4 F4 splitter** — kills most of the manual note-chopping today, zero gates
+6. **§7.1 CSV export** — batch fallback; **not** a blocker (copy-paste already works)
 7. **§4 P5** — logging + PHI redaction, before real PHI flows
+8. **§7.8 Athena read integration** — when the sandbox lands
 
 ---
 
@@ -262,7 +267,7 @@ Status after the Aug 13 follow-up. **Q7 is the only one it resolved.**
 | 7 | Time-coded vs MDM-coded; does the team re-level on time? | **Resolved:** build the time pathway (done) |
 | 8 | What has billing heard about Athena's own AI? | Open — Greg forwarded Athena's Ambient AI announcement Aug 12 |
 | 9 | Chase baseline: touches, minutes, cards outstanding | **Open — re-ask (§2a)** |
-| 10 | Patient-contact channels & consent | **Open — and it gates half the cadence.** SMS/phone are consent-gated and fail closed, so with no recorded consent those steps drop out and the sequence runs on email alone |
+| 10 | Patient-contact channels & consent | **Mostly resolved, 2026-08-17 (owner).** **Email: yes** — build it, and an email to an established patient needs no per-patient opt-in. **SMS: yes as a channel**, but each patient still needs recorded TCPA consent and the gate stays fail-closed. **Outbound voice: no** (see §7.7); the staff call task stays. Still open, and narrower: **where the SMS opt-in flag is populated from** — Acuity, Athena, or a form the practice runs. Until that feed exists every `consented(SMS)` answer is False and the cadence runs on email alone, which is a working configuration, not a blocked one |
 | 11 | Should direct-contract patients be chased at all? | Open — routed to human review until answered |
 
 Plus one new: **who approves the chase policy, and how often do they want to be asked?**
@@ -313,16 +318,23 @@ These are pilot-critical and they are yours. For each: why it wasn't built today
 buildable **now**, and what (if anything) it is genuinely waiting on. Where an item
 affects a claim it carries the coding lane's rules (§0).
 
-### 7.1 Claim export (837P / CSV) — build now, nothing blocks it
+### 7.1 CSV export — build it, but it is not a blocker. **837P: dropped**
 
-**Why not today:** the engine produced a defensible code set and no way to act on it.
-Higher-leverage work existed first, but this is the gap that makes the whole thing
-academic — a coder cannot submit from a JSON response.
+**Correction to an earlier version of this doc**, which called claim export "the gap that
+makes the whole thing academic". That was wrong: the billing tab already carries
+`copy_text` per code and `copy_all`, so a coder can act on the engine's output today. CSV
+is a **batch multiplier** — it removes twenty copy-paste cycles, not a wall.
 
-**Buildable now, in full.** CSV first (a coder can paste it), 837P behind it.
-`docs/CAC_DATA_SOURCES.md` §16 surveys the parsers; `pyx12` is BSD-ish and on PyPI.
-Source the export from `BillerWorksheet`, not from the billing tab — the tab is a
-provider-facing *view* and deliberately drops codes whose evidence didn't verify.
+**837P is dropped from the backlog** (decision, 2026-08-17). Emitting 837P means becoming
+a claim *submitter*: clearinghouse enrollment, payer enrollment, EDI testing, and
+submission liability. MCD already runs Athena → clearinghouse → payer. Building 837P
+bypasses a submission path that works in order to take on risk nobody asked for. Revisit
+only if MCD leaves Athena's submission path.
+
+**Build CSV.** Roughly a day. It earns its place as three things: the batch path, the
+fallback when an integration is down, and an audit artifact. Source it from
+`BillerWorksheet`, **not** the billing tab — the tab is a provider-facing *view* that
+deliberately drops codes whose evidence didn't verify.
 
 Two rules: export **only** `Disposition.CAPTURED` codes, and never let export be the thing
 that promotes a code. If an item is held, it stays off the claim.
@@ -398,22 +410,40 @@ provider_verified`) plus synthetic lab fixtures. **Rail that cannot move:** ever
 value needs provider confirmation before entering a persisted series, and analyses are
 review surfaces, never auto-written to the chart.
 
-### 7.7 Automated outbound voice — keep the staff task for the pilot
+### 7.7 Automated outbound voice — **decided: not building it**
 
-This is the one item I'd argue against fast-tracking, and it is worth one paragraph
-because "push hard" and this specific feature interact badly.
+Decision, 2026-08-17 (owner): no automated outbound voice. Do not build a telephony
+adapter, an IVR, or automated calling of any kind.
 
-Phone is currently a **staff task**: the system schedules it, a person calls and logs the
-outcome and minutes into the same contact history. That already gives you the integrated
-list and the metrics. Replacing it with automated calling adds TCPA exposure (prior
-express consent for automated calls to a mobile, per-state recording rules) for very
-little the staff task doesn't already deliver — and §5 Q10 means the practice's consent
-posture is currently *unknown*, so consent cannot be demonstrated.
+**The staff call task stays.** Phone remains a task the system schedules and a person
+executes and logs into the same contact history — that is what makes call work visible in
+minutes-per-card instead of being invisible, and the original ask was for one integrated
+list that covers calls. Removing it would remove that.
 
-If you still want it after the pilot: `chase.models.STAFF_TASK` / `SYSTEM_SENDS` are the
-switch, and the state machine does not change. Get counsel review and a recorded-consent
-source first. Automated **SMS** is a different matter — that is already wired via the same
-`Transport` seam as email and only needs the consent answer from Q10.
+If this is ever revisited: `chase.models.STAFF_TASK` / `SYSTEM_SENDS` are the switch and
+the state machine does not change. Counsel review and a recorded-consent source first.
+
+### 7.8 Athena integration — read first, write later
+
+**Waiting on:** sandbox access. Start the application now (§0 step 0); it is the only
+long-lead item and it blocks nothing while pending.
+
+**Read is much cheaper to get approved than write, and unlocks more than it looks like.**
+Pull slips, claims and denial outcomes and you get three things:
+
+1. Whether the engine's suggestions were actually *used* — the acceptance signal the
+   validation protocol needs and currently has no source for.
+2. Denial outcomes by reason, which is the coder baseline's second number (§2b).
+3. **The only thing that would populate the `denial_coverage` trigger** in
+   `chase/detector.py`. That trigger is built and nothing feeds it today.
+
+**Write is the harder ask, and two facts argue against dating the pilot on it:** the
+encounter-section write API is unverified (repo knowledge covers the insurance write
+only), and Grace reported Athena is *worse than Tebra* at claim modification — if the API
+inherits that limitation you may read fine and not usefully write. Prove read first.
+
+All protocol knowledge goes in `athena_client.py`, mock-first, per `/CLAUDE.md`. The
+adapter target for coverage state is `chase.models.CoverageSnapshot`.
 
 ---
 

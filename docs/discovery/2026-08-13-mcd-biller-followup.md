@@ -75,13 +75,16 @@ Nothing here overrides the anti-inflation invariant or the PHI boundary.
 | 7 | Time-coded vs MDM-coded; does the team re-level on time? | **Not answered directly.** Owner decision (Aug 17): **build the total-time pathway** alongside MDM. Rationale: family-medicine televisits are frequently time-coded (Maura 7/24) and Sherin referenced 99215 (8/10). |
 | 8 | What has the billing team heard about Athena's own AI? | **Not answered** in the summary. Separately, Greg forwarded Athena's Ambient AI assistant announcement on Aug 12 — Athena is moving on ambient documentation. |
 | 9 | Card chase today: who, channels, touches, minutes, outstanding count | **Qualitatively answered, quantitatively not.** Named staff and the Acuity→Athena path are known; no touch counts or minutes-per-card were recorded. The Aug 6 call remains the only source of a number: **300–500 claims held monthly**. |
-| 10 | Patient-contact channels & consent (F9b config) | **Unanswered.** Email/SMS capability and consent policy still unknown. |
+| 10 | Patient-contact channels & consent (F9b config) | **Not answered by the call; decided by the owner (Aug 17).** Channels: **email yes** (no per-patient opt-in needed for an established patient), **SMS yes** but per-patient TCPA consent required and fail-closed, **automated outbound voice no** — phone stays a staff task. What remains open is narrower than the original question: **where the SMS opt-in flag comes from** (Acuity, Athena, or a practice-run form). With no such feed, `consented(SMS)` is False for everyone and the cadence runs on email alone. |
 | 11 | Should direct-contract patients ever be card-chased? | **Unanswered.** F9a continues routing direct-contract matches to human review. |
 
 **Net:** the call was rich on *workflow mechanics* and produced three new
 requirements, but it did not deliver the **numbers** (Q2, Q9) or the
 **configuration inputs** (Q3, Q4, Q10, Q11) the Aug 12 plan expected. Those
 remain open and should be asked for explicitly rather than assumed answered.
+Q10 has since been settled by owner decision rather than by the call — the row
+above records it, and the residual question is a data-source question, not a
+policy one.
 
 ## 4. Requests recorded but out of engine scope
 
