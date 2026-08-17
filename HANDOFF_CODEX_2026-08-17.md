@@ -11,15 +11,37 @@ scope *before* any of it was done. Read that one only for background.
 
 ---
 
-## 0. The one-line division of labour
+## 0. The division of labour
 
-**The engine's judgment stays with the coding work. Everything between the engine and a
-real user is the Azure lane.** Concretely: if a wrong answer produces a wrong *claim*,
-it is not in this handoff. If a wrong answer produces an outage, a leak, or a lost
-record, it is.
+**The goal is a deployable pilot.** Two lanes run in parallel toward it.
 
-The seams for that split already exist and are named in §4. None of the Azure work
-requires reading the coding logic.
+**§4 — the Azure lane.** Everything between the engine and a real user: deployment, auth,
+persistence, transport, scheduling, observability. None of it needs clinical or coding
+judgment, and the seams already exist (named per item).
+
+**§7 — the feature backlog.** Things not built today that the pilot needs anyway: claim
+export, licensed CPT descriptors, the Athena section splitter, modifier proposals. These
+**do** affect claims, so they carry the engine's obligations — deterministic Python with
+tests, evidence spans on anything a user sees suggested, and the anti-inflation invariant
+green. Read `/CLAUDE.md` before starting any of them.
+
+What stays with the coding work either way: the guardrail itself, E/M leveling, ICD/CPT
+selection rules, the completeness rule packs, and the accuracy/validation protocol. If
+you are unsure which lane something is in, the test is whether getting it wrong produces
+a wrong **claim** (coding lane) or a wrong **deployment** (Azure lane) — and §7 items sit
+on that line, which is why they carry the coding lane's rules while being yours to build.
+
+### Pilot critical path
+
+In rough order, the shortest route to something Cindy, Maggie and Grace can actually use:
+
+1. **§4 P0** — chase worklist off the in-memory singleton (loses data today)
+2. **§4 P1–P2** — deployment + auth (gates every real user)
+3. **§7 claim export** — without it a coder cannot act on the engine's output at all
+4. **§4 P3–P4** — Postgres, then ACS + the scheduler (makes F9 real rather than a demo)
+5. **§7 CPT descriptors** — credentials only; turns generic labels into real ones
+6. **§7 F4 splitter** — kills most of the manual note-chopping today, zero gates
+7. **§4 P5** — logging + PHI redaction, before real PHI flows
 
 ---
 
@@ -137,10 +159,11 @@ needing a click per message is a queue nobody drains.
 
 ---
 
-## 4. The Azure lane — Codex's work
+## 4. The Azure lane — infrastructure
 
 Everything here is infrastructure. None of it needs clinical or coding judgment, and all
-of it gates PHI. Ordered by what blocks what.
+of it gates PHI. Ordered by what blocks what. §7 is the feature backlog that runs
+alongside it; the interleaved order for a pilot is in §0.
 
 ### P0 — the bug that will bite in Azure specifically
 
@@ -284,18 +307,119 @@ POST /api/chase/{id}/action             release|suppress|assign|log_attempt|subm
 
 ---
 
-## 7. What is deliberately not built
+## 7. Not built by me — the feature backlog, assigned to Codex
 
-- **Automated outbound voice.** Phone is a staff task the system schedules and a person
-  executes and logs. A robocall about insurance is a TCPA problem; this keeps call work
-  visible in the metrics without becoming one. A telephony adapter can be added later
-  without touching the state machine.
-- **Modifier proposals.** `CodeKind.MODIFIER` exists and no agent emits one, so
-  `worksheet.modifiers` is always empty. Blocked on Q4.
-- **Claim export (837P/CSV).** `docs/CAC_DATA_SOURCES.md` §16 surveys the parsers.
-- **CPT descriptors.** `cptDescriptors: 0` without an AMA license; the turnkey auto-fetch
-  path is built and documented, it just needs credentials.
-- **F4 Athena section splitter**, **F7 auto-populate**, **F8 lab tracker** — all gated.
+These are pilot-critical and they are yours. For each: why it wasn't built today, what is
+buildable **now**, and what (if anything) it is genuinely waiting on. Where an item
+affects a claim it carries the coding lane's rules (§0).
+
+### 7.1 Claim export (837P / CSV) — build now, nothing blocks it
+
+**Why not today:** the engine produced a defensible code set and no way to act on it.
+Higher-leverage work existed first, but this is the gap that makes the whole thing
+academic — a coder cannot submit from a JSON response.
+
+**Buildable now, in full.** CSV first (a coder can paste it), 837P behind it.
+`docs/CAC_DATA_SOURCES.md` §16 surveys the parsers; `pyx12` is BSD-ish and on PyPI.
+Source the export from `BillerWorksheet`, not from the billing tab — the tab is a
+provider-facing *view* and deliberately drops codes whose evidence didn't verify.
+
+Two rules: export **only** `Disposition.CAPTURED` codes, and never let export be the thing
+that promotes a code. If an item is held, it stays off the claim.
+
+### 7.2 Licensed CPT descriptors — build now, credentials only
+
+**Why not today:** needs the practice's AMA license, which I don't have.
+
+`/api/health` reports `cptDescriptors: 0` and a `cptStatus` explaining why. The turnkey
+auto-fetch path is **already built and tested** (`knowledge/cpt.py`, verified against the
+production gateway, CPT 2026 Update 4, 10,988 descriptors). Set the four `AMA_*` variables
+from the Developer Portal and it populates; `scripts/fetch_cpt_zip.py --check` validates
+credentials in two API calls before downloading. Production credentials are capped around
+10 calls/day, so the cache under `~/.cache/cosmaneura/cpt` matters — do not defeat it.
+
+**Never commit descriptor files, the ZIP, or the credentials.** CPT content stays under
+the practice's license, outside the repo.
+
+### 7.3 Modifier proposals (F6) — build the objective half now
+
+**Why not today:** Grace deferred the modifier workflow twice (Aug 6 and Aug 13), and it
+is her stated review worry. Guessing at it would add coder minutes, which is the one thing
+her constraint forbids.
+
+That is a reason to **split** it, not to wait on all of it:
+
+- **Modifier 95 / 93 (telehealth) — build now.** Objective, and the engine already
+  *detects* it: `DenialRiskAgent` (`agents/denial_risk.py`, the telehealth POS block)
+  raises a flag on POS 02/10 telling the biller to confirm the E/M carries modifier 95,
+  or **93 for audio-only** — so the audio-only distinction is already modelled. All that
+  is missing is promoting that flag into a `CodeKind.MODIFIER` suggestion carrying the POS
+  as its evidence. The guardrail gates PROCEDURE/MODIFIER kinds on evidence as of today,
+  so it lands held-for-review rather than auto-captured, which is the right posture for a
+  modifier regardless. `completeness.telehealth.v1` gives you the modality signal to pick
+  between 95 and 93.
+- **Modifier 25 and bundling — still needs Q4.** Judgment-heavy, payer-specific, and the
+  coders keep adding it by hand for reasons nobody has written down. Ask before building.
+
+`worksheet.modifiers` is always empty today, so 95 alone is a visible win.
+
+### 7.4 F4 Athena section splitter — build now, zero gates
+
+**Why not today:** ran out of day.
+
+Deterministic split of the generated note into Athena's paste targets (Chief Complaint,
+HPI/Subjective, ROS, Assessment, Plan), each with its own copy button, content moved
+**unaltered** — sectioning only. Unmapped content lands in a visible "unplaced" block,
+never dropped. Acceptance test is a round-trip: concatenating the blocks reproduces the
+source note exactly, modulo whitespace.
+
+Two requesters (Christa Aug 6, Maura Jul 24), and it kills most of the manual chopping
+*today* without waiting on the Athena sandbox. The one open detail is the exact paste-
+target names (§5 Q6) — build against the labels above and make them configurable.
+
+### 7.5 F7 Athena auto-populate — build the harness, not the integration
+
+**Waiting on:** Athena sandbox access. The encounter-section **write** API is unverified;
+repo knowledge covers the insurance write only. Do not promise behaviour against
+unvalidated payload shapes.
+
+**Buildable now:** extend the mock athenaNet harness and put all protocol knowledge in
+`athena_client.py`, so that when the sandbox lands it is credentials plus payload
+validation rather than new architecture.
+
+### 7.6 F8 longitudinal lab tracker — contract and fixtures now, real labs gated
+
+**Waiting on:** the BAA, the deployment layer, and Athena read scope. Christa's shadow
+spreadsheet is the thing this replaces, and it is *currently* the HIPAA risk — which is an
+argument for building it properly, not quickly.
+
+**Buildable now:** the data contract (`analyte, value, unit, date, source,
+provider_verified`) plus synthetic lab fixtures. **Rail that cannot move:** every extracted
+value needs provider confirmation before entering a persisted series, and analyses are
+review surfaces, never auto-written to the chart.
+
+### 7.7 Automated outbound voice — keep the staff task for the pilot
+
+This is the one item I'd argue against fast-tracking, and it is worth one paragraph
+because "push hard" and this specific feature interact badly.
+
+Phone is currently a **staff task**: the system schedules it, a person calls and logs the
+outcome and minutes into the same contact history. That already gives you the integrated
+list and the metrics. Replacing it with automated calling adds TCPA exposure (prior
+express consent for automated calls to a mobile, per-state recording rules) for very
+little the staff task doesn't already deliver — and §5 Q10 means the practice's consent
+posture is currently *unknown*, so consent cannot be demonstrated.
+
+If you still want it after the pilot: `chase.models.STAFF_TASK` / `SYSTEM_SENDS` are the
+switch, and the state machine does not change. Get counsel review and a recorded-consent
+source first. Automated **SMS** is a different matter — that is already wired via the same
+`Transport` seam as email and only needs the consent answer from Q10.
+
+---
+
+**Not in either lane:** commercial payer rule adjudication (post-validation roadmap), and
+behavioural-health/psychotherapy coding (different CPT domain; revisit at the first paying
+therapist org).
 
 ---
 
