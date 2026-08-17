@@ -12,6 +12,7 @@ from .knowledge.denial_stats import DenialPriors
 from .knowledge.icd10_ccsr import ICD10CCSR
 from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
+from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
 from .llm import LLMClient, describe_client, get_default_client
 from .schemas import (
@@ -35,6 +36,8 @@ class BillingOrchestrator:
         self.preferences = preferences or PreferenceStore()
         # national per-code denial priors (CMS PSPS, bundled)
         self.denial_priors = DenialPriors()
+        # deterministic procedure / add-on candidates (99058 and friends)
+        self.procedures = ProcedureRules()
         self.coding = CodingAgent(self.llm, self.icd10)
         self.integrity = DocumentationIntegrityAgent()
         self.guardrail = ComplianceGuardrailAgent()
@@ -45,6 +48,13 @@ class BillingOrchestrator:
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions = self.coding.run(bundle)
+        # Procedure / add-on candidates come from documented language rather than
+        # clinical inference, so they are proposed deterministically here — and
+        # then go through exactly the same evidence, integrity, guardrail and
+        # denial gates as everything else.
+        proc, proc_audit = self.procedures.propose(
+            bundle, has_em=any(s.kind == CodeKind.EM for s in suggestions))
+        suggestions += proc
         # Authenticate every evidence quote against the actual documentation
         # BEFORE any agent may rely on it; a code whose quotes don't verify
         # loses them and cannot pass the guardrail's evidence gate.
@@ -56,7 +66,7 @@ class BillingOrchestrator:
         pref_audit = apply_preferences(
             suggestions, self.preferences.for_user(user_id), icd10=self.icd10)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
-        audit = ver_audit + pref_audit + audit
+        audit = proc_audit + ver_audit + pref_audit + audit
         suggestions, denial_flags = self.denial.run(
             suggestions, ncci=self.ncci, coverage=self.coverage,
             icd10=self.icd10, pos=self.pos, denial_priors=self.denial_priors,

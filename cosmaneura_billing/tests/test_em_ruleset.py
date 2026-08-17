@@ -34,16 +34,36 @@ def test_result_shows_its_work():
 
 
 def test_documented_time_can_level_above_mdm():
+    """Time above the MDM level is legitimate under 2021+ rules — but only when
+    the minutes are actually in the chart, which `time_is_evidenced` asserts."""
     r = level_office_visit(new_patient=False, problems="low", data="low",
-                           risk="straightforward", total_time_minutes=42)
+                           risk="straightforward", total_time_minutes=42,
+                           time_is_evidenced=True)
     assert r.code == "99215"
+    assert r.pathway == "total_time"
+    assert r.mdm_code == "99213", "the MDM-only level stays visible alongside it"
+    assert r.total_time_minutes == 42
     assert "time" in r.explanation.lower()
+
+
+def test_time_without_a_verified_quote_cannot_inflate():
+    """The safety property behind the pathway. A bare integer from an extraction
+    model is not documentation: before 2026-08-17 it raised the level anyway, so
+    a hallucinated `total_time_minutes` could move 99213 to 99215 with nothing
+    in the chart to defend it."""
+    r = level_office_visit(new_patient=False, problems="low", data="low",
+                           risk="straightforward", total_time_minutes=42,
+                           time_is_evidenced=False)
+    assert r.code == "99213"
+    assert r.pathway == "mdm_2of3"
+    assert r.total_time_minutes is None
 
 
 def test_undocumented_time_never_inflates():
     r = level_office_visit(new_patient=False, problems="low", data="low",
                            risk="straightforward", total_time_minutes=None)
     assert r.code == "99213"
+    assert r.pathway == "mdm_2of3"
 
 
 def test_time_below_mdm_does_not_lower():

@@ -1,6 +1,7 @@
 """Coding agent: proposes codes, always with evidence and never above what's supported."""
 from __future__ import annotations
 
+from ..evidence import verify_quote
 from ..knowledge import em_ruleset
 from ..knowledge.icd10_ccsr import ICD10CCSR
 from ..llm import LLMClient
@@ -33,6 +34,10 @@ FACTS_SCHEMA = {
             "drivers": {"type": "array", "items": {"type": "string"}},
             "quote": {"type": "string"}}},
         "total_time_minutes": {"type": ["integer", "null"]},
+        # A bare integer is not documentation. Time can only raise an E/M level
+        # when the chart says the minutes, so the extractor must return the
+        # verbatim sentence that states them — it is verified before leveling.
+        "total_time_quote": {"type": "string"},
         "vitals": {"type": "object"},
         "family_history_colon_cancer": {"type": ["boolean", "null"]},
         "family_history_quote": {"type": "string"},
@@ -64,6 +69,12 @@ def sanitize_facts(facts: dict) -> dict:
     out["risk"] = out.get("risk") if isinstance(out.get("risk"), dict) else {}
     t = out.get("total_time_minutes")
     out["total_time_minutes"] = t if isinstance(t, int) and not isinstance(t, bool) and t > 0 else None
+    q = out.get("total_time_quote")
+    out["total_time_quote"] = q if isinstance(q, str) and q.strip() else ""
+    # Set only by CodingAgent.run after checking the quote against the chart.
+    # Defaulting to False means any path that skips that check under-levels
+    # rather than trusting an unverified number.
+    out["total_time_evidenced"] = bool(out.get("total_time_evidenced"))
     out["vitals"] = out.get("vitals") if isinstance(out.get("vitals"), dict) else {}
     return out
 
@@ -92,10 +103,10 @@ def _facts_to_em(facts: dict, *, new_patient: bool) -> em_ruleset.EMResult:
     if risk_level not in ("straightforward", "low", "moderate", "high"):
         risk_level = "low"
 
-    total_time = facts["total_time_minutes"]
     return em_ruleset.level_office_visit(
         new_patient=new_patient, problems=problem_level, data=data_level,
-        risk=risk_level, total_time_minutes=total_time,
+        risk=risk_level, total_time_minutes=facts["total_time_minutes"],
+        time_is_evidenced=facts["total_time_evidenced"],
     )
 
 
@@ -119,6 +130,20 @@ class CodingAgent:
         )
         facts = sanitize_facts(facts)
 
+        # Gate the time pathway before anything levels on it. The general
+        # evidence verifier runs later, on suggestions — too late to inform a
+        # leveling decision — so the time quote is checked against the chart
+        # here. No verifiable quote means the number cannot raise a level.
+        facts["total_time_evidenced"] = bool(
+            facts["total_time_minutes"]
+            and facts["total_time_quote"]
+            and verify_quote(facts["total_time_quote"], {
+                "signed_note": bundle.signed_note,
+                "transcript": bundle.transcript,
+                "intake_text": bundle.intake_text,
+            })[0]
+        )
+
         suggestions: list[CodeSuggestion] = []
 
         # --- E/M (rule-based level from extracted facts) -------------------- #
@@ -128,6 +153,11 @@ class CodingAgent:
         if facts.get("risk", {}).get("quote"):
             em_ev.append(Evidence("signed_note", facts["risk"]["quote"],
                                   "supports management risk level"))
+        # When time drove the level, the sentence stating the minutes is the
+        # evidence for it and has to be the first thing a reviewer sees.
+        if em.pathway == "total_time" and facts["total_time_quote"]:
+            em_ev.insert(0, Evidence("signed_note", facts["total_time_quote"],
+                                     f"documents {em.total_time_minutes} min total time"))
         for p in facts.get("problems", [])[:2]:
             if p.get("quote"):
                 em_ev.append(Evidence("intake_text", p["quote"], f"problem: {p['name']}"))
@@ -135,8 +165,13 @@ class CodingAgent:
             kind=CodeKind.EM, code=em.code, label=em.label,
             disposition=Disposition.REVIEW, evidence=em_ev,
             rationale=f"{em.explanation}. Elements -> {em.elements}.",
-            notes=[f"MDM ceiling for this documentation: "
-                   f"{em_ruleset.max_defensible_level(new_patient=new_patient, **em.elements)}"],
+            notes=[
+                f"MDM ceiling for this documentation: "
+                f"{em_ruleset.max_defensible_level(new_patient=new_patient, **em.elements)}",
+                f"em_pathway:{em.pathway}",
+                f"em_mdm_code:{em.mdm_code}",
+            ] + ([f"em_total_time_minutes:{em.total_time_minutes}"]
+                 if em.total_time_minutes else []),
         ))
 
         # --- diagnoses (LLM concepts -> authoritative ICD-10 lookup) -------- #
