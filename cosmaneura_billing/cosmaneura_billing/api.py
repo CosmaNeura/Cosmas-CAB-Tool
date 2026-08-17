@@ -204,6 +204,25 @@ class CompletenessRequest(BaseModel):
     overrides: Optional[dict[str, str]] = None
 
 
+class ChaseDetectRequest(BaseModel):
+    today: str
+    # Raw CoverageSnapshot fields — the adapter boundary standing in for athenaNet.
+    snapshots: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChaseActionRequest(BaseModel):
+    action: str                      # release|suppress|assign|log_attempt|submitted|verify
+    actor: str = ""                  # the person taking it; required by most actions
+    reason: str = ""
+    channel: Optional[str] = None
+    template_id: Optional[str] = None
+    outcome: Optional[str] = None
+    minutes_spent: float = 0.0
+    note: str = ""
+    athena_write_id: str = ""
+    eligibility_status: str = ""
+
+
 class DecisionModel(BaseModel):
     kind: str
     engine_code: Optional[str] = None
@@ -406,6 +425,115 @@ def payer_denials(state: str = "NH") -> dict[str, Any]:
                 "denialRate": r.denial_rate, "topReason": r.top_reason or None,
                 "topReasonShare": r.top_reason_share,
             } for r in rows]}
+
+
+# --------------------------------------------------------------------------- #
+# Insurance-data chase (F9). Demo-scoped: the worklist is an in-memory singleton
+# seeded from synthetic snapshots, because real coverage state needs the Athena
+# adapter and real messaging needs the deployment layer and the BAA. The state
+# machine, the gates and the metrics are the same code either way.
+# --------------------------------------------------------------------------- #
+@lru_cache(maxsize=1)
+def get_chase_context() -> dict[str, Any]:
+    from .chase import ApprovalMode, ChasePolicy, SequenceRunner, Worklist
+    from .direct_contract import DirectContractList
+
+    policy = ChasePolicy(
+        practice_name=os.environ.get("COSMANEURA_PRACTICE_NAME", "your care team"),
+        upload_url=os.environ.get("COSMANEURA_UPLOAD_URL",
+                                  "https://example.invalid/insurance"),
+        approval_mode=ApprovalMode(os.environ.get(
+            "COSMANEURA_CHASE_APPROVAL", "per_policy")),
+    )
+    return {
+        "worklist": Worklist(),
+        "policy": policy,
+        # The default transport records without contacting anyone; real messaging
+        # is gated on the deployment layer and the BAA.
+        "runner": SequenceRunner(policy=policy),
+        "roster": DirectContractList(),
+    }
+
+
+@app.get("/api/chase/worklist")
+def chase_worklist(bucket: str = "", assignee: str = "",
+                   needs_person: bool = False) -> dict[str, Any]:
+    """The master list: one integrated view over missing, expired and eligibility."""
+    ctx = get_chase_context()
+    return {
+        **ctx["worklist"].to_dict(bucket=bucket, assignee=assignee,
+                                  needs_person=needs_person),
+        "policy": ctx["policy"].to_dict(),
+    }
+
+
+@app.post("/api/chase/detect")
+def chase_detect(req: ChaseDetectRequest) -> dict[str, Any]:
+    """Run detection over posted coverage snapshots and merge into the worklist.
+
+    Re-running is safe: an open row for the same patient and trigger is refreshed
+    rather than duplicated, so daily detection does not inflate the backlog.
+    """
+    from .chase import CoverageSnapshot, detect_all
+
+    ctx = get_chase_context()
+    snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
+    found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
+    ctx["worklist"].extend(found)
+    return {"checked": len(snapshots), "detected": len(found),
+            **ctx["worklist"].to_dict()}
+
+
+@app.get("/api/chase/metrics")
+def chase_metrics(baseline_minutes_per_card: Optional[float] = None,
+                  baseline_claims_held_monthly: Optional[int] = None) -> dict[str, Any]:
+    from .chase.metrics import baseline_comparison
+
+    return baseline_comparison(
+        get_chase_context()["worklist"].items.values(),
+        baseline_minutes_per_card=baseline_minutes_per_card,
+        baseline_claims_held_monthly=baseline_claims_held_monthly)
+
+
+@app.post("/api/chase/{chase_id}/action")
+def chase_action(chase_id: str, req: ChaseActionRequest) -> dict[str, Any]:
+    """Staff actions on one row.
+
+    `release` and `suppress` are the human decisions; `log_attempt` is how a
+    phone call enters the contact history; `submitted` and `verify` are the
+    completion loop, and only `verify` closes a row.
+    """
+    from .chase import Channel
+
+    ctx = get_chase_context()
+    item = ctx["worklist"].get(chase_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    runner, action = ctx["runner"], req.action
+    try:
+        if action == "release":
+            runner.release(item, by=req.actor, reason=req.reason)
+        elif action == "suppress":
+            runner.suppress(item, by=req.actor, reason=req.reason)
+        elif action == "assign":
+            ctx["worklist"].assign(chase_id, to=req.actor)
+        elif action == "log_attempt":
+            runner.log_staff_attempt(
+                item, channel=Channel(req.channel or "phone"),
+                template_id=req.template_id or "phone.call", actor=req.actor,
+                outcome=req.outcome or "reached",
+                minutes_spent=req.minutes_spent, note=req.note)
+        elif action == "submitted":
+            runner.mark_submitted(item, note=req.note)
+        elif action == "verify":
+            runner.close_verified(item, verified_by=req.actor,
+                                  athena_write_id=req.athena_write_id,
+                                  eligibility_status=req.eligibility_status)
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return item.to_dict()
 
 
 @app.get("/api/feedback/summary")

@@ -115,6 +115,65 @@ Standard Data File directory, or set `CPT_AUTO_FETCH=0` to disable fetching.
 Never commit descriptor files, the downloaded ZIP, or the AMA key/secret —
 CPT content stays under your license, outside the repository.
 
+## Insurance-data chase (F9)
+
+The billers' #1 stated pain: 300–500 claims a month held for missing insurance
+information. The validated finding is that the bottleneck is **patient
+submission, not OCR** — card capture already works. What was missing is the
+system that gets the card *to* capture: a master worklist, worked across email,
+SMS, portal and phone, by the staff whose whole job this is (not the coders).
+
+```bash
+python demo_chase.py    # end-to-end, synthetic patients, nothing leaves the building
+```
+
+```
+GET  /api/chase/worklist            the master list (filter by bucket/assignee/needs_person)
+POST /api/chase/detect              run detection over coverage snapshots
+GET  /api/chase/metrics             outstanding, touches/card, minutes/card, time-to-card
+POST /api/chase/{id}/action         release | suppress | assign | log_attempt | submitted | verify
+```
+
+One list, three views — missing, expired, eligibility — matching the buckets
+staff already use. Priority comes from appointment proximity: today's visit
+outranks next month's, and a visit that already happened outranks both, because
+the claim is already being held.
+
+**Automated, with a human behind it.** A named person approves the *policy*
+once; the system then works the list unattended and escalates what it cannot
+handle (`COSMANEURA_CHASE_APPROVAL=per_message` switches to approving every
+touch). Cadence, channel order, templates, quiet hours and max touches are all
+configuration — they are the open questions the staff interview will settle, so
+they are values, not code.
+
+What the code guarantees, and tests:
+
+- Nothing is sent under a policy no named human approved.
+- A direct-contract patient — or one whose status is unknown — never enters an
+  automated sequence. The row goes to a person; it never silently disappears.
+- No outbound message body contains insurance data. There is no template
+  placeholder that could carry a member id, and the check runs at configuration
+  time as well as send time.
+- SMS and phone require recorded consent, re-checked at every touch, so consent
+  withdrawn between touches stops the next message.
+- **Phone is a staff task, never an automated call.** The system schedules it,
+  a person makes it and logs the outcome and minutes into the same contact
+  history — which is what makes phone work visible in the metrics.
+- A row closes only on a **verified** card plus its write, never on a patient's
+  submission.
+
+### The direct-contract gate (F3)
+
+```python
+from cosmaneura_billing.direct_contract import guard_patient_charge, chase_routing
+```
+
+Grace's ask: never charge a direct-contract patient a self-pay fee. Two callers,
+two policies — charging **hard-stops** (raises), chasing **routes to review**.
+Both fail closed: a missing or unreadable list makes every answer "unknown", and
+unknown blocks. Point it at the practice's list with
+`COSMANEURA_DIRECT_CONTRACT_LIST` (CSV with a `patient_ref` column, or JSON).
+
 ## What's in the box
 
 ```
@@ -124,7 +183,15 @@ cosmaneura_billing/
   orchestrator.py            runs the agents and assembles both role views
   billing_tab.py             provider billing-tab adapter (F1) — a view, never a second engine
   completeness.py            note rule packs + attestation block (F2)
+  direct_contract.py         the F3 gate: hard-stop for charges, review for chases
   guardrail_fuzz.py          adversarial cases behind the anti-inflation invariant
+  chase/                     insurance-data chase (F9)
+    models.py                CoverageSnapshot (the athenaNet boundary), ChaseItem, states
+    detector.py              F9a triggers + appointment-proximity priority
+    policy.py                cadence/channels/templates as config; the PHI guard
+    sequence.py              approval-gated state machine; phone = staff task
+    worklist.py              one integrated list, three bucket views
+    metrics.py               outstanding, touches/card, minutes/card, time-to-card
   knowledge/
     em_ruleset.py            2021+ E/M leveling (MDM grid + total time), rule-based and explainable
     procedures.py            procedure/add-on candidates from documented language (CPT 99058)
@@ -137,7 +204,8 @@ cosmaneura_billing/
     feedback.py              emits the typed nudges (patient-benefit framed)
   data/icd10_ccsr_subset.csv authentic CMS ICD-10-CM rows for the demo
 demo_visit.py                the GI-bleed sample encounter
-run_demo.py                  end-to-end demo
+run_demo.py                  end-to-end billing demo
+demo_chase.py                end-to-end insurance-chase demo (for the staff interview)
 prove_no_upcode.py           guardrail invariant test
 DESIGN.md                    architecture + the design decisions and why
 ```
