@@ -13,10 +13,10 @@ from .knowledge.icd10_ccsr import ICD10CCSR
 from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
 from .preferences import PreferenceStore, apply_preferences
-from .llm import LLMClient, get_default_client
+from .llm import LLMClient, describe_client, get_default_client
 from .schemas import (
-    BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Disposition,
-    FeedbackKind, ProviderCard, VisitBundle,
+    BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
+    Disposition, FeedbackKind, ProviderCard, VisitBundle,
 )
 
 
@@ -114,4 +114,25 @@ class BillingOrchestrator:
         return BillingResult(
             provider_card=card, biller_worksheet=worksheet,
             feedback_events=events, revenue_integrity_note=integrity_note,
+            inference=describe_client(self.llm),
+            degraded=self._degradation(facts),
+        )
+
+    def _degradation(self, facts: dict) -> Degradation | None:
+        """Say when a run wasn't a real coding attempt.
+
+        The offline model only covers the demo encounter, so on anything else it
+        extracts nothing and the pipeline correctly captures nothing. That is the
+        right output for the wrong reason, and without this a reviewer sees an
+        empty claim with no explanation.
+        """
+        if getattr(self.llm, "mode", None) != "mock":
+            return None
+        if facts.get("problems"):
+            return None
+        return Degradation(
+            reason="offline_model_unsupported_encounter",
+            detail=("Running on the offline demo model, which only codes the bundled "
+                    "demo encounter. No codes were proposed for this documentation — "
+                    "set ANTHROPIC_API_KEY for real extraction."),
         )

@@ -172,6 +172,24 @@ export default function CoderReview({ encounterId, live }) {
     );
   }
 
+  // UI SEAM (2026-08-17): the engine reports `degraded` when a run wasn't a real
+  // coding attempt — today that means the offline demo model doesn't cover this
+  // encounter. Without this the reviewer sees an empty claim and concludes the
+  // engine is broken. Deliberately unstyled beyond the minimum; restyle freely,
+  // but keep the reason visible whenever `engine.degraded` is set.
+  if (engine.degraded) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+        <p className="text-sm font-medium text-amber-900">No codes proposed for this encounter</p>
+        <p className="mt-1 text-sm leading-relaxed text-amber-800">{engine.degraded.detail}</p>
+        <p className="mt-2 text-xs text-amber-700">
+          Encounter {engine.encounterId} · {engine.inferenceMode} mode
+          {engine.inferenceModel ? ` (${engine.inferenceModel})` : ""}
+        </p>
+      </div>
+    );
+  }
+
   const set = (key, val) => setDec((d) => ({ ...d, [key]: val }));
   const captured = [
     ...(engine.em ? [{ k: "EM", id: "em", row: engine.em }] : []),

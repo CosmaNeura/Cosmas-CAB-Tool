@@ -17,7 +17,12 @@ Hardening in the production adapter (billing decisions ride on this):
     a malformed or off-shape reply raises instead of silently flowing into the
     coding agents as empty ``.get()`` defaults;
   * retries with exponential backoff on rate limits (429), server errors (5xx),
-    overloaded responses (529), network failures, and unparseable output.
+    overloaded responses (529), network failures, and unparseable output;
+  * terminal stop reasons (``refusal``, ``max_tokens``) are diagnosed and raised
+    immediately instead of being retried into a generic failure.
+
+Both clients report ``mode`` and ``model_label`` so the API can tell a caller
+which inference path produced a claim — see ``describe_client``.
 
 Swap the backend in one place; every agent depends only on ``LLMClient.complete_json``.
 """
@@ -30,11 +35,34 @@ import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
+# Current-generation default. Note the interaction with max_tokens: on this model
+# family adaptive thinking is on unless disabled, and max_tokens caps thinking
+# *plus* the tool output together — so the budget has to cover both.
+DEFAULT_MODEL = "claude-opus-5"
+
+# Extraction over a full visit (intake + transcript + signed note) produces a
+# sizeable facts object, and thinking shares this budget. The previous 1500
+# default was sized for output alone: with thinking on it truncates before the
+# emit_result tool call completes, which surfaces as a missing tool_use block —
+# indistinguishable from a malformed reply, and retried five times before
+# failing. Size for both, and diagnose truncation explicitly (see _extract).
+DEFAULT_MAX_TOKENS = 8000
+
+
+class TerminalLLMError(RuntimeError):
+    """A failure a re-ask cannot fix (refusal, exhausted token budget).
+
+    Deliberately not a ``ValueError`` subclass: the retry loop treats those as
+    "malformed, ask again", which is exactly the wrong response here.
+    """
+
 
 class LLMClient(Protocol):
+    mode: str
+
     def complete_json(
         self, system: str, user: str, *,
-        max_tokens: int = 1500, schema: dict[str, Any] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS, schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the model's response parsed as a JSON object (schema-shaped
         when ``schema`` is given)."""
@@ -85,13 +113,20 @@ class AnthropicLLM:
     """
 
     RETRYABLE = {408, 429, 500, 502, 503, 504, 529}
+    mode = "anthropic"
 
     def __init__(self, model: str | None = None, api_key: str | None = None,
-                 max_retries: int = 4, timeout: int = 120):
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+                 max_retries: int = 4, timeout: int = 120,
+                 effort: str | None = None):
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.max_retries = max_retries
         self.timeout = timeout
+        self.effort = effort or os.environ.get("ANTHROPIC_EFFORT", "high")
+
+    @property
+    def model_label(self) -> str:
+        return self.model
 
     # -- one HTTP round trip ------------------------------------------------ #
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -110,13 +145,20 @@ class AnthropicLLM:
 
     def complete_json(
         self, system: str, user: str, *,
-        max_tokens: int = 1500, schema: dict[str, Any] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS, schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
+            # Thinking is left on deliberately. Disabling it on this model family
+            # can make the model write a tool call as plain text instead of a
+            # tool_use block — for a forced-tool-use extractor that is a silent
+            # wrong answer, which is the one failure mode this pipeline must not
+            # have. Depth is controlled by effort instead.
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": self.effort},
         }
         if schema is not None:
             body["tools"] = [{
@@ -147,6 +189,10 @@ class AnthropicLLM:
                 last_err = e
             except (urllib.error.URLError, TimeoutError) as e:
                 last_err = e
+            except TerminalLLMError:
+                # a refusal or a blown token budget will not fix itself on a
+                # re-ask; fail closed with the real reason
+                raise
             except (json.JSONDecodeError, ValueError) as e:
                 # malformed / off-schema output — re-ask rather than propagate
                 last_err = e
@@ -157,6 +203,23 @@ class AnthropicLLM:
     @staticmethod
     def _extract(payload: dict[str, Any], schema: dict[str, Any] | None) -> dict[str, Any]:
         blocks = payload.get("content", [])
+        # Two stop reasons return HTTP 200 with unusable content. Naming them is
+        # the difference between an actionable error and five wasted retries
+        # ending in "no valid response".
+        stop = payload.get("stop_reason")
+        if stop == "refusal":
+            detail = (payload.get("stop_details") or {}).get("category") or "unspecified"
+            raise TerminalLLMError(
+                f"model declined the request (refusal category: {detail}). "
+                "Clinical documentation can trip safety classifiers; review the "
+                "note or route this encounter to manual coding."
+            )
+        if stop == "max_tokens":
+            raise TerminalLLMError(
+                "response hit max_tokens before the result was complete. Thinking "
+                "and output share this budget — raise max_tokens (or lower "
+                "ANTHROPIC_EFFORT) rather than retrying."
+            )
         if schema is not None:
             for b in blocks:
                 if b.get("type") == "tool_use" and b.get("name") == "emit_result":
@@ -185,17 +248,46 @@ class MockLLM:
     evidence verifier (``evidence.py``) checks quotes against the actual text —
     exactly as it will for real model output. Real reasoning is delegated to
     ``AnthropicLLM`` in production.
+
+    **It answers only for the encounter it models.** Returning these facts for
+    any other documentation would be fabrication: the quotes belong to a
+    different patient. The evidence verifier would strip them downstream, but
+    relying on that means the mock hands the pipeline invented findings and
+    trusts a later stage to catch it — and it makes every non-demo encounter
+    look like a GI bleed to anything reading the extraction directly. Unknown
+    documentation returns ``{}``, and ``supports()`` lets callers say why the
+    result is empty instead of rendering a blank claim.
     """
+
+    mode = "mock"
+    model_label = "offline-demo"
+
+    # A verbatim span from the demo intake. If it isn't in the documentation,
+    # this isn't the encounter these canned payloads describe.
+    SIGNATURE = "when i eat spicy food, i poop blood"
+
+    # Tasks whose canned payload asserts findings about a specific patient.
+    # These are the ones that must not answer for someone else's documentation.
+    # (`leading_questions` is excluded on purpose: it returns generic follow-up
+    # prompts, not claims about the patient in front of you.)
+    ENCOUNTER_SPECIFIC = frozenset({"extract_clinical_facts", "propose_diagnoses"})
+
+    @classmethod
+    def supports(cls, documentation: str) -> bool:
+        """True when ``documentation`` is the encounter this mock actually models."""
+        return cls.SIGNATURE in " ".join((documentation or "").lower().split())
 
     def complete_json(
         self, system: str, user: str, *,
-        max_tokens: int = 1500, schema: dict[str, Any] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS, schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         tag = ""
         for line in user.splitlines():
             if line.strip().startswith("TASK:"):
                 tag = line.split("TASK:", 1)[1].strip()
                 break
+        if tag in self.ENCOUNTER_SPECIFIC and not self.supports(user):
+            return {}
         handler = getattr(self, f"_{tag}", None)
         if handler is None:
             return {}
@@ -264,3 +356,16 @@ def get_default_client() -> LLMClient:
     if os.environ.get("ANTHROPIC_API_KEY"):
         return AnthropicLLM()
     return MockLLM()
+
+
+def describe_client(client: LLMClient) -> dict[str, Any]:
+    """Which inference path is live, for /api/health and every pipeline response.
+
+    A stored claim has to be able to say what produced it: an offline demo run
+    and a real-inference run are not the same evidence, and a reviewer looking
+    at an empty result needs to know which one they got.
+    """
+    return {
+        "inferenceMode": getattr(client, "mode", "unknown"),
+        "inferenceModel": getattr(client, "model_label", None),
+    }

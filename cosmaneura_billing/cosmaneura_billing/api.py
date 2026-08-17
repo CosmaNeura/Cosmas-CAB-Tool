@@ -30,6 +30,7 @@ from . import coder_feedback
 from .coder_feedback import EncounterFeedback, FeedbackStore
 from .corpus.acibench import load_acibench
 from .corpus.demo import SAMPLE_VISIT
+from .llm import describe_client
 from .orchestrator import BillingOrchestrator
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
 
@@ -136,7 +137,14 @@ def _billing_json(bundle: VisitBundle, result: BillingResult) -> dict[str, Any]:
                       "tone": e.tone, "patientBenefit": e.patient_benefit}
                      for e in result.feedback_events],
         "revenueIntegrityNote": result.revenue_integrity_note,
+        **result.inference,
+        "degraded": _degraded_json(result),
     }
+
+
+def _degraded_json(result: BillingResult) -> Optional[dict[str, str]]:
+    d = result.degraded
+    return {"reason": d.reason, "detail": d.detail} if d else None
 
 
 def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, Any]:
@@ -163,6 +171,8 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, An
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
+        **result.inference,
+        "degraded": _degraded_json(result),
     }
 
 
@@ -226,6 +236,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "engineVersion": _ENGINE_VERSION,
+        **describe_client(orch.llm),
         "icd10Codes": orch.icd10.size,
         "currentFyLoaded": orch.icd10.has_current_fy,
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),

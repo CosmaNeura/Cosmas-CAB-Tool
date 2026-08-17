@@ -157,6 +157,18 @@ class BillerWorksheet:
 
 
 @dataclass
+class Degradation:
+    """Why a run produced less than it should have.
+
+    An empty result and a genuinely uncodeable encounter look identical to a
+    reviewer unless the pipeline says which one happened. This carries that
+    reason to every surface so a blank claim is never presented as a finding.
+    """
+    reason: str                  # machine-readable, e.g. "offline_model_unsupported_encounter"
+    detail: str                  # one sentence a human can act on
+
+
+@dataclass
 class BillingResult:
     """The complete output of one pipeline run."""
     provider_card: ProviderCard
@@ -164,3 +176,7 @@ class BillingResult:
     feedback_events: list[FeedbackEvent] = field(default_factory=list)
     # captured vs. defensibly-supported, in code terms (revenue is downstream of this)
     revenue_integrity_note: str = ""
+    # which inference path ran: {"inferenceMode": ..., "inferenceModel": ...}
+    inference: dict = field(default_factory=dict)
+    # set when the run was not a real coding attempt (see Degradation)
+    degraded: Optional[Degradation] = None
