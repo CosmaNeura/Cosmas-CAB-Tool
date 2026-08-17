@@ -19,7 +19,9 @@ vector = ["numpy>=1.24"]
 corpus = ["pandas>=2.0", "pyarrow>=14"]
 # the demo/pilot API service (cosmaneura_billing.api)
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
-dev = ["pytest>=8", "numpy>=1.24", "fastapi>=0.110", "uvicorn>=0.30", "httpx>=0.27"]
+# durable chase / feedback persistence in the practice's PostgreSQL server
+postgres = ["psycopg[binary]>=3.2,<4"]
+dev = ["pytest>=8", "numpy>=1.24", "fastapi>=0.110", "uvicorn>=0.30", "httpx>=0.27", "psycopg[binary]>=3.2,<4"]
 
 [tool.setuptools.packages.find]
 include = ["cosmaneura_billing*"]

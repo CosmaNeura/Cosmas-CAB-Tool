@@ -20,8 +20,10 @@ SNAPSHOTS = [
 
 
 @pytest.fixture(autouse=True)
-def _fresh_context():
+def _fresh_context(monkeypatch):
     """Each test gets an empty worklist — the demo context is a cached singleton."""
+    monkeypatch.setenv("COSMANEURA_ENV", "test")
+    monkeypatch.setenv("COSMANEURA_CHASE_STORE", "memory")
     get_chase_context.cache_clear()
     yield
     get_chase_context.cache_clear()

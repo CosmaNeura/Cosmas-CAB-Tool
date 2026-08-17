@@ -134,6 +134,23 @@ GET  /api/chase/metrics             outstanding, touches/card, minutes/card, tim
 POST /api/chase/{id}/action         release | suppress | assign | log_attempt | submitted | verify
 ```
 
+The demo and tests default to an in-memory worklist. Production fails closed
+unless the worklist is backed by PostgreSQL, so replicas cannot diverge and a
+restart cannot discard contact history:
+
+```bash
+psql "$DATABASE_URL" -f migrations/002_chase_persistence.up.sql
+export COSMANEURA_ENV=production
+export COSMANEURA_CHASE_STORE=postgres
+export COSMANEURA_PRACTICE_ID=<stable-practice-id>
+# DATABASE_URL must use TLS in the deployed environment.
+```
+
+`COSMANEURA_CHASE_DATABASE_URL` may be used instead when chase data has a
+dedicated database. The store scopes every primary key, foreign key, query, and
+transaction by the configured practice. The default transport remains inert;
+durable storage alone does not authorize patient contact.
+
 One list, three views — missing, expired, eligibility — matching the buckets
 staff already use. Priority comes from appointment proximity: today's visit
 outranks next month's, and a visit that already happened outranks both, because

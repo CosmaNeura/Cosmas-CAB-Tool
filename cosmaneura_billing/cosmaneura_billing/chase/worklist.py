@@ -13,7 +13,7 @@ reason. Nothing falls off silently — that is the failure the current process h
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .models import TERMINAL, ChaseItem, State, Trigger
 
@@ -56,6 +56,23 @@ class Worklist:
 
     def get(self, chase_id: str) -> Optional[ChaseItem]:
         return next((i for i in self.items.values() if i.chase_id == chase_id), None)
+
+    def mutate(
+        self, chase_id: str, change: Callable[[ChaseItem], Any],
+    ) -> Optional[ChaseItem]:
+        """Apply one state transition.
+
+        The in-memory implementation needs no transaction. The Postgres
+        implementation exposes the same method while holding a row lock, so API
+        handlers do not have a read/mutate/write race between replicas.
+        """
+        item = self.get(chase_id)
+        if item is not None:
+            change(item)
+        return item
+
+    def all_items(self) -> list[ChaseItem]:
+        return list(self.items.values())
 
     # ------------------------------------------------------------------ views #
     def rows(

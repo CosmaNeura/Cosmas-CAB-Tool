@@ -1,8 +1,8 @@
 # Database migrations
 
-You don't have Postgres yet, so this is written to stand up cleanly when you add
-it. The only thing the platform needs a database for is the dialogue-RAG vector
-store (the billing engine itself is stateless). These migrations create that.
+These migrations provision the platform-owned PostgreSQL state. They are plain,
+ordered SQL so they can run from `psql` now and move behind a migration runner
+without rewriting the schema later.
 
 ## What it provisions
 
@@ -11,10 +11,16 @@ store (the billing engine itself is stateless). These migrations create that.
 cosine index and a GIN index on `meta`. The table and operators line up exactly
 with `cosmaneura_billing/vectorstore.py::PgVectorStore`.
 
+`002_chase_persistence` creates practice-scoped chase items, append-only contact
+attempts, pending staff tasks, and resolutions. Composite keys and foreign keys
+include `practice_id`; the application also applies that scope to every query.
+The chase migration does not require pgvector and may be run independently.
+
 ## Requirements
 
 - PostgreSQL 14 or newer.
-- The `pgvector` extension enabled on the server (>= 0.7.0 for HNSW).
+- The `pgvector` extension enabled on the server (>= 0.7.0 for HNSW) only when
+  running `001_init_pgvector`.
 
 ### Azure Database for PostgreSQL — Flexible Server (your choice)
 
@@ -59,9 +65,15 @@ in the up-migration, re-embed the corpus, and recreate the index.
 
 Plain psql:
 
-    psql "$DATABASE_URL" -f migrations/001_init_pgvector.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_chase_persistence.up.sql
     # rollback:
-    psql "$DATABASE_URL" -f migrations/001_init_pgvector.down.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_chase_persistence.down.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.down.sql
+
+The down migrations are destructive and are intended only for an explicitly
+selected disposable database or a reviewed rollback. `002` is safe to apply
+before `001` when the chase store is needed before the dialogue index.
 
 Then load the corpus (see scripts/index_dialogues.py):
 

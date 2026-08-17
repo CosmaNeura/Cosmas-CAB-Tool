@@ -10,6 +10,7 @@ sequenced. A direct-contract patient — or one whose status is unknown — goes
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Callable, Iterable, Optional
 
 from ..direct_contract import DirectContractList, chase_routing
@@ -73,8 +74,14 @@ def detect(
     detected_at = (now or (lambda: today))()
     check, route = chase_routing(snap.patient_ref, roster=roster, now=now or (lambda: today))
 
+    stable_id = hashlib.sha256(
+        f"{snap.patient_ref}\0{trigger.value}".encode("utf-8")
+    ).hexdigest()[:24]
     item = ChaseItem(
-        chase_id=chase_id or f"chase-{snap.patient_ref}",
+        # Opaque and stable for this patient/problem pair.  The former
+        # date-plus-batch-index id collided whenever two detector batches ran
+        # on the same day, which is not a usable database key.
+        chase_id=chase_id or f"chase-{stable_id}",
         patient_ref=snap.patient_ref,
         trigger=trigger,
         bucket=TRIGGER_BUCKET[trigger],
@@ -131,8 +138,8 @@ def detect_all(
 ) -> list[ChaseItem]:
     """Run the detector over a batch, highest priority first."""
     items = []
-    for i, snap in enumerate(snapshots):
-        item = detect(snap, today=today, chase_id=f"chase-{today}-{i:04d}", **kw)
+    for snap in snapshots:
+        item = detect(snap, today=today, **kw)
         if item is not None:
             items.append(item)
     return sorted(items, key=lambda x: (-x.priority, x.patient_ref))

@@ -148,6 +148,24 @@ class Attempt:
             "minutes_spent": self.minutes_spent, "note": self.note,
         }
 
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "Attempt":
+        """Rehydrate one persisted contact-log row.
+
+        Persistence adapters deliberately go through this constructor instead
+        of assigning raw database values to the dataclass.  Invalid enum values
+        therefore fail closed at the storage boundary.
+        """
+        return cls(
+            channel=Channel(value["channel"]),
+            template_id=str(value["template_id"]),
+            at=str(value["at"]),
+            actor=str(value.get("actor") or "system"),
+            outcome=str(value.get("outcome") or "sent"),
+            minutes_spent=float(value.get("minutes_spent") or 0.0),
+            note=str(value.get("note") or ""),
+        )
+
 
 @dataclass
 class ChaseItem:
@@ -205,3 +223,26 @@ class ChaseItem:
             "closed_at": self.closed_at,
             "open": self.is_open,
         }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ChaseItem":
+        """Rehydrate a chase row without trusting derived client fields."""
+        return cls(
+            chase_id=str(value["chase_id"]),
+            patient_ref=str(value["patient_ref"]),
+            trigger=Trigger(value["trigger"]),
+            detected_at=str(value["detected_at"]),
+            appointment_at=str(value.get("appointment_at") or ""),
+            state=State(value.get("state") or State.DETECTED.value),
+            priority=int(value.get("priority") or 0),
+            bucket=str(value.get("bucket") or "missing"),
+            direct_contract=dict(value.get("direct_contract") or {}),
+            review_reason=str(value.get("review_reason") or ""),
+            assignee=str(value.get("assignee") or ""),
+            attempts=[Attempt.from_dict(row) for row in value.get("attempts", [])],
+            pending_task=(dict(value["pending_task"])
+                          if value.get("pending_task") is not None else None),
+            resolution=(dict(value["resolution"])
+                        if value.get("resolution") is not None else None),
+            closed_at=str(value.get("closed_at") or ""),
+        )

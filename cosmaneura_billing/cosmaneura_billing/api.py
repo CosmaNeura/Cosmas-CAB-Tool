@@ -428,14 +428,14 @@ def payer_denials(state: str = "NH") -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Insurance-data chase (F9). Demo-scoped: the worklist is an in-memory singleton
-# seeded from synthetic snapshots, because real coverage state needs the Athena
-# adapter and real messaging needs the deployment layer and the BAA. The state
-# machine, the gates and the metrics are the same code either way.
+# Insurance-data chase (F9). The state machine remains in-process, but every row
+# mutation goes through a configured store. Production rejects the in-memory
+# store, preventing replica divergence and restart data loss before messaging is
+# enabled. The default transport remains inert until P1-P4 and the BAA land.
 # --------------------------------------------------------------------------- #
 @lru_cache(maxsize=1)
 def get_chase_context() -> dict[str, Any]:
-    from .chase import ApprovalMode, ChasePolicy, SequenceRunner, Worklist
+    from .chase import ApprovalMode, ChasePolicy, SequenceRunner, chase_store_from_env
     from .direct_contract import DirectContractList
 
     policy = ChasePolicy(
@@ -446,7 +446,9 @@ def get_chase_context() -> dict[str, Any]:
             "COSMANEURA_CHASE_APPROVAL", "per_policy")),
     )
     return {
-        "worklist": Worklist(),
+        # This object is safe to cache: PostgresChaseStore carries only immutable
+        # connection configuration. Chase rows themselves live in PostgreSQL.
+        "store": chase_store_from_env(),
         "policy": policy,
         # The default transport records without contacting anyone; real messaging
         # is gated on the deployment layer and the BAA.
@@ -461,8 +463,8 @@ def chase_worklist(bucket: str = "", assignee: str = "",
     """The master list: one integrated view over missing, expired and eligibility."""
     ctx = get_chase_context()
     return {
-        **ctx["worklist"].to_dict(bucket=bucket, assignee=assignee,
-                                  needs_person=needs_person),
+        **ctx["store"].to_dict(bucket=bucket, assignee=assignee,
+                               needs_person=needs_person),
         "policy": ctx["policy"].to_dict(),
     }
 
@@ -479,9 +481,9 @@ def chase_detect(req: ChaseDetectRequest) -> dict[str, Any]:
     ctx = get_chase_context()
     snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
     found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
-    ctx["worklist"].extend(found)
+    ctx["store"].extend(found)
     return {"checked": len(snapshots), "detected": len(found),
-            **ctx["worklist"].to_dict()}
+            **ctx["store"].to_dict()}
 
 
 @app.get("/api/chase/metrics")
@@ -490,7 +492,7 @@ def chase_metrics(baseline_minutes_per_card: Optional[float] = None,
     from .chase.metrics import baseline_comparison
 
     return baseline_comparison(
-        get_chase_context()["worklist"].items.values(),
+        get_chase_context()["store"].all_items(),
         baseline_minutes_per_card=baseline_minutes_per_card,
         baseline_claims_held_monthly=baseline_claims_held_monthly)
 
@@ -506,17 +508,15 @@ def chase_action(chase_id: str, req: ChaseActionRequest) -> dict[str, Any]:
     from .chase import Channel
 
     ctx = get_chase_context()
-    item = ctx["worklist"].get(chase_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
-    runner, action = ctx["runner"], req.action
-    try:
+    store, runner, action = ctx["store"], ctx["runner"], req.action
+
+    def transition(item):
         if action == "release":
             runner.release(item, by=req.actor, reason=req.reason)
         elif action == "suppress":
             runner.suppress(item, by=req.actor, reason=req.reason)
         elif action == "assign":
-            ctx["worklist"].assign(chase_id, to=req.actor)
+            item.assignee = req.actor
         elif action == "log_attempt":
             runner.log_staff_attempt(
                 item, channel=Channel(req.channel or "phone"),
@@ -531,8 +531,13 @@ def chase_action(chase_id: str, req: ChaseActionRequest) -> dict[str, Any]:
                                   eligibility_status=req.eligibility_status)
         else:
             raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
+
+    try:
+        item = store.mutate(chase_id, transition)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
     return item.to_dict()
 
 
