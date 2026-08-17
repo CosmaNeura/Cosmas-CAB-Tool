@@ -28,6 +28,10 @@ jobs:
         working-directory: cosmaneura_billing
         run: python run_demo.py
 
+      - name: Insurance-chase demo smoke test
+        working-directory: cosmaneura_billing
+        run: python demo_chase.py
+
   frontend:
     runs-on: ubuntu-latest
     steps:
