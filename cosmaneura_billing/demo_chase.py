@@ -73,8 +73,9 @@ SNAPS = {p.patient_ref: p for p in PATIENTS}
 SENT: list[dict] = []
 
 
-def transport(*, channel: Channel, patient_ref: str, subject: str, body: str) -> str:
-    SENT.append({"channel": channel.value, "to": patient_ref,
+def transport(*, channel: Channel, recipient: str, subject: str, body: str,
+              operation_id: str = "") -> str:
+    SENT.append({"channel": channel.value, "to": recipient,
                  "subject": subject, "body": body})
     return "sent"
 
@@ -149,7 +150,7 @@ def main() -> None:
 
     rule("5. What actually went out — and what it did not contain")
     print(f"{len(SENT)} messages sent across "
-          f"{len({m['to'] for m in SENT})} patients\n")
+          f"{len({m['to'] for m in SENT})} contact destinations\n")
     example = SENT[0]
     print(f"  to {example['to']} via {example['channel']}")
     print(f"  subject: {example['subject']}")

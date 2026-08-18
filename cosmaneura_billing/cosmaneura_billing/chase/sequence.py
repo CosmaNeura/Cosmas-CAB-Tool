@@ -34,14 +34,15 @@ from .policy import ApprovalMode, ChasePolicy
 
 
 class Transport(Protocol):
-    """Sends one rendered message. Returns a delivery outcome string."""
+    """Submits one rendered message. Returns a provider outcome string."""
 
-    def __call__(self, *, channel: Channel, patient_ref: str,
-                 subject: str, body: str) -> str: ...
+    def __call__(self, *, channel: Channel, recipient: str,
+                 subject: str, body: str, operation_id: str = "") -> str: ...
 
 
-def record_only_transport(*, channel: Channel, patient_ref: str,
-                          subject: str, body: str) -> str:
+def record_only_transport(*, channel: Channel, recipient: str,
+                          subject: str, body: str,
+                          operation_id: str = "") -> str:
     """Default transport: records the send without contacting anyone.
 
     The default being inert is deliberate. Real messaging is gated on the
@@ -118,6 +119,7 @@ class SequenceRunner:
         snap: CoverageSnapshot,
         *,
         released_by: Optional[str] = None,
+        delivery_id: str = "",
     ) -> dict[str, Any]:
         """Perform at most one touch, or explain why not.
 
@@ -219,9 +221,19 @@ class SequenceRunner:
                 "reason": "phone contact is performed by a person, not the system",
             }
 
+        recipient = snap.destination(step.channel)
+        if not recipient:
+            item.state = State.NEEDS_REVIEW
+            item.review_reason = (
+                f"{step.channel.value} has no current delivery route; a person "
+                "should verify the patient's contact information"
+            )
+            return {"action": "awaiting_review", "reason": item.review_reason}
         outcome = self.transport(
-            channel=step.channel, patient_ref=item.patient_ref,
-            subject=rendered["subject"], body=rendered["body"])
+            channel=step.channel, recipient=recipient,
+            subject=rendered["subject"], body=rendered["body"],
+            operation_id=delivery_id,
+        )
         item.attempts.append(Attempt(
             channel=step.channel, template_id=template.template_id, at=at,
             actor="system", outcome=outcome))

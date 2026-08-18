@@ -42,8 +42,9 @@ def _policy(**kw) -> ChasePolicy:
 def _runner(policy=None, transport=None) -> SequenceRunner:
     sent: list[dict] = []
 
-    def record(*, channel, patient_ref, subject, body):
-        sent.append({"channel": channel, "patient_ref": patient_ref,
+    def record(*, channel, recipient, subject, body, operation_id=""):
+        sent.append({"channel": channel, "recipient": recipient,
+                     "operation_id": operation_id,
                      "subject": subject, "body": body})
         return "sent"
 
@@ -228,6 +229,21 @@ def test_no_sent_message_contains_insurance_data():
         assert_no_phi(message["body"])
         assert_no_phi(message["subject"])
         assert "insurance" in message["body"].lower(), "the ask should still be clear"
+
+
+def test_transport_receives_route_not_internal_patient_reference():
+    runner = _runner()
+    snap = _snap(
+        "INTERNAL-PATIENT-REF", has_insurance_package=False,
+        email="synthetic@example.invalid",
+    )
+
+    result = runner.advance(item=_detect(snap), snap=snap, delivery_id="delivery-1")
+
+    assert result["action"] == "sent"
+    assert runner.sent[0]["recipient"] == "synthetic@example.invalid"
+    assert runner.sent[0]["operation_id"] == "delivery-1"
+    assert "INTERNAL-PATIENT-REF" not in str(runner.sent[0])
 
 
 def test_templates_can_only_substitute_three_safe_values():

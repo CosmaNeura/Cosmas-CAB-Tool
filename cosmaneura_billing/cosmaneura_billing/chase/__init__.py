@@ -24,6 +24,7 @@ Guarantees the pieces enforce between them:
 * A row closes only on a *verified* card, never on a patient's submission.
 """
 from .detector import detect, detect_all, priority_for
+from .acs_email import ACSEmailTransport, EmailSubmissionError
 from .metrics import baseline_comparison, summarize
 from .models import (
     Attempt, ChaseItem, Channel, CoverageSnapshot, State, Trigger,
@@ -37,8 +38,9 @@ from .store import (
 from .worklist import Worklist
 
 __all__ = [
-    "Attempt", "ApprovalMode", "ChaseItem", "ChasePolicy", "Channel",
-    "ChaseStore", "CoverageSnapshot", "MessageContainsPHI", "NotApproved",
+    "ACSEmailTransport", "Attempt", "ApprovalMode", "ChaseItem", "ChasePolicy", "Channel",
+    "ChaseStore", "CoverageSnapshot", "EmailSubmissionError",
+    "MessageContainsPHI", "NotApproved",
     "PostgresChaseStore", "SequenceRunner", "State", "Step", "Template",
     "Trigger", "Worklist", "chase_store_from_env", "chase_store_from_settings",
     "baseline_comparison", "detect", "detect_all", "priority_for", "summarize",

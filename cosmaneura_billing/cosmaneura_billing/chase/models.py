@@ -127,6 +127,23 @@ class CoverageSnapshot:
         return [c for c in (Channel.EMAIL, Channel.PORTAL, Channel.SMS, Channel.PHONE)
                 if self.consented(c)]
 
+    def destination(self, channel: Channel) -> str:
+        """Return only the route needed by the selected transport.
+
+        Patient references are not email addresses. Keeping this mapping on the
+        snapshot prevents a real transport from accidentally addressing a
+        message to the internal identifier used by the inert demo transport.
+        Portal delivery remains a future adapter and uses its server-side
+        patient reference; phone is always a staff task.
+        """
+        if channel is Channel.EMAIL:
+            return self.email
+        if channel is Channel.SMS:
+            return self.phone
+        if channel is Channel.PORTAL and self.portal_enrolled:
+            return self.patient_ref
+        return ""
+
 
 @dataclass
 class Attempt:
