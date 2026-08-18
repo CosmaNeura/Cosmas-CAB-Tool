@@ -40,6 +40,21 @@ def test_lifespan_warms_engine_before_readiness(monkeypatch, tmp_path):
     assert client.get("/api/ready").status_code == 503
 
 
+def test_lifespan_flushes_explicit_llm_metrics_best_effort(monkeypatch, tmp_path):
+    shutdown_calls = []
+    engine = _warm_engine()
+    engine.llm = SimpleNamespace(
+        shutdown_metrics=lambda: shutdown_calls.append("shutdown"),
+    )
+    monkeypatch.setattr(api, "get_orchestrator", lambda *_args, **_kwargs: engine)
+    application = api.create_app(frontend_dist=tmp_path / "missing")
+
+    with TestClient(application):
+        assert application.state.ready is True
+
+    assert shutdown_calls == ["shutdown"]
+
+
 def test_startup_failure_never_marks_application_ready(monkeypatch, tmp_path):
     def fail(settings, **_kwargs):
         raise RuntimeError("knowledge base unavailable")

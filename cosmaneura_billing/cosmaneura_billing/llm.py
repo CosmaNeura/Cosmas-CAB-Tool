@@ -29,12 +29,16 @@ Swap the backend in one place; every agent depends only on ``LLMClient.complete_
 from __future__ import annotations
 
 import json
+import logging
+import math
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .settings import Settings
+from .runtime import safe_llm_model_label
+from .telemetry import create_azure_monitor_llm_sink
 
 # Current-generation default. Note the interaction with max_tokens: on this model
 # family adaptive thinking is on unless disabled, and max_tokens caps thinking
@@ -118,13 +122,19 @@ class AnthropicLLM:
 
     def __init__(self, model: str | None = None, api_key: str | None = None,
                  max_retries: int = 4, timeout: int = 120,
-                 effort: str | None = None, settings: Settings | None = None):
+                 effort: str | None = None, settings: Settings | None = None,
+                 *, clock: Callable[[], float] | None = None,
+                 metrics_sink: Callable[[dict[str, Any]], None] | None = None,
+                 logger: logging.Logger | Any | None = None):
         config = settings or Settings.from_env()
         self.model = model or config.anthropic_model
         self.api_key = api_key or config.anthropic_api_key
         self.max_retries = max_retries
         self.timeout = timeout
         self.effort = effort or config.anthropic_effort
+        self._clock = clock or time.monotonic
+        self._metrics_sink = metrics_sink
+        self._logger = logger or logging.getLogger("cosmaneura_billing.llm")
 
     @property
     def model_label(self) -> str:
@@ -144,6 +154,100 @@ class AnthropicLLM:
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read())
+
+    def _clock_value(self) -> float | None:
+        """Read the metric clock without letting telemetry break inference."""
+        try:
+            value = self._clock()
+            if isinstance(value, bool):
+                return None
+            candidate = float(value)
+            return candidate if math.isfinite(candidate) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _token_count(payload: dict[str, Any] | None, field: str) -> int | None:
+        """Return a provider usage count only when it is a safe scalar."""
+        if not isinstance(payload, dict):
+            return None
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        value = usage.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= 1_000_000_000
+        ):
+            return None
+        return value
+
+    def _record_request_metric(
+        self,
+        *,
+        attempt: int,
+        started_at: float | None,
+        status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit one PHI-free metric for one provider HTTP attempt.
+
+        Retries are separate provider requests and can each be billable, so each
+        gets its own event.  The event deliberately contains no prompt,
+        response, exception text, API key, URL, or patient/request identifier.
+        """
+        finished_at = self._clock_value()
+        latency_ms: int | None = None
+        if started_at is not None and finished_at is not None:
+            latency_ms = min(
+                86_400_000,
+                max(0, int(round((finished_at - started_at) * 1000))),
+            )
+        safe_model = safe_llm_model_label(self.model)
+        safe_attempt = (
+            attempt
+            if type(attempt) is int and 1 <= attempt <= 100
+            else 1
+        )
+        metric: dict[str, Any] = {
+            "event": "llm_request",
+            "provider": "anthropic",
+            "model": safe_model,
+            "status": status,
+            "attempt": safe_attempt,
+            "latency_ms": latency_ms,
+            "input_tokens": self._token_count(payload, "input_tokens"),
+            "output_tokens": self._token_count(payload, "output_tokens"),
+            "cache_creation_input_tokens": self._token_count(
+                payload, "cache_creation_input_tokens",
+            ),
+            "cache_read_input_tokens": self._token_count(
+                payload, "cache_read_input_tokens",
+            ),
+        }
+        # The closed stdout event feeds Log Analytics even when an optional
+        # numeric Azure Monitor sink is enabled.  Each boundary is independent:
+        # an observability failure can never change the inference result.
+        try:
+            self._logger.info("llm_request", extra=metric)
+        except Exception:
+            pass
+        if self._metrics_sink is not None:
+            try:
+                self._metrics_sink(metric)
+            except Exception:
+                pass
+
+    def shutdown_metrics(self) -> None:
+        """Best-effort flush of the optional explicit numeric metric sink."""
+
+        shutdown = getattr(self._metrics_sink, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:
+                pass
 
     def complete_json(
         self, system: str, user: str, *,
@@ -179,25 +283,68 @@ class AnthropicLLM:
         for attempt in range(self.max_retries + 1):
             if attempt:
                 time.sleep(min(2 ** attempt, 30))
+            started_at = self._clock_value()
+            payload: dict[str, Any] | None = None
             try:
                 payload = self._post(body)
                 result = self._extract(payload, schema)
                 if schema is not None:
                     validate_json(result, schema)
+                self._record_request_metric(
+                    attempt=attempt + 1,
+                    started_at=started_at,
+                    status="success",
+                    payload=payload,
+                )
                 return result
             except urllib.error.HTTPError as e:
                 if e.code not in self.RETRYABLE:
+                    self._record_request_metric(
+                        attempt=attempt + 1,
+                        started_at=started_at,
+                        status="http_error",
+                    )
                     raise
+                self._record_request_metric(
+                    attempt=attempt + 1,
+                    started_at=started_at,
+                    status="retryable_http_error",
+                )
                 last_err = e
             except (urllib.error.URLError, TimeoutError) as e:
+                self._record_request_metric(
+                    attempt=attempt + 1,
+                    started_at=started_at,
+                    status="network_error",
+                )
                 last_err = e
             except TerminalLLMError:
                 # a refusal or a blown token budget will not fix itself on a
                 # re-ask; fail closed with the real reason
+                self._record_request_metric(
+                    attempt=attempt + 1,
+                    started_at=started_at,
+                    status="terminal_response",
+                    payload=payload,
+                )
                 raise
             except (json.JSONDecodeError, ValueError) as e:
                 # malformed / off-schema output — re-ask rather than propagate
+                self._record_request_metric(
+                    attempt=attempt + 1,
+                    started_at=started_at,
+                    status="invalid_response",
+                    payload=payload,
+                )
                 last_err = e
+            except Exception:
+                self._record_request_metric(
+                    attempt=attempt + 1,
+                    started_at=started_at,
+                    status="unexpected_error",
+                    payload=payload,
+                )
+                raise
         raise RuntimeError(
             f"AnthropicLLM: no valid response after {self.max_retries + 1} attempts"
         ) from last_err
@@ -357,7 +504,17 @@ def get_default_client(settings: Settings | None = None) -> LLMClient:
     """AnthropicLLM if a key is present, else the offline MockLLM."""
     config = settings or Settings.from_env()
     if config.anthropic_api_key:
-        return AnthropicLLM(settings=config)
+        metrics_sink = create_azure_monitor_llm_sink(
+            enabled=config.telemetry_enabled,
+            connection_string=config.application_insights_connection_string,
+            managed_identity_client_id=config.azure_client_id,
+        )
+        if config.telemetry_enabled and metrics_sink is None:
+            # Fail readiness before chart text reaches a provider rather than
+            # silently starting a deployed inference process without the
+            # accounting boundary that prices every provider request.
+            raise RuntimeError("LLM metrics exporter is unavailable")
+        return AnthropicLLM(settings=config, metrics_sink=metrics_sink)
     return MockLLM()
 
 

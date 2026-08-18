@@ -17,6 +17,8 @@ from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .runtime import safe_llm_model_label
+
 
 class SettingsError(ValueError):
     """A runtime setting is missing, incomplete, or malformed."""
@@ -210,6 +212,53 @@ def _validate_patient_upload_url(value: str) -> None:
         )
 
 
+def _validate_application_insights_connection_string(value: str) -> None:
+    """Validate routing metadata without reflecting it in an error."""
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 4_096
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise SettingsError(
+            "APPLICATIONINSIGHTS_CONNECTION_STRING is malformed"
+        )
+    parts: dict[str, str] = {}
+    for segment in value.split(";"):
+        if not segment:
+            continue
+        if "=" not in segment:
+            raise SettingsError(
+                "APPLICATIONINSIGHTS_CONNECTION_STRING is malformed"
+            )
+        key, part_value = segment.split("=", 1)
+        normalized = key.strip().casefold()
+        if not normalized or normalized in parts or not part_value.strip():
+            raise SettingsError(
+                "APPLICATIONINSIGHTS_CONNECTION_STRING is malformed"
+            )
+        parts[normalized] = part_value.strip()
+    try:
+        UUID(parts.get("instrumentationkey", ""))
+        ingestion = urlsplit(parts.get("ingestionendpoint", ""))
+    except (TypeError, ValueError, AttributeError):
+        raise SettingsError(
+            "APPLICATIONINSIGHTS_CONNECTION_STRING is malformed"
+        ) from None
+    if (
+        ingestion.scheme != "https"
+        or not ingestion.hostname
+        or ingestion.username is not None
+        or ingestion.password is not None
+        or ingestion.query
+        or ingestion.fragment
+    ):
+        raise SettingsError(
+            "APPLICATIONINSIGHTS_CONNECTION_STRING is malformed"
+        )
+
+
 def _database_url_uses_role(value: str, *, role: str) -> bool:
     """Validate a PostgreSQL URI without allowing libpq identity overrides.
 
@@ -291,6 +340,11 @@ class Settings:
     log_level: str = "INFO"
     frontend_dist: str | None = None
     migrations_dir: str | None = None
+    telemetry_enabled: bool = False
+    application_insights_connection_string: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    azure_client_id: str = ""
 
     auth_mode: str = "disabled"
     entra_tenant_id: str = ""
@@ -403,6 +457,28 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
             )
+        if safe_llm_model_label(self.anthropic_model) == "invalid_model_label":
+            raise SettingsError("ANTHROPIC_MODEL must be a supported model ID shape")
+        if self.anthropic_effort not in {"low", "medium", "high", "max"}:
+            raise SettingsError("ANTHROPIC_EFFORT must be low, medium, high, or max")
+        if self.telemetry_enabled:
+            if self.environment not in {"staging", "production"}:
+                raise SettingsError(
+                    "Azure Monitor telemetry is allowed only in staging or production"
+                )
+            _validate_application_insights_connection_string(
+                self.application_insights_connection_string,
+            )
+            try:
+                client_id = UUID(self.azure_client_id)
+            except (TypeError, ValueError, AttributeError):
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity"
+                ) from None
+            if str(client_id) != self.azure_client_id.casefold():
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity"
+                )
         if self.chase_store not in _CHASE_STORES:
             raise SettingsError("COSMANEURA_CHASE_STORE must be memory or postgres")
         if self.state_store not in _STATE_STORES:
@@ -719,6 +795,13 @@ class Settings:
             log_level=(env.get("COSMANEURA_LOG_LEVEL") or "INFO").strip().upper(),
             frontend_dist=_optional(env, "COSMANEURA_FRONTEND_DIST"),
             migrations_dir=_optional(env, "COSMANEURA_MIGRATIONS_DIR"),
+            telemetry_enabled=_parse_bool(
+                env, "COSMANEURA_TELEMETRY_ENABLED", False,
+            ),
+            application_insights_connection_string=(
+                env.get("APPLICATIONINSIGHTS_CONNECTION_STRING") or ""
+            ).strip(),
+            azure_client_id=(env.get("AZURE_CLIENT_ID") or "").strip(),
             auth_mode=(env.get("COSMANEURA_AUTH_MODE") or "disabled").strip().lower(),
             entra_tenant_id=env.get("COSMANEURA_ENTRA_TENANT_ID", "").strip(),
             allowed_roles=_parse_csv(

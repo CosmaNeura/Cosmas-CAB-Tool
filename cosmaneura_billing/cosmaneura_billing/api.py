@@ -58,6 +58,7 @@ from .persistence import (
     UnknownEncounter, postgres_services,
 )
 from .preferences import PreferenceStore
+from .runtime import PHISafeHTTPMiddleware, configure_json_logging
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
 from .security import (
     FixedWindowLimiter, PrincipalRateLimitMiddleware,
@@ -1361,6 +1362,15 @@ async def _lifespan(application: FastAPI):
         yield
     finally:
         application.state.ready = False
+        llm = getattr(application.state.orchestrator, "llm", None)
+        shutdown_metrics = getattr(llm, "shutdown_metrics", None)
+        if callable(shutdown_metrics):
+            try:
+                shutdown_metrics()
+            except Exception:
+                # Metric flushing is outside claim processing and shutdown must
+                # never expose an SDK exception or deployment credential.
+                pass
         application.state.orchestrator = None
         application.state.chase_context = None
 
@@ -1378,6 +1388,7 @@ def create_app(
 ) -> FastAPI:
     """Compose one API instance and its same-origin static frontend."""
     config = settings or get_settings()
+    http_logger = configure_json_logging(config.log_level)
     if config.environment in {"staging", "production"} and any(
         override is not None for override in (
             access_audit_store, feedback_store, encounter_store, membership_store,
@@ -1435,7 +1446,8 @@ def create_app(
     application.state.auth_failure_limiter = failed_auth_limiter
 
     # Starlette's last-added middleware is outermost. Request order is:
-    # exact CORS -> origin -> auth -> audit -> principal rate -> body cap -> API.
+    # PHI-safe runtime -> exact CORS -> origin -> auth -> audit -> principal
+    # rate -> body cap -> API.
     application.add_middleware(
         RequestBodyLimitMiddleware,
         max_bytes=config.max_request_bytes,
@@ -1469,9 +1481,10 @@ def create_app(
         allow_origins=list(config.cors_origins),
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-        expose_headers=["Retry-After"],
+        expose_headers=["Retry-After", "X-Request-ID"],
         allow_credentials=False,
     )
+    application.add_middleware(PHISafeHTTPMiddleware, logger=http_logger)
     application.include_router(router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):

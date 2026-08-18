@@ -72,8 +72,9 @@ chase transport remains inert.
 
 Azure Bicep templates and the reviewed deployment sequence are in
 `../infra/README.md`. They create a VNet-injected Container Apps environment,
-private PostgreSQL, private ACR and Key Vault endpoints, managed identity,
-Log Analytics, App Insights, and a one-shot migration job. Application ingress
+private PostgreSQL, private ACR and Key Vault endpoints, separate managed
+identities, Log Analytics, App Insights, a one-shot migration job, and the
+bounded chase job. Application ingress
 defaults private and must remain private until P2 authentication is verified.
 No Azure resources are created by tests or by building the repository.
 The Entra trust boundary, role matrix, request controls, audit event contract,
@@ -94,6 +95,23 @@ by design. Every response says which inference path ran (`inferenceMode`,
 `inferenceModel`) and, when a run produced nothing for that reason, carries a
 `degraded` object explaining it, so an empty claim is never presented as a
 finding.
+
+P5 observability is deliberately narrower than general-purpose tracing. The API
+logs one closed-schema `http_request` event using a server-generated request ID
+and declared route template; Anthropic calls log per-attempt latency and
+input/output/cache token counts; the chase worker logs one terminal aggregate
+event. A fail-closed scanner rejects expanded schemas, PHI/secret markers, raw
+request targets, and synthetic patient canaries in CI. Azure exports only the
+explicit numeric LLM instruments to App Insights through the API managed
+identity. Generic HTTP/SQL/exception/logging auto-instrumentation is not enabled
+because it can observe chart content before redaction. See `../infra/README.md`
+for synthetic acceptance and retention details.
+
+The Azure template can provision an API-only Anthropic credential, but keeps
+inference disabled by default. Synthetic/de-identified model acceptance may run
+before contractual approval; real chart text must not be sent until an
+Anthropic BAA and approved retention terms are documented in addition to the
+Microsoft/Azure BAA and platform acceptance.
 
 ## Provider billing tab and note completeness
 
@@ -266,8 +284,8 @@ reply-to fingerprint metadata; only the worker receives
 shared chase-gate HMAC key of at least 32 bytes, including for `record_only`, so
 gate evidence cannot silently drift. Keep both messaging latches off and use
 only synthetic/de-identified recipients: real patient messaging remains
-blocked until the deployment layer, BAA, P5 logging/redaction, and deployment
-acceptance are complete.
+blocked until the deployment layer, applicable BAAs, P5 log scanning in the
+deployed environment, and deployment acceptance are complete.
 
 One list, three views — missing, expired, eligibility — matching the buckets
 staff already use. Priority comes from appointment proximity: today's visit

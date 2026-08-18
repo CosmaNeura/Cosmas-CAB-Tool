@@ -126,7 +126,9 @@ leveling; the ICD-10/CCSR lookup running on the prototype's authentic AHRQ data;
 the guardrail invariant and its proof; the two role views and the typed feedback
 loop. Stubbed for offline running: the clinical fact extraction uses a
 deterministic model so the demo runs with no key — swap in `AnthropicLLM` (already
-written) for real inference by setting `ANTHROPIC_API_KEY`.
+written) for synthetic/de-identified live inference by setting
+`ANTHROPIC_API_KEY`. Real chart text additionally requires an Anthropic BAA and
+approved retention terms; an Azure/Microsoft BAA does not cover that disclosure.
 
 Before this is production software you will need: a CPT license from the AMA for
 the official code descriptors (the code numbers are usable, the long descriptors

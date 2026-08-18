@@ -34,6 +34,9 @@ def test_defaults_preserve_local_runtime_behavior():
     )
     assert settings.frontend_dist is None
     assert settings.migrations_dir is None
+    assert settings.telemetry_enabled is False
+    assert settings.application_insights_connection_string == ""
+    assert settings.azure_client_id == ""
     assert settings.patient_messaging_enabled is False
     assert settings.patient_messaging_operationally_activated is False
     assert settings.chase_scheduler_enabled is False
@@ -55,9 +58,15 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
         "COSMANEURA_AUTH_MODE": "container_apps",
         "COSMANEURA_ENTRA_TENANT_ID": "11111111-1111-4111-8111-111111111111",
         "COSMANEURA_LOG_LEVEL": "debug",
+        "COSMANEURA_TELEMETRY_ENABLED": "true",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING": (
+            "InstrumentationKey=22222222-2222-4222-8222-222222222222;"
+            "IngestionEndpoint=https://example.applicationinsights.azure.com/"
+        ),
+        "AZURE_CLIENT_ID": "33333333-3333-4333-8333-333333333333",
         "COSMANEURA_FRONTEND_DIST": str(tmp_path / "frontend"),
         "COSMANEURA_MIGRATIONS_DIR": str(tmp_path / "migrations"),
-        "ANTHROPIC_MODEL": "test-model",
+        "ANTHROPIC_MODEL": "claude-sonnet-5",
         "ANTHROPIC_EFFORT": "medium",
         "CPT_AUTO_FETCH": "no",
         "XDG_CACHE_HOME": str(tmp_path / "cache"),
@@ -95,7 +104,9 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
     assert settings.log_level == "DEBUG"
     assert settings.frontend_dist == str(tmp_path / "frontend")
     assert settings.migrations_dir == str(tmp_path / "migrations")
-    assert settings.anthropic_model == "test-model"
+    assert settings.telemetry_enabled is True
+    assert settings.azure_client_id == "33333333-3333-4333-8333-333333333333"
+    assert settings.anthropic_model == "claude-sonnet-5"
     assert settings.anthropic_effort == "medium"
     assert settings.cpt_auto_fetch is False
     assert settings.cpt_cache_dir == tmp_path / "cache" / "cosmaneura" / "cpt"
@@ -203,6 +214,10 @@ def test_repr_redacts_every_credential_and_database_dsn():
         "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "sender-secret@pilot.example",
         "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "reply-secret@pilot.example",
         "COSMANEURA_CHASE_GATE_HMAC_KEY": "gate-secret-that-is-at-least-32-bytes",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING": (
+            "InstrumentationKey=22222222-2222-4222-8222-222222222222;"
+            "IngestionEndpoint=https://example.applicationinsights.azure.com/"
+        ),
     }
     settings = Settings.from_env({
         **secrets,
@@ -221,11 +236,48 @@ def test_repr_redacts_every_credential_and_database_dsn():
     assert "<redacted>" in rendered
 
 
+def test_azure_monitor_telemetry_requires_deployed_uami_configuration():
+    connection = (
+        "InstrumentationKey=22222222-2222-4222-8222-222222222222;"
+        "IngestionEndpoint=https://example.applicationinsights.azure.com/"
+    )
+    with pytest.raises(SettingsError, match="staging or production"):
+        Settings(
+            telemetry_enabled=True,
+            application_insights_connection_string=connection,
+            azure_client_id="33333333-3333-4333-8333-333333333333",
+        )
+    with pytest.raises(SettingsError, match="AZURE_CLIENT_ID"):
+        _production_messaging_settings(
+            telemetry_enabled=True,
+            application_insights_connection_string=connection,
+            azure_client_id="patient-Jane",
+        )
+
+
+def test_azure_monitor_connection_error_never_echoes_configuration():
+    unsafe = "InstrumentationKey=synthetic-secret;IngestionEndpoint=http://bad"
+    with pytest.raises(SettingsError, match="malformed") as exc_info:
+        _production_messaging_settings(
+            telemetry_enabled=True,
+            application_insights_connection_string=unsafe,
+            azure_client_id="33333333-3333-4333-8333-333333333333",
+        )
+    assert unsafe not in str(exc_info.value)
+
+
 def test_get_settings_reads_current_environment_without_global_cache(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_MODEL", "first-model")
-    assert get_settings().anthropic_model == "first-model"
-    monkeypatch.setenv("ANTHROPIC_MODEL", "second-model")
-    assert get_settings().anthropic_model == "second-model"
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+    assert get_settings().anthropic_model == "claude-sonnet-5"
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-5")
+    assert get_settings().anthropic_model == "claude-haiku-5"
+
+
+def test_model_configuration_rejects_free_form_labels_without_echoing_them():
+    unsafe = "claude-opus-5-jane-patient"
+    with pytest.raises(SettingsError, match="supported model ID shape") as exc_info:
+        Settings(anthropic_model=unsafe)
+    assert unsafe not in str(exc_info.value)
 
 
 def test_deployed_environments_require_complete_authentication():

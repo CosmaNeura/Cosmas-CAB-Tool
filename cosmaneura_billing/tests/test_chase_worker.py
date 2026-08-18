@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from uuid import UUID
+import json
 
 import pytest
 
@@ -132,8 +132,9 @@ class CapturingLogger:
 
     def _capture(self, message, *args, **kwargs):
         assert not args
+        extra = kwargs.pop("extra", {})
         assert not kwargs
-        self.messages.append(str(message))
+        self.messages.append(json.dumps({"message": str(message), **extra}))
 
     debug = _capture
     info = _capture
@@ -274,13 +275,17 @@ def test_success_uses_exact_template_stable_operation_and_finalizes_once():
     assert claim["lease_seconds"] == 300
 
     log_text = "\n".join(logger.messages)
+    assert len(logger.messages) == 1
     assert PATIENT_REF not in log_text
     assert RECIPIENT not in log_text
     assert submitted["subject"] not in log_text
     assert submitted["body"] not in log_text
     assert WORKER_URL not in log_text
     assert ACS_CONNECTION not in log_text
-    assert str(UUID(context.delivery_id)) in log_text
+    assert context.delivery_id not in log_text
+    assert '"message": "chase_worker_run"' in log_text
+    assert '"status": "completed"' in log_text
+    assert '"accepted": 1' in log_text
 
 
 def test_record_only_runs_db_staff_task_lane_without_claiming_or_sending():

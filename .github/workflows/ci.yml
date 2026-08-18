@@ -50,6 +50,9 @@ jobs:
       - name: Run billing engine tests
         working-directory: cosmaneura_billing
         run: python -m pytest -v
+      - name: Verify fail-closed PHI log scanner
+        working-directory: cosmaneura_billing
+        run: python -m cosmaneura_billing.log_scanner --self-test
       - name: Guardrail invariant proof
         working-directory: cosmaneura_billing
         run: python prove_no_upcode.py

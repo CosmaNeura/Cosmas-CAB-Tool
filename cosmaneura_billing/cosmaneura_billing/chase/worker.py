@@ -21,6 +21,11 @@ from typing import Any, Callable, Optional, Sequence
 from uuid import UUID
 
 from ..direct_contract import DirectContractList, check_direct_contract
+from ..runtime import (
+    CHASE_WORKER_LOG_EVENT,
+    CHASE_WORKER_LOGGER_NAME,
+    configure_json_logging,
+)
 from ..settings import SettingsError
 from .acs_email import ACSEmailTransport, EmailSubmissionError
 from .models import Channel
@@ -110,15 +115,6 @@ def _aware_utc(value: datetime) -> datetime:
     if offset is None:
         raise WorkerConfigurationError("worker clock must return an aware datetime")
     return value.astimezone(timezone.utc)
-
-
-def _safe_delivery_id(value: str) -> str:
-    """Return only a canonical random identifier suitable for a log field."""
-    try:
-        parsed = UUID(value)
-    except (TypeError, ValueError, AttributeError):
-        return ""
-    return str(parsed) if parsed.version == 4 else ""
 
 
 def _valid_uuid(value: str) -> bool:
@@ -244,22 +240,13 @@ class ChaseWorker:
         delivery_id: str = "",
         count: Optional[int] = None,
     ) -> None:
-        """Log only fixed codes, counts, and a validated random delivery UUID."""
-        method = getattr(self._logger, level, None)
-        if not callable(method):
-            return
-        safe_id = _safe_delivery_id(delivery_id)
-        fields = [f"event={event}", f"status={status}"]
-        if safe_id:
-            fields.append(f"delivery_id={safe_id}")
-        if count is not None:
-            fields.append(f"count={count}")
-        try:
-            method("chase_worker " + " ".join(fields))
-        except Exception:
-            # Observability cannot be allowed to change delivery state.  A
-            # deployment health check detects a broken logging sink separately.
-            return
+        """Discard per-delivery diagnostics at the PHI logging boundary.
+
+        The terminal run event below is the worker's entire operational logging
+        contract.  A durable delivery UUID is pseudonymous patient data because
+        it can be joined back to the outbox, so it is never emitted.
+        """
+        del level, event, status, delivery_id, count
 
     def _database_uncertain(
         self, counts: _RunCounts, *, event: str,
@@ -501,7 +488,7 @@ class ChaseWorker:
         )
         return None
 
-    def run_once(self) -> WorkerRunResult:
+    def _run_once(self) -> WorkerRunResult:
         """Run one bounded pass; operational uncertainty is returned, not retried."""
         counts = _RunCounts()
         self._log("info", "run_started", "running")
@@ -619,23 +606,54 @@ class ChaseWorker:
         self._log("info", "run_finished", WorkerStatus.COMPLETED.value)
         return counts.result(WorkerStatus.COMPLETED)
 
+    def run_once(self) -> WorkerRunResult:
+        """Run once and emit exactly one PHI-free terminal aggregate event."""
+
+        result = self._run_once()
+        _emit_run_result(self._logger, result)
+        return result
+
+
+def _emit_run_result(logger: Any, result: WorkerRunResult) -> None:
+    method = getattr(
+        logger,
+        "info" if result.status is WorkerStatus.COMPLETED else "error",
+        None,
+    )
+    if not callable(method):
+        return
+    try:
+        method(
+            CHASE_WORKER_LOG_EVENT,
+            extra={
+                "status": result.status.value,
+                "quarantined": result.quarantined,
+                "ambiguous": result.ambiguous,
+                "scheduled": result.scheduled,
+                "reserved": result.reserved,
+                "claimed": result.claimed,
+                "accepted": result.accepted,
+                "permanent_failures": result.permanent_failures,
+            },
+        )
+    except Exception:
+        # Observability is intentionally outside the delivery state machine.
+        return
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one bounded worker pass.  No continuous/daemon mode exists."""
+    configure_json_logging("INFO")
     arguments = list(sys.argv[1:] if argv is None else argv)
-    logger = logging.getLogger("cosmaneura_billing.chase.worker")
+    logger = logging.getLogger(CHASE_WORKER_LOGGER_NAME)
     if arguments != ["--once"]:
-        logger.error(
-            "chase_worker event=invocation status=configuration_error"
-        )
-        return WorkerRunResult(WorkerStatus.CONFIGURATION_ERROR).exit_code
+        result = WorkerRunResult(WorkerStatus.CONFIGURATION_ERROR)
+        _emit_run_result(logger, result)
+        return result.exit_code
 
     try:
         config = ChaseWorkerConfig.from_env()
-        logging.basicConfig(
-            level=getattr(logging, config.log_level),
-            format="%(levelname)s %(name)s %(message)s",
-        )
+        configure_json_logging(config.log_level)
         worker = ChaseWorker(config, logger=logger)
     except (SettingsError, WorkerConfigurationError):
         configuration_failed = True
@@ -644,10 +662,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         configuration_failed = False
     if configuration_failed:
-        logger.error(
-            "chase_worker event=initialization status=configuration_error"
-        )
-        return WorkerRunResult(WorkerStatus.CONFIGURATION_ERROR).exit_code
+        result = WorkerRunResult(WorkerStatus.CONFIGURATION_ERROR)
+        _emit_run_result(logger, result)
+        return result.exit_code
     return worker.run_once().exit_code
 
 
