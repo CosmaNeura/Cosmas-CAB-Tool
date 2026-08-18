@@ -1,0 +1,103 @@
+services:
+  app:
+    image: ${COSMANEURA_IMAGE:-cosmaneura-billing:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-high}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cosmaneura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-cosmaneura}
+      COSMANEURA_ENV: ${COSMANEURA_ENV:-production}
+      COSMANEURA_LOG_LEVEL: ${COSMANEURA_LOG_LEVEL:-INFO}
+      COSMANEURA_FRONTEND_DIST: /app/static
+      COSMANEURA_CHASE_STORE: postgres
+      COSMANEURA_PRACTICE_ID: ${COSMANEURA_PRACTICE_ID:?Set COSMANEURA_PRACTICE_ID in .env}
+      COSMANEURA_PRACTICE_NAME: ${COSMANEURA_PRACTICE_NAME:-your care team}
+      COSMANEURA_UPLOAD_URL: ${COSMANEURA_UPLOAD_URL:-https://example.invalid/insurance}
+      COSMANEURA_CHASE_APPROVAL: ${COSMANEURA_CHASE_APPROVAL:-per_policy}
+      ICD10_CCSR_CSV: ${ICD10_CCSR_CSV:-}
+      CPT_DATA_DIR: ${CPT_DATA_DIR:-}
+      CPT_AUTO_FETCH: ${CPT_AUTO_FETCH:-1}
+      AMA_TOKEN_URL: ${AMA_TOKEN_URL:-}
+      AMA_BASE_URL: ${AMA_BASE_URL:-}
+      AMA_CONSUMER_KEY: ${AMA_CONSUMER_KEY:-}
+      AMA_CONSUMER_SECRET: ${AMA_CONSUMER_SECRET:-}
+      AMA_RELEASES_PATH: ${AMA_RELEASES_PATH:-/cpt-zip/1.0.0/releases}
+      AMA_FILE_PATH: ${AMA_FILE_PATH:-/cpt-zip/1.0.0/files?release={release}}
+      COSMANEURA_PREF_MIN: ${COSMANEURA_PREF_MIN:-3}
+      COSMANEURA_PREF_GLOBAL_USERS: ${COSMANEURA_PREF_GLOBAL_USERS:-3}
+      COSMANEURA_PREFS: ${COSMANEURA_PREFS:-1}
+      COSMANEURA_CODER_ID: ${COSMANEURA_CODER_ID:-coder_A}
+      COSMANEURA_FEEDBACK_PATH: ${COSMANEURA_FEEDBACK_PATH:-/var/lib/cosmaneura/coder_feedback.jsonl}
+      COSMANEURA_DIRECT_CONTRACT_LIST: ${COSMANEURA_DIRECT_CONTRACT_LIST:-/var/lib/cosmaneura/direct_contract_patients.csv}
+    ports:
+      - "${COSMANEURA_BIND:-127.0.0.1}:${COSMANEURA_PORT:-8000}:8000"
+    volumes:
+      - app_data:/var/lib/cosmaneura
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=5).read()
+      interval: 10s
+      timeout: 6s
+      retries: 8
+      start_period: 45s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  migrate:
+    image: ${COSMANEURA_IMAGE:-cosmaneura-billing:local}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cosmaneura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-cosmaneura}
+      COSMANEURA_MIGRATIONS_DIR: /app/migrations
+    command:
+      - python
+      - -m
+      - cosmaneura_billing.migrations
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cosmaneura}
+      POSTGRES_USER: ${POSTGRES_USER:-cosmaneura}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  postgres_data:

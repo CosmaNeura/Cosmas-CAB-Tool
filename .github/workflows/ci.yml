@@ -61,3 +61,23 @@ jobs:
         run: |
           npm ci
           npm run build
+
+  container:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-disposable-password
+      COSMANEURA_PRACTICE_ID: synthetic-ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the production topology
+        working-directory: cosmaneura_billing
+        run: docker compose up --build --wait
+      - name: Verify installed-wheel regulatory data and readiness
+        run: >-
+          python -c "import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/ready'));
+          assert data == {'status':'ready','ncciLoaded':True,'coverageLoaded':True}, data"
+      - name: Stop the disposable topology
+        if: always()
+        working-directory: cosmaneura_billing
+        run: docker compose down --volumes

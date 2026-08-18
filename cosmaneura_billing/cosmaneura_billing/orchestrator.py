@@ -19,21 +19,24 @@ from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
     Disposition, FeedbackKind, ProviderCard, VisitBundle,
 )
+from .settings import Settings
 
 
 class BillingOrchestrator:
     def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None,
-                 ncci=None, coverage=None, pos=None, cpt=None, preferences=None):
-        self.llm = llm or get_default_client()
-        self.icd10 = icd10 or ICD10CCSR()
+                 ncci=None, coverage=None, pos=None, cpt=None, preferences=None,
+                 settings: Settings | None = None):
+        config = settings or Settings.from_env()
+        self.llm = llm or get_default_client(config)
+        self.icd10 = icd10 or ICD10CCSR(settings=config)
         # NCCI / MCD coverage: explicit instance wins; otherwise auto-load from
         # data/ncci/ and data/mcd/ if the practice has dropped the CMS files there.
         self.ncci = ncci if ncci is not None else NCCIEdits.from_bundled()
         self.coverage = coverage if coverage is not None else CoverageDB.from_bundled()
         self.pos = pos or PlaceOfService()       # bundled CMS POS codes
-        self.cpt = cpt or CPTDescriptors()       # loads only from licensed data (CPT_DATA_DIR)
+        self.cpt = cpt or CPTDescriptors(settings=config)  # licensed data only
         # learned reviewer preferences (hold/refine only, never inflate)
-        self.preferences = preferences or PreferenceStore()
+        self.preferences = preferences or PreferenceStore(settings=config)
         # national per-code denial priors (CMS PSPS, bundled)
         self.denial_priors = DenialPriors()
         # deterministic procedure / add-on candidates (99058 and friends)

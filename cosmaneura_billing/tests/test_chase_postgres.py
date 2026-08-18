@@ -15,7 +15,7 @@ psycopg = pytest.importorskip("psycopg")
 
 from fastapi.testclient import TestClient
 
-from cosmaneura_billing.api import app, get_chase_context
+from cosmaneura_billing import api
 from cosmaneura_billing.chase import Attempt, Channel, ChaseItem, State, Trigger
 from cosmaneura_billing.chase.store import PostgresChaseStore
 
@@ -68,7 +68,7 @@ def _empty_tables():
     with psycopg.connect(TEST_DSN, autocommit=True) as conn:
         conn.execute("TRUNCATE chase_items CASCADE")
     yield
-    get_chase_context.cache_clear()
+    api.get_chase_context.cache_clear()
 
 
 def test_rows_survive_store_reconstruction_with_related_state():
@@ -178,14 +178,17 @@ def test_redetection_preserves_closed_state_and_history():
     assert result.priority == 80
 
 
-def test_api_restart_reads_the_same_postgres_worklist(monkeypatch):
+def test_api_restart_reads_the_same_postgres_worklist(monkeypatch, tmp_path):
     monkeypatch.setenv("COSMANEURA_ENV", "test")
     monkeypatch.setenv("COSMANEURA_CHASE_STORE", "postgres")
     monkeypatch.setenv("COSMANEURA_CHASE_DATABASE_URL", TEST_DSN)
     monkeypatch.setenv("COSMANEURA_PRACTICE_ID", "api-restart")
-    get_chase_context.cache_clear()
+    api.get_chase_context.cache_clear()
 
-    first_process = TestClient(app)
+    settings = api.get_settings()
+    first_process = TestClient(api.create_app(
+        settings=settings, frontend_dist=tmp_path / "missing-frontend",
+    ))
     detected = first_process.post("/api/chase/detect", json={
         "today": "2026-08-17",
         "snapshots": [{
@@ -198,8 +201,10 @@ def test_api_restart_reads_the_same_postgres_worklist(monkeypatch):
     assert detected.json()["counts"]["open"] == 1
 
     # A cleared application context represents a restart or another replica.
-    get_chase_context.cache_clear()
-    second_process = TestClient(app)
+    api.get_chase_context.cache_clear()
+    second_process = TestClient(api.create_app(
+        settings=settings, frontend_dist=tmp_path / "missing-frontend",
+    ))
     restored = second_process.get("/api/chase/worklist")
 
     assert restored.status_code == 200

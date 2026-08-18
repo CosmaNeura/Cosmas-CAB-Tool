@@ -29,11 +29,12 @@ Swap the backend in one place; every agent depends only on ``LLMClient.complete_
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Protocol
+
+from .settings import Settings
 
 # Current-generation default. Note the interaction with max_tokens: on this model
 # family adaptive thinking is on unless disabled, and max_tokens caps thinking
@@ -117,12 +118,13 @@ class AnthropicLLM:
 
     def __init__(self, model: str | None = None, api_key: str | None = None,
                  max_retries: int = 4, timeout: int = 120,
-                 effort: str | None = None):
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+                 effort: str | None = None, settings: Settings | None = None):
+        config = settings or Settings.from_env()
+        self.model = model or config.anthropic_model
+        self.api_key = api_key or config.anthropic_api_key
         self.max_retries = max_retries
         self.timeout = timeout
-        self.effort = effort or os.environ.get("ANTHROPIC_EFFORT", "high")
+        self.effort = effort or config.anthropic_effort
 
     @property
     def model_label(self) -> str:
@@ -351,10 +353,11 @@ class MockLLM:
         ]}
 
 
-def get_default_client() -> LLMClient:
+def get_default_client(settings: Settings | None = None) -> LLMClient:
     """AnthropicLLM if a key is present, else the offline MockLLM."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return AnthropicLLM()
+    config = settings or Settings.from_env()
+    if config.anthropic_api_key:
+        return AnthropicLLM(settings=config)
     return MockLLM()
 
 

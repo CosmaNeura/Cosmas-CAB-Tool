@@ -11,7 +11,9 @@ import cosmaneura_billing.api as api
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("COSMANEURA_FEEDBACK_PATH", str(tmp_path / "fb.jsonl"))
-    return TestClient(api.app)
+    return TestClient(api.create_app(
+        settings=api.get_settings(), frontend_dist=tmp_path / "missing-frontend",
+    ))
 
 
 def test_health_reports_knowledge_bases(client):

@@ -30,13 +30,16 @@ from .models import (
 )
 from .policy import ApprovalMode, ChasePolicy, MessageContainsPHI, Step, Template
 from .sequence import NotApproved, SequenceRunner
-from .store import ChaseStore, PostgresChaseStore, chase_store_from_env
+from .store import (
+    ChaseStore, PostgresChaseStore, chase_store_from_env,
+    chase_store_from_settings,
+)
 from .worklist import Worklist
 
 __all__ = [
     "Attempt", "ApprovalMode", "ChaseItem", "ChasePolicy", "Channel",
     "ChaseStore", "CoverageSnapshot", "MessageContainsPHI", "NotApproved",
     "PostgresChaseStore", "SequenceRunner", "State", "Step", "Template",
-    "Trigger", "Worklist", "chase_store_from_env",
+    "Trigger", "Worklist", "chase_store_from_env", "chase_store_from_settings",
     "baseline_comparison", "detect", "detect_all", "priority_for", "summarize",
 ]

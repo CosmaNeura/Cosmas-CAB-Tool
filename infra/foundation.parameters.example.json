@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "cosmaneura-pilot" },
+    "postgresAdminLogin": { "value": "cosmaneura_admin" },
+    "postgresAdminPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "databaseName": { "value": "cosmaneura" },
+    "registryPublicNetworkAccess": { "value": "Disabled" }
+  }
+}

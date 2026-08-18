@@ -37,6 +37,32 @@ and submit feedback that lands in the JSONL store for `scripts/analyze_feedback.
 Coder feedback is persisted to `coder_feedback.jsonl` (override with
 `COSMANEURA_FEEDBACK_PATH`).
 
+## Container and Azure deployment
+
+The production image builds the React frontend and Python API together, installs
+the PostgreSQL adapter, verifies the bundled NCCI and coverage datasets from the
+installed wheel, runs as a non-root user, and serves one origin. For a synthetic
+local deployment:
+
+```bash
+cp .env.example .env
+# Set a long URL-safe POSTGRES_PASSWORD and a synthetic COSMANEURA_PRACTICE_ID.
+docker compose up --build --wait
+```
+
+Open `http://127.0.0.1:8000`. The localhost bind is intentional: P2 access
+control has not landed yet. Compose applies both current migrations to a fresh
+PostgreSQL 16/pgvector volume, and `/api/ready` stays unavailable until the
+engine, regulatory datasets, database, and chase schema are ready. The default
+chase transport remains inert.
+
+Azure Bicep templates and the reviewed deployment sequence are in
+`../infra/README.md`. They create a VNet-injected Container Apps environment,
+private PostgreSQL, private ACR and Key Vault endpoints, managed identity,
+Log Analytics, App Insights, and a one-shot migration job. Application ingress
+defaults private and must remain private until P2 authentication is verified.
+No Azure resources are created by tests or by building the repository.
+
 **Offline mode covers one encounter.** Without `ANTHROPIC_API_KEY` the engine
 runs a deterministic model that only knows the bundled GI-bleed demo visit. On
 any other encounter it extracts nothing and proposes nothing — correctly, and

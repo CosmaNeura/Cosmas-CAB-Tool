@@ -74,6 +74,9 @@ class Worklist:
     def all_items(self) -> list[ChaseItem]:
         return list(self.items.values())
 
+    def healthcheck(self) -> None:
+        """The in-process development store has no external dependency."""
+
     # ------------------------------------------------------------------ views #
     def rows(
         self,

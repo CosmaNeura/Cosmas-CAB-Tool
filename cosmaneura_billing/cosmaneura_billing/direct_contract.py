@@ -42,6 +42,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from .settings import Settings
+
 # Where the practice drops its list. CSV or JSON; one patient reference per row.
 DEFAULT_LIST_PATH = "direct_contract_patients.csv"
 LIST_VERSION_UNKNOWN = "unavailable"
@@ -86,10 +88,18 @@ class DirectContractList:
 
     def __init__(self, path: str | os.PathLike | None = None,
                  refs: Optional[Iterable[str]] = None,
-                 version: str = ""):
+                 version: str = "", settings: Settings | None = None):
         self._explicit = {self._normalize(r) for r in refs} if refs is not None else None
-        self._path = Path(path or os.environ.get(
-            "COSMANEURA_DIRECT_CONTRACT_LIST", DEFAULT_LIST_PATH))
+        if path is not None:
+            resolved_path = path
+        elif settings is not None:
+            resolved_path = settings.direct_contract_list
+        elif refs is not None:
+            # Explicit test/demo rosters never consult process configuration.
+            resolved_path = DEFAULT_LIST_PATH
+        else:
+            resolved_path = Settings.from_env().direct_contract_list
+        self._path = Path(resolved_path)
         self._version = version
         self._loaded: Optional[set[str]] = None
         self._load_error: str = ""

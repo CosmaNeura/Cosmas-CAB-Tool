@@ -25,11 +25,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from typing import Any, Protocol
 
 from .llm import LLMClient, MockLLM
+from .settings import Settings
 from .vectorstore import LocalVectorStore, Match, VectorStore
 
 
@@ -66,10 +66,12 @@ class OpenAIEmbedder:
     BAA-covered project for PHI. The prototype used ada-002; text-embedding-3-small
     is the current, cheaper default (1536 dims)."""
 
-    def __init__(self, model: str = "text-embedding-3-small", dim: int = 1536, api_key: str | None = None):
+    def __init__(self, model: str = "text-embedding-3-small", dim: int = 1536,
+                 api_key: str | None = None, settings: Settings | None = None):
+        config = settings or Settings.from_env()
         self.model = model
         self.dim = dim
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.api_key = api_key or config.openai_api_key
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         import urllib.request

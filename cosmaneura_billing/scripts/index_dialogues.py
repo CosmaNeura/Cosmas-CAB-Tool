@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cosmaneura_billing.corpus import load_icliniq
 from cosmaneura_billing.dialogue_rag import DialogueRAG, MockEmbedder, OpenAIEmbedder
+from cosmaneura_billing.settings import Settings
 from cosmaneura_billing.vectorstore import PgVectorStore
 
 
@@ -46,12 +47,16 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
+    settings = Settings.from_env()
     corpus = load_corpus(sys.argv[1])
 
     # Embedder: real in prod (BAA + ZDR), mock if no key (lets you dry-run the path).
-    embedder = OpenAIEmbedder() if os.environ.get("OPENAI_API_KEY") else MockEmbedder(dim=1536)
+    embedder = (
+        OpenAIEmbedder(settings=settings)
+        if settings.openai_api_key else MockEmbedder(dim=1536)
+    )
 
-    dsn = os.environ.get("DATABASE_URL")
+    dsn = settings.database_url
     if not dsn:
         print("Set DATABASE_URL to upsert into pgvector. Aborting (no DB configured).")
         return 1

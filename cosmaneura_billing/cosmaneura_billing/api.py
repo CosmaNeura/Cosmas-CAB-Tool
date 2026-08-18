@@ -12,18 +12,23 @@ Endpoints (shapes match the documented contracts in frontend/*.jsx):
   GET  /api/feedback/summary              accuracy metrics + tuning backlog
 
 Run:  uvicorn cosmaneura_billing.api:app --reload
-The orchestrator (and its knowledge bases, including the ~18s NCCI load) is
-initialized once, on first use.
+The orchestrator and its regulatory knowledge bases are warmed during process
+startup. Readiness remains unavailable until that warmup and the durable chase
+schema check both succeed.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import coder_feedback
@@ -35,11 +40,9 @@ from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
 from .orchestrator import BillingOrchestrator
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
+from .settings import Settings, get_settings
 
-app = FastAPI(title="CosmaNeura Billing Engine", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
-)
+router = APIRouter()
 
 _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
          CodeKind.PROCEDURE: "PROCEDURE", CodeKind.MODIFIER: "MODIFIER"}
@@ -49,9 +52,9 @@ _ENGINE_VERSION = "cpt2026u4;icd10-FY2026;ncci-2026Q3-v32.2;mcd-NGS-2026-07-20"
 # --------------------------------------------------------------------------- #
 # Engine + encounter store (lazy singletons)
 # --------------------------------------------------------------------------- #
-@lru_cache(maxsize=1)
-def get_orchestrator() -> BillingOrchestrator:
-    return BillingOrchestrator()
+def get_orchestrator(settings: Settings | None = None) -> BillingOrchestrator:
+    """Build an engine using one resolved application configuration."""
+    return BillingOrchestrator(settings=settings or get_settings())
 
 
 @lru_cache(maxsize=1)
@@ -65,8 +68,21 @@ def get_encounters() -> dict[str, VisitBundle]:
     return store
 
 
-def get_feedback_store() -> FeedbackStore:
-    return FeedbackStore(os.environ.get("COSMANEURA_FEEDBACK_PATH", "coder_feedback.jsonl"))
+def get_feedback_store(settings: Settings | None = None) -> FeedbackStore:
+    return FeedbackStore((settings or get_settings()).feedback_path)
+
+
+def _request_settings(request: Request) -> Settings:
+    return getattr(request.app.state, "settings", None) or get_settings()
+
+
+def _request_orchestrator(request: Request) -> BillingOrchestrator:
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    if orchestrator is None:
+        # TestClient calls outside a lifespan still use stable, app-local state.
+        orchestrator = get_orchestrator(_request_settings(request))
+        request.app.state.orchestrator = orchestrator
+    return orchestrator
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +165,8 @@ def _degraded_json(result: BillingResult) -> Optional[dict[str, str]]:
     return {"reason": d.reason, "detail": d.detail} if d else None
 
 
-def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, Any]:
+def _coder_view_json(bundle: VisitBundle, result: BillingResult,
+                     settings: Settings | None = None) -> dict[str, Any]:
     card = result.provider_card
 
     def row(s: CodeSuggestion) -> dict[str, Any]:
@@ -169,7 +186,7 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, An
         "encounterId": bundle.encounter_id,
         "engineVersion": _ENGINE_VERSION,
         "submittedEm": bundle.submitted_em_code,
-        "coderId": os.environ.get("COSMANEURA_CODER_ID", "coder_A"),
+        "coderId": (settings or get_settings()).coder_id,
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
@@ -247,23 +264,23 @@ class FeedbackModel(BaseModel):
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
-def _cpt_status(cpt) -> str:
+def _cpt_status(cpt, settings: Settings | None = None) -> str:
     """One human-readable line the UI can show for the CPT pill tooltip."""
     if cpt.loaded:
         return f"{cpt.size} official descriptors loaded from {cpt.source}"
     if cpt.fetch_error:
         return f"auto-fetch failed: {cpt.fetch_error}"
-    if all(os.environ.get(v) for v in
-           ("AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET")):
+    if (settings or get_settings()).ama_configured:
         return "AMA credentials present but no descriptors resolved"
     return ("no CPT license configured — set the four AMA_* variables "
             "(auto-fetch) or CPT_DATA_DIR (local Standard Data File); "
             "generic labels in use")
 
 
-@app.get("/api/health")
-def health() -> dict[str, Any]:
-    orch = get_orchestrator()
+@router.get("/api/health")
+def health(request: Request) -> dict[str, Any]:
+    orch = _request_orchestrator(request)
+    settings = _request_settings(request)
     return {
         "status": "ok",
         "engineVersion": _ENGINE_VERSION,
@@ -273,14 +290,49 @@ def health() -> dict[str, Any]:
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),
         "coverageLoaded": bool(orch.coverage and orch.coverage.loaded),
         "cptDescriptors": orch.cpt.size if orch.cpt.loaded else 0,
-        "cptStatus": _cpt_status(orch.cpt),
+        "cptStatus": _cpt_status(orch.cpt, settings),
         "denialPriors": orch.denial_priors.size,
         "encounters": len(get_encounters()),
     }
 
 
-@app.get("/api/encounters")
-def list_encounters() -> list[dict[str, Any]]:
+@router.get("/api/ready")
+def readiness(request: Request):
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    chase_context = getattr(request.app.state, "chase_context", None)
+    datasets_loaded = bool(
+        orchestrator
+        and orchestrator.ncci
+        and orchestrator.ncci.loaded
+        and orchestrator.coverage
+        and orchestrator.coverage.loaded
+    )
+    if (
+        not getattr(request.app.state, "ready", False)
+        or chase_context is None
+        or not datasets_loaded
+    ):
+        return JSONResponse(status_code=503, content={"status": "warming"})
+    try:
+        chase_context["store"].healthcheck()
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {
+        "status": "ready",
+        "ncciLoaded": True,
+        "coverageLoaded": True,
+    }
+
+
+@router.get("/api/live")
+def liveness() -> dict[str, str]:
+    """Shallow process liveness; it intentionally initializes no engine state."""
+    return {"status": "alive"}
+
+
+@router.get("/api/encounters")
+def list_encounters(request: Request) -> list[dict[str, Any]]:
+    _request_orchestrator(request)
     return [{
         "id": b.encounter_id,
         "encounterType": b.encounter_type,
@@ -296,7 +348,7 @@ def _get_bundle(encounter_id: str) -> VisitBundle:
     return bundle
 
 
-@app.get("/api/encounters/{encounter_id}")
+@router.get("/api/encounters/{encounter_id}")
 def get_encounter(encounter_id: str) -> dict[str, Any]:
     b = _get_bundle(encounter_id)
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
@@ -305,15 +357,16 @@ def get_encounter(encounter_id: str) -> dict[str, Any]:
             "placeOfService": b.place_of_service}
 
 
-@app.post("/api/encounters/{encounter_id}/billing")
-def bill_stored(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
+@router.post("/api/encounters/{encounter_id}/billing")
+def bill_stored(request: Request, encounter_id: str,
+                user_id: Optional[str] = None) -> dict[str, Any]:
     bundle = _get_bundle(encounter_id)
-    result = get_orchestrator().process(bundle, user_id=user_id)
+    result = _request_orchestrator(request).process(bundle, user_id=user_id)
     return _billing_json(bundle, result)
 
 
-@app.post("/api/billing")
-def bill_adhoc(req: ProcessRequest) -> dict[str, Any]:
+@router.post("/api/billing")
+def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
     bundle = VisitBundle(
         encounter_id=req.encounterId, patient_age=req.patientAge,
         patient_sex=req.patientSex, encounter_type=req.encounterType,
@@ -321,17 +374,19 @@ def bill_adhoc(req: ProcessRequest) -> dict[str, Any]:
         transcript=req.transcript, signed_note=req.signedNote,
         submitted_em_code=req.submittedEm,
     )
-    result = get_orchestrator().process(bundle, user_id=req.userId)
+    result = _request_orchestrator(request).process(bundle, user_id=req.userId)
     return _billing_json(bundle, result)
 
 
-@app.get("/api/encounters/{encounter_id}/coder-view")
-def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
+@router.get("/api/encounters/{encounter_id}/coder-view")
+def coder_view(request: Request, encounter_id: str,
+               user_id: Optional[str] = None) -> dict[str, Any]:
     bundle = _get_bundle(encounter_id)
-    orch = get_orchestrator()
-    uid = user_id or os.environ.get("COSMANEURA_CODER_ID", "coder_A")
+    orch = _request_orchestrator(request)
+    settings = _request_settings(request)
+    uid = user_id or settings.coder_id
     result = orch.process(bundle, user_id=uid)
-    view = _coder_view_json(bundle, result)
+    view = _coder_view_json(bundle, result, settings)
     view["coderId"] = uid
     # attach learned-history hints so the reviewer sees why a code was
     # refined or held ("you've declined this 3x")
@@ -345,18 +400,18 @@ def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, An
     return view
 
 
-@app.get("/api/encounters/{encounter_id}/billing-tab")
-def billing_tab(encounter_id: str, user_id: Optional[str] = None,
+@router.get("/api/encounters/{encounter_id}/billing-tab")
+def billing_tab(request: Request, encounter_id: str, user_id: Optional[str] = None,
                 generated_at: str = "") -> dict[str, Any]:
     """The provider billing tab (F1): the same visit reorganised as a billing
     reference. The clinical note is never altered — this is a view over it."""
     bundle = _get_bundle(encounter_id)
-    result = get_orchestrator().process(bundle, user_id=user_id)
+    result = _request_orchestrator(request).process(bundle, user_id=user_id)
     return build_billing_tab_view(
         bundle, result, engine_version=_ENGINE_VERSION, generated_at=generated_at)
 
 
-@app.post("/api/completeness")
+@router.post("/api/completeness")
 def completeness(req: CompletenessRequest) -> dict[str, Any]:
     """Run a note-completeness rule pack before the claim reaches a coder.
 
@@ -377,9 +432,9 @@ def completeness(req: CompletenessRequest) -> dict[str, Any]:
     return report.to_dict(pos=req.placeOfService)
 
 
-@app.post("/api/feedback")
-def submit_feedback(fb: FeedbackModel) -> dict[str, Any]:
-    store = get_feedback_store()
+@router.post("/api/feedback")
+def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
+    store = get_feedback_store(_request_settings(request))
     record = EncounterFeedback(
         encounter_id=fb.encounter_id, coder_id=fb.coder_id,
         engine_version=fb.engine_version, submitted_em=fb.submitted_em,
@@ -391,7 +446,7 @@ def submit_feedback(fb: FeedbackModel) -> dict[str, Any]:
     return {"ok": True, "stored": len(store.load())}
 
 
-@app.get("/api/benchmarks/em")
+@router.get("/api/benchmarks/em")
 def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[str, Any]:
     """State + national E/M mix and allowed amounts — population benchmarks for
     opportunity-sizing only, never an input to coding an encounter."""
@@ -412,7 +467,7 @@ def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[st
     }
 
 
-@app.get("/api/benchmarks/payer-denials")
+@router.get("/api/benchmarks/payer-denials")
 def payer_denials(state: str = "NH") -> dict[str, Any]:
     """Issuer-level Marketplace denial rates (CMS TC-PUF PY2026) — the
     'how tough is this payer' prior."""
@@ -435,33 +490,46 @@ def payer_denials(state: str = "NH") -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @lru_cache(maxsize=1)
 def get_chase_context() -> dict[str, Any]:
-    from .chase import ApprovalMode, ChasePolicy, SequenceRunner, chase_store_from_env
+    """Legacy no-argument context used by CLI callers and older tests."""
+    return _build_chase_context(get_settings())
+
+
+def _build_chase_context(settings: Settings) -> dict[str, Any]:
+    from .chase import (
+        ApprovalMode, ChasePolicy, SequenceRunner, chase_store_from_settings,
+    )
     from .direct_contract import DirectContractList
 
     policy = ChasePolicy(
-        practice_name=os.environ.get("COSMANEURA_PRACTICE_NAME", "your care team"),
-        upload_url=os.environ.get("COSMANEURA_UPLOAD_URL",
-                                  "https://example.invalid/insurance"),
-        approval_mode=ApprovalMode(os.environ.get(
-            "COSMANEURA_CHASE_APPROVAL", "per_policy")),
+        practice_name=settings.practice_name,
+        upload_url=settings.upload_url,
+        approval_mode=ApprovalMode(settings.chase_approval),
     )
     return {
         # This object is safe to cache: PostgresChaseStore carries only immutable
         # connection configuration. Chase rows themselves live in PostgreSQL.
-        "store": chase_store_from_env(),
+        "store": chase_store_from_settings(settings),
         "policy": policy,
         # The default transport records without contacting anyone; real messaging
         # is gated on the deployment layer and the BAA.
         "runner": SequenceRunner(policy=policy),
-        "roster": DirectContractList(),
+        "roster": DirectContractList(settings=settings),
     }
 
 
-@app.get("/api/chase/worklist")
-def chase_worklist(bucket: str = "", assignee: str = "",
+def _request_chase_context(request: Request) -> dict[str, Any]:
+    context = getattr(request.app.state, "chase_context", None)
+    if context is None:
+        context = _build_chase_context(_request_settings(request))
+        request.app.state.chase_context = context
+    return context
+
+
+@router.get("/api/chase/worklist")
+def chase_worklist(request: Request, bucket: str = "", assignee: str = "",
                    needs_person: bool = False) -> dict[str, Any]:
     """The master list: one integrated view over missing, expired and eligibility."""
-    ctx = get_chase_context()
+    ctx = _request_chase_context(request)
     return {
         **ctx["store"].to_dict(bucket=bucket, assignee=assignee,
                                needs_person=needs_person),
@@ -469,8 +537,8 @@ def chase_worklist(bucket: str = "", assignee: str = "",
     }
 
 
-@app.post("/api/chase/detect")
-def chase_detect(req: ChaseDetectRequest) -> dict[str, Any]:
+@router.post("/api/chase/detect")
+def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
     """Run detection over posted coverage snapshots and merge into the worklist.
 
     Re-running is safe: an open row for the same patient and trigger is refreshed
@@ -478,7 +546,7 @@ def chase_detect(req: ChaseDetectRequest) -> dict[str, Any]:
     """
     from .chase import CoverageSnapshot, detect_all
 
-    ctx = get_chase_context()
+    ctx = _request_chase_context(request)
     snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
     found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
     ctx["store"].extend(found)
@@ -486,19 +554,21 @@ def chase_detect(req: ChaseDetectRequest) -> dict[str, Any]:
             **ctx["store"].to_dict()}
 
 
-@app.get("/api/chase/metrics")
-def chase_metrics(baseline_minutes_per_card: Optional[float] = None,
+@router.get("/api/chase/metrics")
+def chase_metrics(request: Request,
+                  baseline_minutes_per_card: Optional[float] = None,
                   baseline_claims_held_monthly: Optional[int] = None) -> dict[str, Any]:
     from .chase.metrics import baseline_comparison
 
     return baseline_comparison(
-        get_chase_context()["store"].all_items(),
+        _request_chase_context(request)["store"].all_items(),
         baseline_minutes_per_card=baseline_minutes_per_card,
         baseline_claims_held_monthly=baseline_claims_held_monthly)
 
 
-@app.post("/api/chase/{chase_id}/action")
-def chase_action(chase_id: str, req: ChaseActionRequest) -> dict[str, Any]:
+@router.post("/api/chase/{chase_id}/action")
+def chase_action(request: Request, chase_id: str,
+                 req: ChaseActionRequest) -> dict[str, Any]:
     """Staff actions on one row.
 
     `release` and `suppress` are the human decisions; `log_attempt` is how a
@@ -507,7 +577,7 @@ def chase_action(chase_id: str, req: ChaseActionRequest) -> dict[str, Any]:
     """
     from .chase import Channel
 
-    ctx = get_chase_context()
+    ctx = _request_chase_context(request)
     store, runner, action = ctx["store"], ctx["runner"], req.action
 
     def transition(item):
@@ -541,9 +611,9 @@ def chase_action(chase_id: str, req: ChaseActionRequest) -> dict[str, Any]:
     return item.to_dict()
 
 
-@app.get("/api/feedback/summary")
-def feedback_summary() -> dict[str, Any]:
-    feedbacks = get_feedback_store().load()
+@router.get("/api/feedback/summary")
+def feedback_summary(request: Request) -> dict[str, Any]:
+    feedbacks = get_feedback_store(_request_settings(request)).load()
     if not feedbacks:
         return {"encounters": 0, "summary": None, "tuningBacklog": [], "goldRows": 0}
     return {
@@ -552,3 +622,92 @@ def feedback_summary() -> dict[str, Any]:
         "tuningBacklog": coder_feedback.tuning_signals(feedbacks),
         "goldRows": len(coder_feedback.export_gold(feedbacks)),
     }
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Warm heavyweight data before the replica can report ready."""
+    application.state.ready = False
+    application.state.startup_error = None
+    try:
+        settings = application.state.settings
+        # Build the durable worklist boundary at startup as well. In production
+        # this is where a missing Postgres configuration fails closed.
+        application.state.chase_context = _build_chase_context(settings)
+        # Force one database round trip so readiness also proves the durable
+        # chase schema exists; a configured-but-unreachable store is not ready.
+        application.state.chase_context["store"].healthcheck()
+        orchestrator = get_orchestrator(settings)
+        if not (
+            orchestrator.ncci
+            and orchestrator.ncci.loaded
+            and orchestrator.coverage
+            and orchestrator.coverage.loaded
+        ):
+            raise RuntimeError("required regulatory datasets are unavailable")
+        application.state.orchestrator = orchestrator
+    except Exception as exc:
+        # Record only the class; configuration values and data never enter state
+        # that a generic health surface might later expose.
+        application.state.startup_error = type(exc).__name__
+        raise
+    application.state.ready = True
+    try:
+        yield
+    finally:
+        application.state.ready = False
+        application.state.orchestrator = None
+        application.state.chase_context = None
+
+
+def create_app(
+    *,
+    settings: Settings | None = None,
+    frontend_dist: str | os.PathLike[str] | None = None,
+) -> FastAPI:
+    """Compose one API instance and its same-origin static frontend."""
+    config = settings or get_settings()
+    application = FastAPI(
+        title="CosmaNeura Billing Engine",
+        version="0.1.0",
+        lifespan=_lifespan,
+    )
+    application.state.settings = config
+    application.state.ready = False
+    application.state.startup_error = None
+    application.state.orchestrator = None
+    application.state.chase_context = None
+
+    # P2 replaces this temporary development policy with exact configured
+    # origins and Entra-backed authorization. Compose binds localhost until it
+    # lands, and Azure ingress defaults private.
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    application.include_router(router)
+
+    configured_dist = (
+        frontend_dist if frontend_dist is not None else config.frontend_dist
+    )
+    dist = (
+        Path(configured_dist)
+        if configured_dist is not None
+        else Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    )
+    if (dist / "index.html").is_file():
+        # Mounted last so frontend routes cannot shadow /api/*.
+        application.mount(
+            "/", StaticFiles(directory=dist, html=True), name="frontend"
+        )
+    elif config.environment == "production":
+        raise RuntimeError(
+            "production requires a built same-origin frontend; configure "
+            "COSMANEURA_FRONTEND_DIST"
+        )
+    return application
+
+
+app = create_app()

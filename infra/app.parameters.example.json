@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "cosmaneura-pilot" },
+    "imageTag": { "value": "REPLACE_WITH_IMMUTABLE_TAG" },
+    "practiceId": { "value": "synthetic-pilot" },
+    "practiceName": { "value": "Your Care Team" },
+    "uploadUrl": { "value": "https://example.invalid/insurance" },
+    "externalIngress": { "value": false }
+  }
+}

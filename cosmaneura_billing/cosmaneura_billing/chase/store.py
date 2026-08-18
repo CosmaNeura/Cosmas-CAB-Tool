@@ -11,12 +11,12 @@ them across Container Apps replicas.
 """
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Optional, Protocol
 
 from .models import Attempt, ChaseItem
 from .worklist import Worklist
+from ..settings import Settings
 
 
 class ChaseStore(Protocol):
@@ -31,6 +31,7 @@ class ChaseStore(Protocol):
     def rows(self, **filters: Any) -> list[ChaseItem]: ...
     def counts(self) -> dict[str, Any]: ...
     def all_items(self) -> list[ChaseItem]: ...
+    def healthcheck(self) -> None: ...
     def to_dict(self, **filters: Any) -> dict[str, Any]: ...
 
 
@@ -137,6 +138,12 @@ class PostgresChaseStore:
     def all_items(self) -> list[ChaseItem]:
         with self._connection() as conn:
             return self._load_items(conn)
+
+    def healthcheck(self) -> None:
+        """Prove the configured database and chase schema are reachable."""
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM chase_items LIMIT 1")
 
     def get(self, chase_id: str) -> Optional[ChaseItem]:
         with self._connection() as conn:
@@ -340,27 +347,26 @@ class PostgresChaseStore:
         }
 
 
-def chase_store_from_env(
-    environ: Mapping[str, str] | None = None,
-) -> ChaseStore:
-    """Build the configured chase store without reading environment at import."""
-    env = os.environ if environ is None else environ
-    backend = (env.get("COSMANEURA_CHASE_STORE") or "memory").strip().lower()
-    environment = (env.get("COSMANEURA_ENV") or "development").strip().lower()
-
-    if backend == "memory":
-        if environment == "production":
+def chase_store_from_settings(settings: Settings) -> ChaseStore:
+    """Build a chase store from one validated application configuration."""
+    if settings.chase_store == "memory":
+        if settings.environment == "production":
             raise RuntimeError(
                 "in-memory chase storage is forbidden in production; configure "
                 "COSMANEURA_CHASE_STORE=postgres and DATABASE_URL"
             )
         return Worklist()
-    if backend != "postgres":
-        raise ValueError("COSMANEURA_CHASE_STORE must be 'memory' or 'postgres'")
-
-    dsn = env.get("COSMANEURA_CHASE_DATABASE_URL") or env.get("DATABASE_URL") or ""
-    practice_id = env.get("COSMANEURA_PRACTICE_ID") or ""
-    return PostgresChaseStore(dsn, practice_id=practice_id)
+    return PostgresChaseStore(settings.chase_dsn, practice_id=settings.practice_id)
 
 
-__all__ = ["ChaseStore", "PostgresChaseStore", "chase_store_from_env"]
+def chase_store_from_env(
+    environ: Mapping[str, str] | None = None,
+) -> ChaseStore:
+    """Compatibility wrapper for CLI callers and focused configuration tests."""
+    return chase_store_from_settings(Settings.from_env(environ))
+
+
+__all__ = [
+    "ChaseStore", "PostgresChaseStore", "chase_store_from_env",
+    "chase_store_from_settings",
+]

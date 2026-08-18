@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from cosmaneura_billing.api import app, get_chase_context
+from cosmaneura_billing import api
 
 TODAY = "2026-08-17"
 
@@ -24,14 +24,16 @@ def _fresh_context(monkeypatch):
     """Each test gets an empty worklist — the demo context is a cached singleton."""
     monkeypatch.setenv("COSMANEURA_ENV", "test")
     monkeypatch.setenv("COSMANEURA_CHASE_STORE", "memory")
-    get_chase_context.cache_clear()
+    api.get_chase_context.cache_clear()
     yield
-    get_chase_context.cache_clear()
+    api.get_chase_context.cache_clear()
 
 
 @pytest.fixture()
-def client():
-    return TestClient(app)
+def client(tmp_path):
+    return TestClient(api.create_app(
+        settings=api.get_settings(), frontend_dist=tmp_path / "missing-frontend",
+    ))
 
 
 def _detect(client):

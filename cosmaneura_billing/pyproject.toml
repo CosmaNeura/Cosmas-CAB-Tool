@@ -27,8 +27,18 @@ dev = ["pytest>=8", "numpy>=1.24", "fastapi>=0.110", "uvicorn>=0.30", "httpx>=0.
 include = ["cosmaneura_billing*"]
 
 [tool.setuptools.package-data]
-"cosmaneura_billing.data" = ["*.csv", "*.csv.gz", "corpora/*.csv", "corpora/README.md"]
-"cosmaneura_billing.benchmarks.data" = ["*.csv"]
+"cosmaneura_billing" = [
+    "data/*.csv",
+    "data/*.csv.gz",
+    "data/*.md",
+    "data/corpora/*.csv",
+    "data/corpora/*.md",
+    "data/mcd/*.csv.gz",
+    "data/mcd/*.md",
+    "data/ncci/*.tsv.gz",
+    "data/ncci/*.md",
+    "benchmarks/data/*.csv",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

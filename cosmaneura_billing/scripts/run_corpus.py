@@ -17,7 +17,6 @@ extraction and mapping issues (that's the point).
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -27,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cosmaneura_billing.corpus.acibench import load_acibench
 from cosmaneura_billing.orchestrator import BillingOrchestrator
 from cosmaneura_billing.schemas import CodeKind, Disposition
+from cosmaneura_billing.settings import Settings
 
 
 def main() -> int:
@@ -36,7 +36,7 @@ def main() -> int:
     ap.add_argument("--offset", type=int, default=0)
     args = ap.parse_args()
 
-    live = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    live = bool(Settings.from_env().anthropic_api_key)
     print(f"inference: {'AnthropicLLM (live)' if live else 'MockLLM (offline plumbing check)'}")
     if not live:
         print("  -> offline mode validates the pipeline mechanics only; set "
