@@ -22,6 +22,22 @@ param postgresAppLogin string = 'cosmaneura_app'
 @description('Password for the least-privilege runtime login. Supply it from an untracked parameter file.')
 param postgresAppPassword string
 
+@description('Least-privilege PostgreSQL login used only by the scheduled chase worker.')
+param postgresChaseWorkerLogin string = 'cosmaneura_chase_worker'
+
+@secure()
+@description('Password for the least-privilege chase worker login. Supply it from an untracked parameter file.')
+param postgresChaseWorkerPassword string
+
+@secure()
+@minLength(32)
+@description('Stable HMAC key shared only by the API and chase worker for direct-contract gate evidence.')
+param chaseGateHmacKey string
+
+@secure()
+@description('Optional Azure Communication Services email connection string. It is stored for the chase worker only; leave empty until BAA, P5, and messaging activation review are complete.')
+param acsEmailConnectionString string = ''
+
 @description('Application database created on the Flexible Server.')
 param databaseName string = 'cosmaneura'
 
@@ -43,6 +59,13 @@ var suffix = take(uniqueString(subscription().id, resourceGroup().id, namePrefix
 var validatedPostgresAppLogin = toLower(postgresAdminLogin) == toLower(postgresAppLogin)
   ? fail('postgresAppLogin must differ from postgresAdminLogin')
   : postgresAppLogin
+var postgresChaseWorkerLoginConflicts = toLower(postgresChaseWorkerLogin) == toLower(postgresAdminLogin) || toLower(postgresChaseWorkerLogin) == toLower(postgresAppLogin)
+var validatedPostgresChaseWorkerLogin = postgresChaseWorkerLoginConflicts
+  ? fail('postgresChaseWorkerLogin must differ from both PostgreSQL administrator and API runtime logins')
+  : postgresChaseWorkerLogin
+var validatedChaseGateHmacKey = chaseGateHmacKey == 'REPLACE_IN_UNTRACKED_PARAMETERS_FILE_32_BYTES_MINIMUM'
+  ? fail('chaseGateHmacKey placeholder must be replaced with a generated secret')
+  : chaseGateHmacKey
 var compactPrefix = replace(toLower(namePrefix), '-', '')
 var logAnalyticsName = '${namePrefix}-logs-${suffix}'
 var appInsightsName = '${namePrefix}-insights-${suffix}'
@@ -50,14 +73,18 @@ var vnetName = '${namePrefix}-vnet-${suffix}'
 var environmentName = '${namePrefix}-env-${suffix}'
 var identityName = '${namePrefix}-identity-${suffix}'
 var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
+var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
 var postgresName = take('${namePrefix}-pg-${suffix}', 63)
 var postgresHost = '${postgresName}.postgres.database.azure.com'
 var encodedAdminPassword = uriComponent(postgresAdminPassword)
 var encodedAppPassword = uriComponent(postgresAppPassword)
+var encodedChaseWorkerPassword = uriComponent(postgresChaseWorkerPassword)
 var migrationDatabaseUrl = 'postgresql://${postgresAdminLogin}:${encodedAdminPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var runtimeDatabaseUrl = 'postgresql://${validatedPostgresAppLogin}:${encodedAppPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
+var chaseWorkerDatabaseUrl = 'postgresql://${validatedPostgresChaseWorkerLogin}:${encodedChaseWorkerPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
+var acsEmailConfigured = !empty(acsEmailConnectionString)
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -152,6 +179,12 @@ resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@202
   tags: tags
 }
 
+resource chaseWorkerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: chaseWorkerIdentityName
+  location: location
+  tags: tags
+}
+
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
   location: location
@@ -186,6 +219,19 @@ resource migrationAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   name: guid(registry.id, migrationIdentity.id, 'acr-pull')
   properties: {
     principalId: migrationIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+  }
+}
+
+resource chaseWorkerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, chaseWorkerIdentity.id, 'acr-pull')
+  properties: {
+    principalId: chaseWorkerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
@@ -432,6 +478,48 @@ resource runtimeDatabasePasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-0
   ]
 }
 
+resource chaseWorkerDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'chase-worker-database-url'
+  properties: {
+    contentType: 'Practice-bound PostgreSQL connection string for the scheduled chase worker only'
+    value: chaseWorkerDatabaseUrl
+  }
+  dependsOn: [
+    applicationDatabase
+  ]
+}
+
+resource chaseWorkerDatabasePasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'chase-worker-database-password'
+  properties: {
+    contentType: 'Password used only by the migration job to provision the chase worker role'
+    value: postgresChaseWorkerPassword
+  }
+  dependsOn: [
+    applicationDatabase
+  ]
+}
+
+resource chaseGateHmacKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'chase-gate-hmac-key'
+  properties: {
+    contentType: 'Stable keyed identity for direct-contract roster evidence; shared by API and chase worker'
+    value: validatedChaseGateHmacKey
+  }
+}
+
+resource acsEmailConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (acsEmailConfigured) {
+  parent: keyVault
+  name: 'acs-email-connection-string'
+  properties: {
+    contentType: 'Azure Communication Services email credential for the chase worker only'
+    value: acsEmailConnectionString
+  }
+}
+
 resource runtimeDatabaseSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: databaseUrlSecret
   name: guid(databaseUrlSecret.id, workloadIdentity.id, 'key-vault-secrets-user')
@@ -471,6 +559,71 @@ resource migrationRuntimePasswordSecretReader 'Microsoft.Authorization/roleAssig
   }
 }
 
+resource migrationChaseWorkerPasswordSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: chaseWorkerDatabasePasswordSecret
+  name: guid(chaseWorkerDatabasePasswordSecret.id, migrationIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: migrationIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource chaseWorkerDatabaseSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: chaseWorkerDatabaseUrlSecret
+  name: guid(chaseWorkerDatabaseUrlSecret.id, chaseWorkerIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: chaseWorkerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource apiChaseGateSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: chaseGateHmacKeySecret
+  name: guid(chaseGateHmacKeySecret.id, workloadIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: workloadIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource chaseWorkerGateSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: chaseGateHmacKeySecret
+  name: guid(chaseGateHmacKeySecret.id, chaseWorkerIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: chaseWorkerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource chaseWorkerAcsEmailSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acsEmailConfigured) {
+  scope: acsEmailConnectionStringSecret
+  name: guid(acsEmailConnectionStringSecret.id, chaseWorkerIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: chaseWorkerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2026-01-01' = {
   name: environmentName
   location: location
@@ -496,6 +649,7 @@ output registryLoginServer string = registry.properties.loginServer
 output containerAppsEnvironmentName string = containerAppsEnvironment.name
 output workloadIdentityName string = workloadIdentity.name
 output migrationIdentityName string = migrationIdentity.name
+output chaseWorkerIdentityName string = chaseWorkerIdentity.name
 output keyVaultName string = keyVault.name
 output postgresServerName string = postgres.name
 output applicationInsightsName string = appInsights.name

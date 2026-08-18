@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-bicep@v2
+        with:
+          version: 0.46.1
+      - name: Compile private foundation template
+        run: bicep build infra/foundation.bicep --stdout > /dev/null
+      - name: Compile application and chase worker template
+        run: bicep build infra/app.bicep --stdout > /dev/null
+
   test:
     runs-on: ubuntu-latest
     services:

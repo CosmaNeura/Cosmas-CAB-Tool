@@ -22,8 +22,60 @@ param initialAdminObjectId string
 @description('Must match the least-privilege login configured by the foundation deployment.')
 param postgresAppLogin string = 'cosmaneura_app'
 
+@description('Must match the dedicated chase worker login configured by the foundation deployment.')
+param postgresChaseWorkerLogin string = 'cosmaneura_chase_worker'
+
 @description('Secure card-upload URL used by chase templates.')
 param uploadUrl string = 'https://example.invalid/insurance'
+
+@description('Roster path used by both API and worker. An absent source fails the direct-contract gate closed.')
+param directContractListPath string = '/var/lib/cosmaneura/direct_contract_patients.csv'
+
+@allowed([
+  'per_policy'
+  'per_message'
+])
+@description('Human approval mode bound into the durable chase policy fingerprint.')
+param chaseApprovalMode string = 'per_policy'
+
+@description('Schedule the no-ingress chase job. False keeps the deployed job manual and non-scheduled.')
+param enableChaseScheduler bool = false
+
+@description('First explicit latch for outbound patient email. Keep false until BAA, P5, and acceptance review are complete.')
+param enablePatientMessaging bool = false
+
+@description('Second explicit operational latch for outbound patient email. It must exactly match enablePatientMessaging.')
+param activatePatientMessaging bool = false
+
+@description('Existing Azure Communication Services email endpoint; shared as non-secret policy metadata only.')
+param acsEmailEndpoint string = ''
+
+@description('Approved ACS sender address; shared as non-secret policy metadata only.')
+param acsEmailSenderAddress string = ''
+
+@description('Monitored reply-to address; shared as non-secret policy metadata only.')
+param acsEmailReplyToAddress string = ''
+
+@description('IANA timezone used for chase cadence and quiet-hour calculations.')
+param practiceTimezone string = 'UTC'
+
+@minValue(1)
+@maxValue(168)
+@description('Maximum age in hours of contact evidence before delivery fails closed.')
+param contactSnapshotMaxAgeHours int = 24
+
+@minValue(1)
+@maxValue(500)
+@description('Maximum chase items processed by one bounded scheduled execution.')
+param chaseWorkerBatchSize int = 25
+
+@minValue(30)
+@maxValue(3600)
+@description('Lease duration in seconds for one claimed delivery.')
+param chaseWorkerLeaseSeconds int = 300
+
+@description('UTC cron expression for the Container Apps scheduled job.')
+param chaseWorkerCronExpression string = '*/15 * * * *'
 
 @description('Remain false until Entra assignment and the acceptance checks are verified.')
 param externalIngress bool = false
@@ -61,13 +113,33 @@ var containerNamePrefix = take(namePrefix, 18)
 var environmentName = '${namePrefix}-env-${suffix}'
 var identityName = '${namePrefix}-identity-${suffix}'
 var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
+var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
 var appName = '${containerNamePrefix}-api-${suffix}'
 var migrationJobName = '${containerNamePrefix}-mig-${suffix}'
+var chaseWorkerJobName = '${containerNamePrefix}-wrk-${suffix}'
 var image = '${registry.properties.loginServer}/cosmaneura-billing:${imageTag}'
 var entraSecretSettingName = 'microsoft-provider-authentication-secret'
 var entraIssuer = '${az.environment().authentication.loginEndpoint}${entraTenantId}/v2.0'
+var validatedSchedulerEnabled = enablePatientMessaging && !enableChaseScheduler
+  ? fail('enablePatientMessaging requires enableChaseScheduler')
+  : enableChaseScheduler
+var validatedPatientMessagingEnabled = enablePatientMessaging != activatePatientMessaging
+  ? fail('enablePatientMessaging and activatePatientMessaging must be changed together after operational review')
+  : enablePatientMessaging
+var validatedAcsEmailEndpoint = validatedPatientMessagingEnabled && empty(acsEmailEndpoint)
+  ? fail('enabled patient messaging requires acsEmailEndpoint')
+  : acsEmailEndpoint
+var validatedAcsEmailSenderAddress = validatedPatientMessagingEnabled && empty(acsEmailSenderAddress)
+  ? fail('enabled patient messaging requires acsEmailSenderAddress')
+  : acsEmailSenderAddress
+var validatedAcsEmailReplyToAddress = validatedPatientMessagingEnabled && empty(acsEmailReplyToAddress)
+  ? fail('enabled patient messaging requires acsEmailReplyToAddress')
+  : acsEmailReplyToAddress
+var schedulerEnabledValue = validatedSchedulerEnabled ? 'true' : 'false'
+var patientMessagingEnabledValue = validatedPatientMessagingEnabled ? 'true' : 'false'
+var chaseTransport = validatedPatientMessagingEnabled ? 'acs_email' : 'record_only'
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
   name: environmentName
@@ -81,6 +153,10 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 
 resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: migrationIdentityName
+}
+
+resource chaseWorkerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: chaseWorkerIdentityName
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
@@ -150,6 +226,11 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-runtime-password'
           identity: migrationIdentity.id
         }
+        {
+          name: 'chase-worker-database-password'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-worker-database-password'
+          identity: migrationIdentity.id
+        }
       ]
     }
     template: {
@@ -176,6 +257,14 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
             {
               name: 'COSMANEURA_DB_RUNTIME_PASSWORD'
               secretRef: 'database-runtime-password'
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_DB_ROLE'
+              value: postgresChaseWorkerLogin
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_DB_PASSWORD'
+              secretRef: 'chase-worker-database-password'
             }
             {
               name: 'COSMANEURA_ENTRA_TENANT_ID'
@@ -251,6 +340,11 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${entraClientSecretKeyVaultSecretName}'
           identity: identity.id
         }
+        {
+          name: 'chase-gate-hmac-key'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-gate-hmac-key'
+          identity: identity.id
+        }
       ]
     }
     template: {
@@ -258,7 +352,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
         {
           name: 'api'
           image: image
-          env: [
+          env: concat([
             {
               name: 'DATABASE_URL'
               secretRef: 'database-url'
@@ -333,7 +427,43 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             }
             {
               name: 'COSMANEURA_CHASE_APPROVAL'
-              value: 'per_policy'
+              value: chaseApprovalMode
+            }
+            {
+              name: 'COSMANEURA_CHASE_SCHEDULER_ENABLED'
+              value: schedulerEnabledValue
+            }
+            {
+              name: 'COSMANEURA_PATIENT_MESSAGING_ENABLED'
+              value: patientMessagingEnabledValue
+            }
+            {
+              name: 'COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED'
+              value: patientMessagingEnabledValue
+            }
+            {
+              name: 'COSMANEURA_CHASE_TRANSPORT'
+              value: chaseTransport
+            }
+            {
+              name: 'COSMANEURA_CHASE_GATE_HMAC_KEY'
+              secretRef: 'chase-gate-hmac-key'
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_TIMEZONE'
+              value: practiceTimezone
+            }
+            {
+              name: 'COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS'
+              value: string(contactSnapshotMaxAgeHours)
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_BATCH_SIZE'
+              value: string(chaseWorkerBatchSize)
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_LEASE_SECONDS'
+              value: string(chaseWorkerLeaseSeconds)
             }
             {
               name: 'CPT_AUTO_FETCH'
@@ -341,9 +471,22 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             }
             {
               name: 'COSMANEURA_DIRECT_CONTRACT_LIST'
-              value: '/tmp/direct_contract_patients.csv'
+              value: directContractListPath
             }
-          ]
+          ], validatedPatientMessagingEnabled ? [
+            {
+              name: 'COSMANEURA_ACS_EMAIL_ENDPOINT'
+              value: validatedAcsEmailEndpoint
+            }
+            {
+              name: 'COSMANEURA_ACS_EMAIL_SENDER_ADDRESS'
+              value: validatedAcsEmailSenderAddress
+            }
+            {
+              name: 'COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS'
+              value: validatedAcsEmailReplyToAddress
+            }
+          ] : [])
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
@@ -399,6 +542,172 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
   ]
 }
 
+resource chaseWorkerJob 'Microsoft.App/jobs@2026-01-01' = {
+  name: chaseWorkerJobName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${chaseWorkerIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    configuration: union({
+      triggerType: validatedSchedulerEnabled ? 'Schedule' : 'Manual'
+      replicaTimeout: 600
+      replicaRetryLimit: 0
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: chaseWorkerIdentity.id
+        }
+      ]
+      secrets: concat([
+        {
+          name: 'chase-worker-database-url'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-worker-database-url'
+          identity: chaseWorkerIdentity.id
+        }
+        {
+          name: 'chase-gate-hmac-key'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-gate-hmac-key'
+          identity: chaseWorkerIdentity.id
+        }
+      ], validatedPatientMessagingEnabled ? [
+        {
+          name: 'acs-email-connection-string'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/acs-email-connection-string'
+          identity: chaseWorkerIdentity.id
+        }
+      ] : [])
+    }, validatedSchedulerEnabled ? {
+      scheduleTriggerConfig: {
+        cronExpression: chaseWorkerCronExpression
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+    } : {
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+    })
+    template: {
+      containers: [
+        {
+          name: 'chase-worker'
+          image: image
+          command: [
+            'python'
+          ]
+          args: [
+            '-m'
+            'cosmaneura_billing.chase.worker'
+            '--once'
+          ]
+          env: concat([
+            {
+              name: 'COSMANEURA_ENV'
+              value: 'production'
+            }
+            {
+              name: 'COSMANEURA_LOG_LEVEL'
+              value: 'INFO'
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_ID'
+              value: practiceId
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_NAME'
+              value: practiceName
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_DB_ROLE'
+              value: postgresChaseWorkerLogin
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_DATABASE_URL'
+              secretRef: 'chase-worker-database-url'
+            }
+            {
+              name: 'COSMANEURA_CHASE_SCHEDULER_ENABLED'
+              value: schedulerEnabledValue
+            }
+            {
+              name: 'COSMANEURA_PATIENT_MESSAGING_ENABLED'
+              value: patientMessagingEnabledValue
+            }
+            {
+              name: 'COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED'
+              value: patientMessagingEnabledValue
+            }
+            {
+              name: 'COSMANEURA_CHASE_TRANSPORT'
+              value: chaseTransport
+            }
+            {
+              name: 'COSMANEURA_UPLOAD_URL'
+              value: uploadUrl
+            }
+            {
+              name: 'COSMANEURA_CHASE_APPROVAL'
+              value: chaseApprovalMode
+            }
+            {
+              name: 'COSMANEURA_DIRECT_CONTRACT_LIST'
+              value: directContractListPath
+            }
+            {
+              name: 'COSMANEURA_CHASE_GATE_HMAC_KEY'
+              secretRef: 'chase-gate-hmac-key'
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_TIMEZONE'
+              value: practiceTimezone
+            }
+            {
+              name: 'COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS'
+              value: string(contactSnapshotMaxAgeHours)
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_BATCH_SIZE'
+              value: string(chaseWorkerBatchSize)
+            }
+            {
+              name: 'COSMANEURA_CHASE_WORKER_LEASE_SECONDS'
+              value: string(chaseWorkerLeaseSeconds)
+            }
+          ], validatedPatientMessagingEnabled ? [
+            {
+              name: 'COSMANEURA_ACS_EMAIL_CONNECTION_STRING'
+              secretRef: 'acs-email-connection-string'
+            }
+            {
+              name: 'COSMANEURA_ACS_EMAIL_ENDPOINT'
+              value: validatedAcsEmailEndpoint
+            }
+            {
+              name: 'COSMANEURA_ACS_EMAIL_SENDER_ADDRESS'
+              value: validatedAcsEmailSenderAddress
+            }
+            {
+              name: 'COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS'
+              value: validatedAcsEmailReplyToAddress
+            }
+          ] : [])
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+        }
+      ]
+    }
+  }
+}
+
 resource applicationAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = {
   parent: application
   name: 'current'
@@ -435,5 +744,8 @@ resource applicationAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = 
 
 output applicationName string = application.name
 output migrationJobName string = migrationJob.name
+output chaseWorkerJobName string = chaseWorkerJob.name
+output chaseSchedulerEnabled bool = validatedSchedulerEnabled
+output patientMessagingEnabled bool = validatedPatientMessagingEnabled
 output ingressExternal bool = externalIngress
 output applicationFqdn string = application.properties.configuration.ingress.fqdn

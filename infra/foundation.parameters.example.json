@@ -7,6 +7,10 @@
     "postgresAdminPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
     "postgresAppLogin": { "value": "cosmaneura_app" },
     "postgresAppPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "postgresChaseWorkerLogin": { "value": "cosmaneura_chase_worker" },
+    "postgresChaseWorkerPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "chaseGateHmacKey": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE_32_BYTES_MINIMUM" },
+    "acsEmailConnectionString": { "value": "" },
     "databaseName": { "value": "cosmaneura" },
     "registryPublicNetworkAccess": { "value": "Disabled" }
   }
