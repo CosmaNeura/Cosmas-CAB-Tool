@@ -15,6 +15,7 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "001_init_pgvector.up.sql",
         "002_chase_persistence.up.sql",
         "003_pilot_persistence.up.sql",
+        "004_chase_delivery_runtime.up.sql",
     ]
 
 
