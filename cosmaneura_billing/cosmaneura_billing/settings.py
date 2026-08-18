@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -195,6 +195,47 @@ def _validate_patient_upload_url(value: str) -> None:
         )
 
 
+def _database_url_uses_role(value: str, *, role: str) -> bool:
+    """Validate a PostgreSQL URI without allowing libpq identity overrides.
+
+    libpq accepts connection keywords in a URI query string, including
+    ``user`` and ``service``. Looking only at ``urlsplit(value).username`` can
+    therefore approve a least-privilege name while psycopg connects as a more
+    powerful account. Deployment URLs need only TLS mode, so the query surface
+    is deliberately restricted to one secure ``sslmode`` value.
+    """
+    malformed = False
+    try:
+        parsed = urlsplit(value)
+        parsed.port  # force validation of a malformed port without retaining it
+        query = parse_qsl(
+            parsed.query, keep_blank_values=True, strict_parsing=True,
+        )
+    except (TypeError, ValueError):
+        malformed = True
+        parsed = None
+        query = []
+    if malformed:
+        return False
+    assert parsed is not None
+    if (
+        parsed.scheme not in {"postgres", "postgresql"}
+        or parsed.username != role
+        or parsed.hostname is None
+        or parsed.fragment
+        or not parsed.path
+        or parsed.path == "/"
+    ):
+        return False
+    if not query:
+        return True
+    return (
+        len(query) == 1
+        and query[0][0] == "sslmode"
+        and query[0][1] in {"require", "verify-ca", "verify-full"}
+    )
+
+
 def _optional(env: Mapping[str, str], name: str) -> str | None:
     value = env.get(name)
     return value if value and value.strip() else None
@@ -257,6 +298,13 @@ class Settings:
     state_store: str = "local"
     database_runtime_role: str = "cosmaneura_app"
     database_runtime_password: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    chase_worker_database_role: str = "cosmaneura_chase_worker"
+    chase_worker_database_password: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    chase_worker_database_url: str = field(
         default="", repr=False, metadata={"secret": True}
     )
     bootstrap_admin_oid: str = ""
@@ -422,6 +470,14 @@ class Settings:
                 "COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED requires "
                 "COSMANEURA_PATIENT_MESSAGING_ENABLED=true"
             )
+        if (
+            self.environment in {"staging", "production"}
+            and self.chase_scheduler_enabled
+            and len(self.chase_gate_hmac_key.encode("utf-8")) < 32
+        ):
+            raise SettingsError(
+                "a deployed chase scheduler requires a 32-byte chase gate key"
+            )
         if self.patient_messaging_enabled:
             if self.environment not in {"staging", "production"}:
                 raise SettingsError(
@@ -449,10 +505,6 @@ class Settings:
                     "real patient messaging requires the durable chase scheduler"
                 )
             _validate_patient_upload_url(self.upload_url)
-            if len(self.chase_gate_hmac_key.encode("utf-8")) < 32:
-                raise SettingsError(
-                    "real patient messaging requires a 32-byte chase gate key"
-                )
         if self.auth_mode not in _AUTH_MODES:
             raise SettingsError(
                 "COSMANEURA_AUTH_MODE must be disabled or container_apps"
@@ -507,13 +559,19 @@ class Settings:
                 )
             if not self.database_runtime_role.strip():
                 raise SettingsError("COSMANEURA_DB_RUNTIME_ROLE must not be empty")
-            database_user = urlsplit(self.database_url).username or ""
-            if database_user != self.database_runtime_role:
+            if not _database_url_uses_role(
+                self.database_url, role=self.database_runtime_role,
+            ):
                 raise SettingsError(
                     "DATABASE_URL must use the configured least-privilege runtime role"
                 )
         if self.database_runtime_password and not self.database_runtime_role.strip():
             raise SettingsError("COSMANEURA_DB_RUNTIME_ROLE must not be empty")
+        if (
+            self.chase_worker_database_password
+            and not self.chase_worker_database_role.strip()
+        ):
+            raise SettingsError("COSMANEURA_CHASE_WORKER_DB_ROLE must not be empty")
         if (
             self.state_store == "postgres" or self.database_runtime_password
         ) and not re.fullmatch(
@@ -522,6 +580,47 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_DB_RUNTIME_ROLE must be a safe PostgreSQL role name"
             )
+        if (
+            self.state_store == "postgres" or self.database_runtime_password
+        ) and (
+            self.database_runtime_role.casefold().startswith("pg_")
+            or self.database_runtime_role.casefold()
+            in {"postgres", "azure_pg_admin"}
+        ):
+            raise SettingsError(
+                "COSMANEURA_DB_RUNTIME_ROLE must be a safe PostgreSQL role name"
+            )
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_.-]{0,62}",
+            self.chase_worker_database_role,
+        ):
+            raise SettingsError(
+                "COSMANEURA_CHASE_WORKER_DB_ROLE must be a safe PostgreSQL role name"
+            )
+        if (
+            self.chase_worker_database_role.casefold().startswith("pg_")
+            or self.chase_worker_database_role.casefold()
+            in {"postgres", "azure_pg_admin"}
+        ):
+            raise SettingsError(
+                "COSMANEURA_CHASE_WORKER_DB_ROLE must be a safe PostgreSQL role name"
+            )
+        if (
+            self.chase_worker_database_role.casefold()
+            == self.database_runtime_role.casefold()
+        ):
+            raise SettingsError(
+                "the API runtime role and chase worker role must be distinct"
+            )
+        if self.chase_worker_database_url:
+            if not _database_url_uses_role(
+                self.chase_worker_database_url,
+                role=self.chase_worker_database_role,
+            ):
+                raise SettingsError(
+                    "COSMANEURA_CHASE_WORKER_DATABASE_URL must use the configured "
+                    "least-privilege chase worker role"
+                )
         if self.bootstrap_admin_oid:
             try:
                 UUID(self.bootstrap_admin_oid)
@@ -629,6 +728,16 @@ class Settings:
             ).strip(),
             database_runtime_password=env.get(
                 "COSMANEURA_DB_RUNTIME_PASSWORD", ""
+            ),
+            chase_worker_database_role=(
+                env.get("COSMANEURA_CHASE_WORKER_DB_ROLE")
+                or "cosmaneura_chase_worker"
+            ).strip(),
+            chase_worker_database_password=env.get(
+                "COSMANEURA_CHASE_WORKER_DB_PASSWORD", ""
+            ),
+            chase_worker_database_url=env.get(
+                "COSMANEURA_CHASE_WORKER_DATABASE_URL", ""
             ),
             bootstrap_admin_oid=(
                 env.get("COSMANEURA_BOOTSTRAP_ADMIN_OID") or ""

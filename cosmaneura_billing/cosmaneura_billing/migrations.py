@@ -21,17 +21,21 @@ def _checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _provision_runtime_role(conn, settings: Settings) -> None:
-    """Create/rotate the least-privilege runtime login after schema changes."""
-    if not settings.database_runtime_password:
-        return
+def _prepare_bound_login(
+    conn,
+    *,
+    role: str,
+    password_value: str,
+    practice_id: str,
+    description: str,
+):
+    """Create/rotate one unprivileged login and reset all inherited grants."""
     try:
         from psycopg import sql
     except ImportError as exc:  # pragma: no cover - deployment wiring
-        raise RuntimeError("runtime role provisioning requires psycopg") from exc
-    role = settings.database_runtime_role
-    if not settings.practice_id:
-        raise RuntimeError("runtime role provisioning requires a practice ID")
+        raise RuntimeError(f"{description} provisioning requires psycopg") from exc
+    if not practice_id:
+        raise RuntimeError(f"{description} provisioning requires a practice ID")
     current_user = conn.execute("SELECT current_user").fetchone()[0]
     blocked_names = {"postgres", "azure_pg_admin"}
     if (
@@ -39,9 +43,11 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
         or role.casefold().startswith("pg_")
         or role.casefold() == str(current_user).casefold()
     ):
-        raise RuntimeError("runtime role must be distinct from database administrators")
+        raise RuntimeError(
+            f"{description} must be distinct from database administrators"
+        )
     identifier = sql.Identifier(role)
-    password = sql.Literal(settings.database_runtime_password)
+    password = sql.Literal(password_value)
     existing = conn.execute(
         """SELECT oid, rolsuper, rolcreatedb, rolcreaterole,
                   rolreplication, rolbypassrls
@@ -49,11 +55,12 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
         (role,),
     ).fetchone()
     if existing and any(bool(value) for value in existing[1:]):
-        raise RuntimeError("configured runtime role is already privileged")
+        raise RuntimeError(f"configured {description} is already privileged")
     if existing:
         membership = conn.execute(
-            "SELECT 1 FROM pg_auth_members WHERE member = %s LIMIT 1",
-            (existing[0],),
+            """SELECT 1 FROM pg_auth_members
+                WHERE member = %s OR roleid = %s LIMIT 1""",
+            (existing[0], existing[0]),
         ).fetchone()
         ownership = conn.execute(
             """SELECT 1
@@ -70,12 +77,17 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
                  FROM pg_database d
                  JOIN pg_roles r ON r.oid = d.datdba
                 WHERE r.rolname = %s
+                UNION ALL
+               SELECT 1
+                 FROM pg_proc p
+                 JOIN pg_roles r ON r.oid = p.proowner
+                WHERE r.rolname = %s
                 LIMIT 1""",
-            (role, role, role),
+            (role, role, role, role),
         ).fetchone()
         if membership or ownership:
             raise RuntimeError(
-                "configured runtime role has inherited authority or owns objects"
+                f"configured {description} has inherited authority or owns objects"
             )
         conn.execute(sql.SQL(
             "ALTER ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
@@ -99,10 +111,38 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
     conn.execute(sql.SQL(
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM {}"
     ).format(identifier))
+    conn.execute(sql.SQL(
+        "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM {}"
+    ).format(identifier))
     conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
         sql.Identifier(database_name), identifier,
     ))
     conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(identifier))
+    existing_binding = conn.execute(
+        "SELECT practice_id FROM runtime_practice_bindings WHERE role_name = %s",
+        (role,),
+    ).fetchone()
+    if existing_binding and existing_binding[0] != practice_id:
+        raise RuntimeError(f"{description} is already bound to another practice")
+    conn.execute(
+        """INSERT INTO runtime_practice_bindings (role_name, practice_id)
+           VALUES (%s, %s) ON CONFLICT (role_name) DO NOTHING""",
+        (role, practice_id),
+    )
+    return sql, identifier
+
+
+def _provision_runtime_role(conn, settings: Settings) -> None:
+    """Create/rotate the least-privilege API login after schema changes."""
+    if not settings.database_runtime_password:
+        return
+    sql, identifier = _prepare_bound_login(
+        conn,
+        role=settings.database_runtime_role,
+        password_value=settings.database_runtime_password,
+        practice_id=settings.practice_id,
+        description="runtime role",
+    )
     conn.execute(sql.SQL(
         "GRANT SELECT ON practices, users, practice_memberships TO {}"
     ).format(identifier))
@@ -131,19 +171,70 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
     conn.execute(sql.SQL(
         "GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text), "
         "cosmaneura_feedback_reviewer_allowed(uuid, uuid), "
-        "cosmaneura_staff_assignee_allowed(uuid, uuid) TO {}"
+        "cosmaneura_staff_assignee_allowed(uuid, uuid), "
+        "cosmaneura_chase_admin_allowed(uuid, uuid), "
+        "cosmaneura_cancel_revoked_chase_policy(uuid, text), "
+        "cosmaneura_cancel_stale_chase_work(text) TO {}"
     ).format(identifier))
-    existing_binding = conn.execute(
-        "SELECT practice_id FROM runtime_practice_bindings WHERE role_name = %s",
-        (role,),
-    ).fetchone()
-    if existing_binding and existing_binding[0] != settings.practice_id:
-        raise RuntimeError("runtime role is already bound to another practice")
-    conn.execute(
-        """INSERT INTO runtime_practice_bindings (role_name, practice_id)
-           VALUES (%s, %s) ON CONFLICT (role_name) DO NOTHING""",
-        (role, settings.practice_id),
+    # Authenticated staff create immutable inputs through the API. They may
+    # advance/delete an existing cadence when completing a logged phone task,
+    # but cannot create cadence or access outbox/delivery transport effects.
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT ON chase_contact_snapshots, "
+        "chase_contact_routes, chase_policy_revisions, chase_policy_steps, "
+        "chase_policy_approval_events, chase_message_releases, "
+        "chase_review_releases TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON chase_active_policies TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, UPDATE, DELETE ON chase_cadence_states TO {}"
+    ).format(identifier))
+
+
+def _provision_chase_worker_role(conn, settings: Settings) -> None:
+    """Create the practice-bound scheduler login without API/identity authority."""
+    if not settings.chase_worker_database_password:
+        return
+    sql, identifier = _prepare_bound_login(
+        conn,
+        role=settings.chase_worker_database_role,
+        password_value=settings.chase_worker_database_password,
+        practice_id=settings.practice_id,
+        description="chase worker role",
     )
+    # The worker can inspect chase-domain inputs and immutable authorization
+    # evidence, but it cannot create or change them. It cannot read encounter,
+    # identity, feedback, or audit tables.
+    conn.execute(sql.SQL(
+        "GRANT SELECT ON chase_items, chase_pending_tasks, "
+        "chase_contact_snapshots, chase_contact_routes, chase_policy_revisions, "
+        "chase_policy_steps, "
+        "chase_policy_approval_events, chase_message_releases, "
+        "chase_review_releases, chase_active_policies, chase_cadence_states, "
+        "chase_delivery_outbox, chase_delivery_events TO {}"
+    ).format(identifier))
+    # Only scheduling effects are writable. Human detection/contact, policy,
+    # approval, review-release, and message-release inputs remain API work.
+    conn.execute(sql.SQL(
+        "GRANT INSERT ON chase_pending_tasks, chase_cadence_states, "
+        "chase_delivery_outbox, chase_delivery_events TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT UPDATE (state, closed_at, review_reason, version, updated_at) "
+        "ON chase_items TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT UPDATE ON chase_cadence_states, chase_delivery_outbox TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT DELETE ON chase_cadence_states TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text), "
+        "cosmaneura_record_accepted_delivery_attempt(uuid) TO {}"
+    ).format(identifier))
 
 
 def _bootstrap_practice_admin(conn, settings: Settings) -> None:
@@ -313,6 +404,7 @@ def apply_migrations(
             with conn.transaction():
                 _bootstrap_practice_admin(conn, config)
                 _provision_runtime_role(conn, config)
+                _provision_chase_worker_role(conn, config)
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (_MIGRATION_LOCK,))
     return applied_now

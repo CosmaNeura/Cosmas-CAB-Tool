@@ -16,6 +16,8 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "002_chase_persistence.up.sql",
         "003_pilot_persistence.up.sql",
         "004_chase_delivery_runtime.up.sql",
+        "005_accepted_delivery_attempt.up.sql",
+        "006_chase_policy_revocation.up.sql",
     ]
 
 

@@ -23,6 +23,25 @@ the same practice foreign key and forced row-level-security boundary. Staging
 and production require this store; JSONL feedback/audit files and in-memory
 encounters are local development/test seams only.
 
+`004_chase_delivery_runtime` adds the durable chase scheduler: verified contact
+snapshots and routes, immutable policy revisions and steps, Admin approval and
+revocation events, exact per-message and direct-contract review releases,
+active policy/cadence state, and a leased delivery outbox with append-only
+events. Its constraints and forced RLS bind every executable touch to the exact
+approved policy, contact, gate, and practice evidence.
+
+`005_accepted_delivery_attempt` adds one narrowly scoped security-definer
+function. The worker may call it only for an already-finalized accepted outbox
+row; the function derives and atomically appends the corresponding system
+contact attempt. The worker never receives direct write authority over staff
+contact history.
+
+`006_chase_policy_revocation` safely retires queued, no-provider-call work when
+an exact policy is revoked or gate evidence changes. It permits a later exact
+approval to replace only cancelled or definitive-failure reservations;
+submitting, accepted, and ambiguous deliveries remain uniqueness barriers and
+are never made retryable.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).
@@ -79,6 +98,8 @@ Use the locked runner from the one-shot migration job:
     DATABASE_URL='<migration-owner DSN>' \
     COSMANEURA_DB_RUNTIME_ROLE=cosmaneura_app \
     COSMANEURA_DB_RUNTIME_PASSWORD='<separate runtime password>' \
+    COSMANEURA_CHASE_WORKER_DB_ROLE=cosmaneura_chase_worker \
+    COSMANEURA_CHASE_WORKER_DB_PASSWORD='<separate worker password>' \
     COSMANEURA_ENTRA_TENANT_ID='<tenant UUID>' \
     COSMANEURA_PRACTICE_ID='<stable practice ID>' \
     COSMANEURA_PRACTICE_NAME='<reviewed display name>' \
@@ -87,26 +108,33 @@ Use the locked runner from the one-shot migration job:
 
 The runner serializes concurrent executions, applies each migration and its
 ledger row in one transaction, and refuses to continue if an already-applied
-file's SHA-256 changes. It also creates or rotates the least-privilege runtime
-login, binds that login to exactly one practice, and grants only the required
-table/sequence privileges. The bootstrap OID creates the initial reviewed
-`Admin` membership once; later migration runs never reactivate or overwrite a
-disabled membership. It does not discover users or create memberships from
-login traffic.
+file's SHA-256 changes. It also creates or rotates the least-privilege API and
+chase-worker logins, binds each login to exactly one practice, and grants only
+the required table/sequence/function privileges. The bootstrap OID creates the
+initial reviewed `Admin` membership once; later migration runs never reactivate
+or overwrite a disabled membership. It does not discover users or create
+memberships from login traffic.
 
-Keep two credentials:
+Keep three credentials:
 
-- The migration owner can change schema, provision the runtime login, and run
-  the explicit membership command. It is available only to controlled jobs or
-  operators and is never passed to the API container.
+- The migration owner can change schema, provision the two runtime logins, and
+  run the explicit membership command. It is available only to controlled jobs
+  or operators and is never passed to the API container.
 - The API's `DATABASE_URL` uses `COSMANEURA_DB_RUNTIME_ROLE` (normally
   `cosmaneura_app`). That role is `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`,
   `NOINHERIT`, and `NOBYPASSRLS`; it cannot update or delete audit rows. Forced
   RLS requires its practice setting to match its protected runtime-role
   binding, so changing the setting cannot expose another practice.
+- The one-shot chase worker uses `COSMANEURA_CHASE_WORKER_DATABASE_URL` with
+  `COSMANEURA_CHASE_WORKER_DB_ROLE` (normally `cosmaneura_chase_worker`). It can
+  read immutable chase authorization evidence and write only scheduler effects;
+  it cannot read identity, encounter, feedback, or access-audit tables and
+  cannot create policies, approvals, or human releases. Never pass this DSN,
+  its password, the ACS connection string, or the chase-gate key to the API.
 
-The Azure templates store these as separate Key Vault secrets. Never paste a
-real DSN or password into a tracked file, command history, or support output.
+The Azure deployment must store these as separate Key Vault secrets and expose
+each only to its owning job or service. Never paste a real DSN or password into
+a tracked file, command history, or support output.
 
 ### Explicit membership administration
 
@@ -133,7 +161,13 @@ Plain psql:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_chase_persistence.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_pilot_persistence.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004_chase_delivery_runtime.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_accepted_delivery_attempt.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.up.sql
     # rollback:
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.down.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_accepted_delivery_attempt.down.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004_chase_delivery_runtime.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_pilot_persistence.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_chase_persistence.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.down.sql
@@ -141,8 +175,8 @@ Plain psql:
 The down migrations are destructive and are intended only for an explicitly
 selected disposable database or a reviewed rollback. `002` is safe to apply
 before `001` when the chase store is needed before the dialogue index. Direct
-`psql` does not provision the runtime role or bootstrap administrator, so it is
-not a substitute for the deployment runner.
+`psql` does not provision the API/worker runtime roles or bootstrap
+administrator, so it is not a substitute for the deployment runner.
 
 Then load the corpus (see scripts/index_dialogues.py):
 

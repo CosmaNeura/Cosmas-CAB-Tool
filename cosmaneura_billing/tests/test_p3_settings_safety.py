@@ -59,6 +59,52 @@ def test_deployed_database_url_identity_must_match_runtime_role(environment):
         )
 
 
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        (
+            "postgresql://cosmaneura_app:synthetic@primary.invalid/db"
+            "?user=postgres"
+        ),
+        (
+            "postgresql://cosmaneura_app:synthetic@primary.invalid/db"
+            "?sslmode=require&options=-c%20role%3Dpostgres"
+        ),
+        "https://cosmaneura_app:synthetic@primary.invalid/db",
+    ],
+)
+def test_deployed_database_url_rejects_effective_identity_overrides(database_url):
+    with pytest.raises(SettingsError, match="least-privilege runtime role") as exc_info:
+        _production(database_url=database_url)
+
+    assert database_url not in str(exc_info.value)
+    assert "synthetic" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_deployed_database_url_allows_azure_tls_mode():
+    settings = _production(
+        database_url=(
+            "postgresql://cosmaneura_app:synthetic@primary.invalid/db"
+            "?sslmode=require"
+        ),
+    )
+
+    assert settings.database_url.endswith("?sslmode=require")
+
+
+def test_deployed_record_only_scheduler_requires_keyed_gate_evidence():
+    with pytest.raises(SettingsError, match="32-byte chase gate key"):
+        _production(chase_scheduler_enabled=True, chase_gate_hmac_key="")
+
+    settings = _production(
+        chase_scheduler_enabled=True,
+        chase_gate_hmac_key="synthetic-gate-key-that-is-32-bytes",
+    )
+    assert settings.chase_transport == "record_only"
+
+
 def test_bootstrap_object_id_is_validated_without_echoing_input():
     invalid = "not-an-entra-object-id"
 
@@ -78,3 +124,14 @@ def test_runtime_role_rejects_identifier_injection_without_echoing_input():
         )
 
     assert invalid not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("role", ["postgres", "azure_pg_admin", "pg_read_all_data"])
+def test_deployed_runtime_role_rejects_privileged_postgres_identities(role):
+    database_url = f"postgresql://{role}:synthetic@primary.invalid/db"
+
+    with pytest.raises(SettingsError, match="safe PostgreSQL role name") as exc_info:
+        _production(database_runtime_role=role, database_url=database_url)
+
+    assert database_url not in str(exc_info.value)
+    assert "synthetic" not in str(exc_info.value)
