@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 from cosmaneura_billing import api
 from cosmaneura_billing.chase import Attempt, Channel, ChaseItem, State, Trigger
 from cosmaneura_billing.chase.store import PostgresChaseStore
+from cosmaneura_billing.chase.worklist import ChaseActionConflict
 
 
 TEST_DSN = os.environ.get("COSMANEURA_TEST_DATABASE_URL", "")
@@ -52,11 +54,21 @@ def _schema():
             pytest.fail(
                 "COSMANEURA_TEST_DATABASE_URL must name a disposable test database"
             )
-        migration = (
-            Path(__file__).resolve().parents[1]
-            / "migrations" / "002_chase_persistence.up.sql"
-        ).read_text(encoding="utf-8")
-        conn.execute(migration, prepare=False)
+        migrations = Path(__file__).resolve().parents[1] / "migrations"
+        if conn.execute("SELECT to_regclass('public.chase_items')").fetchone()[0] is None:
+            conn.execute(
+                (migrations / "002_chase_persistence.up.sql").read_text(
+                    encoding="utf-8"
+                ),
+                prepare=False,
+            )
+        if conn.execute("SELECT to_regclass('public.encounters')").fetchone()[0] is None:
+            conn.execute(
+                (migrations / "003_pilot_persistence.up.sql").read_text(
+                    encoding="utf-8"
+                ),
+                prepare=False,
+            )
     yield
 
 
@@ -67,6 +79,17 @@ def _empty_tables():
         return
     with psycopg.connect(TEST_DSN, autocommit=True) as conn:
         conn.execute("TRUNCATE chase_items CASCADE")
+        for practice_id in ("practice-a", "practice-b", "api-restart"):
+            conn.execute(
+                "SELECT set_config('cosmaneura.practice_id', %s, false)",
+                (practice_id,),
+            )
+            conn.execute(
+                """INSERT INTO practices (practice_id, display_name)
+                   VALUES (%s, %s)
+                   ON CONFLICT (practice_id) DO NOTHING""",
+                (practice_id, f"Synthetic {practice_id}"),
+            )
     yield
     api.get_chase_context.cache_clear()
 
@@ -157,6 +180,43 @@ def test_failed_transition_rolls_back_item_and_contact_log():
     assert restored is not None
     assert restored.assignee == ""
     assert restored.attempts == []
+
+
+def test_staff_action_receipt_is_exactly_once_and_audit_id_is_random():
+    store = _store()
+    store.upsert(_item(patient_ref="LOW-ENTROPY-1001"))
+    action_id = str(uuid4())
+    checked_transactions = []
+
+    def transaction_check(conn) -> None:
+        checked_transactions.append(conn.execute(
+            "SELECT current_setting('cosmaneura.practice_id') AS practice_id"
+        ).fetchone()["practice_id"])
+
+    def append(item: ChaseItem) -> None:
+        item.attempts.append(Attempt(
+            channel=Channel.PHONE,
+            template_id="phone.call",
+            at="2026-08-17T10:00:00+00:00",
+            actor="cindy",
+        ))
+
+    store.mutate(
+        "chase-pg-1", append, action_id=action_id, payload_hash="a" * 64,
+        transaction_check=transaction_check,
+    )
+    replayed = store.mutate(
+        "chase-pg-1", append, action_id=action_id, payload_hash="a" * 64,
+        transaction_check=transaction_check,
+    )
+
+    assert replayed is not None and replayed.touches == 1
+    assert checked_transactions == ["practice-a"]
+    UUID(store.audit_resource_id("chase-pg-1"))
+    with pytest.raises(ChaseActionConflict):
+        store.mutate(
+            "chase-pg-1", append, action_id=action_id, payload_hash="b" * 64,
+        )
 
 
 def test_redetection_preserves_closed_state_and_history():

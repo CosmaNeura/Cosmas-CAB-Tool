@@ -53,6 +53,10 @@ class PrincipalRoleError(PermissionError):
         self.principal = principal
 
 
+class PrincipalStoreUnavailable(RuntimeError):
+    """The local membership authority could not make a safe decision."""
+
+
 @dataclass(frozen=True)
 class AuthPrincipal:
     user_id: str
@@ -140,11 +144,13 @@ class EntraAuthMiddleware:
         settings: Settings,
         failure_limiter: FixedWindowLimiter,
         denied_auditor: Callable[[dict, int], None] | None = None,
+        principal_authorizer: Callable[[AuthPrincipal], AuthPrincipal] | None = None,
     ) -> None:
         self.app = app
         self.settings = settings
         self.failure_limiter = failure_limiter
         self.denied_auditor = denied_auditor
+        self.principal_authorizer = principal_authorizer
 
     async def _respond(
         self,
@@ -221,11 +227,18 @@ class EntraAuthMiddleware:
                     "aad", "azureactivedirectory",
                 }:
                     raise PrincipalError("conflicting identity-provider header")
+                if self.principal_authorizer is not None:
+                    principal = self.principal_authorizer(principal)
                 state["principal"] = principal
             except PrincipalRoleError as exc:
                 state["principal"] = exc.principal
                 await self._respond(
                     scope, send, 403, {"detail": "access is not permitted"},
+                )
+                return
+            except PrincipalStoreUnavailable:
+                await self._respond(
+                    scope, send, 503, {"detail": "identity service is unavailable"},
                 )
                 return
             except (PrincipalError, UnicodeDecodeError, ValueError):

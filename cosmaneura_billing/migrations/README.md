@@ -16,9 +16,18 @@ attempts, pending staff tasks, and resolutions. Composite keys and foreign keys
 include `practice_id`; the application also applies that scope to every query.
 The chase migration does not require pgvector and may be run independently.
 
+`003_pilot_persistence` makes PostgreSQL the pilot system of record for
+practices, explicit Entra practice memberships, encounters, normalized coder
+feedback and access-audit attempts/completions. It brings the chase tables under
+the same practice foreign key and forced row-level-security boundary. Staging
+and production require this store; JSONL feedback/audit files and in-memory
+encounters are local development/test seams only.
+
 ## Requirements
 
-- PostgreSQL 14 or newer.
+- PostgreSQL 16 for the pilot persistence schema (`003`).
+- PostgreSQL 14 or newer is sufficient only for the earlier standalone
+  dialogue/chase migrations.
 - The `pgvector` extension enabled on the server (>= 0.7.0 for HNSW) only when
   running `001_init_pgvector`.
 
@@ -63,17 +72,77 @@ in the up-migration, re-embed the corpus, and recreate the index.
 
 ## Running it
 
+### Deployment runner (required for the pilot)
+
+Use the locked runner from the one-shot migration job:
+
+    DATABASE_URL='<migration-owner DSN>' \
+    COSMANEURA_DB_RUNTIME_ROLE=cosmaneura_app \
+    COSMANEURA_DB_RUNTIME_PASSWORD='<separate runtime password>' \
+    COSMANEURA_ENTRA_TENANT_ID='<tenant UUID>' \
+    COSMANEURA_PRACTICE_ID='<stable practice ID>' \
+    COSMANEURA_PRACTICE_NAME='<reviewed display name>' \
+    COSMANEURA_BOOTSTRAP_ADMIN_OID='<immutable Entra object UUID>' \
+    python -m cosmaneura_billing.migrations
+
+The runner serializes concurrent executions, applies each migration and its
+ledger row in one transaction, and refuses to continue if an already-applied
+file's SHA-256 changes. It also creates or rotates the least-privilege runtime
+login, binds that login to exactly one practice, and grants only the required
+table/sequence privileges. The bootstrap OID creates the initial reviewed
+`Admin` membership once; later migration runs never reactivate or overwrite a
+disabled membership. It does not discover users or create memberships from
+login traffic.
+
+Keep two credentials:
+
+- The migration owner can change schema, provision the runtime login, and run
+  the explicit membership command. It is available only to controlled jobs or
+  operators and is never passed to the API container.
+- The API's `DATABASE_URL` uses `COSMANEURA_DB_RUNTIME_ROLE` (normally
+  `cosmaneura_app`). That role is `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`,
+  `NOINHERIT`, and `NOBYPASSRLS`; it cannot update or delete audit rows. Forced
+  RLS requires its practice setting to match its protected runtime-role
+  binding, so changing the setting cannot expose another practice.
+
+The Azure templates store these as separate Key Vault secrets. Never paste a
+real DSN or password into a tracked file, command history, or support output.
+
+### Explicit membership administration
+
+After the first administrator is bootstrapped, add, change, or disable every
+practice member explicitly with the migration-owner DSN from a private,
+controlled execution environment:
+
+    DATABASE_URL='<migration-owner DSN>' \
+    COSMANEURA_ENTRA_TENANT_ID='<tenant UUID>' \
+    COSMANEURA_PRACTICE_ID='<stable practice ID>' \
+    python -m cosmaneura_billing.memberships \
+      '<immutable Entra object UUID>' --role Coder
+
+Repeat `--role` for multiple reviewed roles. To disable a member, pass
+`--disable` plus the member's reviewed role set. The CLI validates the practice
+and tenant binding and never accepts a display name or email as identity. There
+is no just-in-time membership path: an Entra login without an active database
+membership remains denied.
+
+### Manual SQL (disposable/reviewed use only)
+
 Plain psql:
 
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_chase_persistence.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_pilot_persistence.up.sql
     # rollback:
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_pilot_persistence.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_chase_persistence.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.down.sql
 
 The down migrations are destructive and are intended only for an explicitly
 selected disposable database or a reviewed rollback. `002` is safe to apply
-before `001` when the chase store is needed before the dialogue index.
+before `001` when the chase store is needed before the dialogue index. Direct
+`psql` does not provision the runtime role or bootstrap administrator, so it is
+not a substitute for the deployment runner.
 
 Then load the corpus (see scripts/index_dialogues.py):
 

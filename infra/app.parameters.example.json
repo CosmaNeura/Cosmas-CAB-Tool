@@ -6,6 +6,8 @@
     "imageTag": { "value": "REPLACE_WITH_IMMUTABLE_TAG" },
     "practiceId": { "value": "synthetic-pilot" },
     "practiceName": { "value": "Your Care Team" },
+    "initialAdminObjectId": { "value": "REPLACE_WITH_ENTRA_ADMIN_OBJECT_UUID" },
+    "postgresAppLogin": { "value": "cosmaneura_app" },
     "uploadUrl": { "value": "https://example.invalid/insurance" },
     "entraTenantId": { "value": "REPLACE_WITH_ENTRA_TENANT_UUID" },
     "entraClientId": { "value": "REPLACE_WITH_ENTRA_APPLICATION_CLIENT_UUID" },

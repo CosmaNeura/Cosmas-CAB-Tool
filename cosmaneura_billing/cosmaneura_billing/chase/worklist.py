@@ -20,10 +20,15 @@ from .models import TERMINAL, ChaseItem, State, Trigger
 BUCKETS = ("missing", "expired", "eligibility")
 
 
+class ChaseActionConflict(ValueError):
+    """One staff-action UUID was reused for different content."""
+
+
 @dataclass
 class Worklist:
     """An in-memory worklist. Persistence is a storage concern, not a queue one."""
     items: dict[str, ChaseItem] = field(default_factory=dict)
+    action_receipts: dict[str, str] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------ load #
     def upsert(self, item: ChaseItem) -> ChaseItem:
@@ -47,7 +52,7 @@ class Worklist:
         existing.direct_contract = item.direct_contract or existing.direct_contract
         return existing
 
-    def extend(self, items: Iterable[ChaseItem]) -> list[ChaseItem]:
+    def extend(self, items: Iterable[ChaseItem], **_kwargs) -> list[ChaseItem]:
         return [self.upsert(i) for i in items]
 
     @staticmethod
@@ -58,7 +63,9 @@ class Worklist:
         return next((i for i in self.items.values() if i.chase_id == chase_id), None)
 
     def mutate(
-        self, chase_id: str, change: Callable[[ChaseItem], Any],
+        self, chase_id: str, change: Callable[[ChaseItem], Any], *,
+        action_id: str | None = None, payload_hash: str | None = None,
+        **_kwargs,
     ) -> Optional[ChaseItem]:
         """Apply one state transition.
 
@@ -68,7 +75,19 @@ class Worklist:
         """
         item = self.get(chase_id)
         if item is not None:
+            if action_id:
+                existing = self.action_receipts.get(action_id)
+                if existing is not None:
+                    if existing != payload_hash:
+                        raise ChaseActionConflict(
+                            "action ID conflicts with an existing staff action"
+                        )
+                    return item
+                if not payload_hash:
+                    raise ValueError("an idempotent action requires a payload hash")
             change(item)
+            if action_id:
+                self.action_receipts[action_id] = payload_hash
         return item
 
     def all_items(self) -> list[ChaseItem]:

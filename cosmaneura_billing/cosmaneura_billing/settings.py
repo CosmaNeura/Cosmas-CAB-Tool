@@ -9,6 +9,7 @@ Secret values are excluded from representations and validation errors.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
@@ -32,6 +33,7 @@ _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
 _CHASE_STORES = frozenset({"memory", "postgres"})
+_STATE_STORES = frozenset({"local", "postgres"})
 _APPROVAL_MODES = frozenset({"per_policy", "per_message"})
 _AUTH_MODES = frozenset({"disabled", "container_apps"})
 _DEFAULT_ALLOWED_ROLES = ("Admin", "BillingStaff", "Coder", "Provider")
@@ -124,6 +126,12 @@ class Settings:
     openai_api_key: str = field(default="", repr=False, metadata={"secret": True})
 
     database_url: str = field(default="", repr=False, metadata={"secret": True})
+    state_store: str = "local"
+    database_runtime_role: str = "cosmaneura_app"
+    database_runtime_password: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    bootstrap_admin_oid: str = ""
     chase_database_url: str = field(
         default="", repr=False, metadata={"secret": True}
     )
@@ -184,6 +192,8 @@ class Settings:
             )
         if self.chase_store not in _CHASE_STORES:
             raise SettingsError("COSMANEURA_CHASE_STORE must be memory or postgres")
+        if self.state_store not in _STATE_STORES:
+            raise SettingsError("COSMANEURA_STATE_STORE must be local or postgres")
         if self.chase_approval not in _APPROVAL_MODES:
             raise SettingsError(
                 "COSMANEURA_CHASE_APPROVAL must be per_policy or per_message"
@@ -207,6 +217,63 @@ class Settings:
                 raise SettingsError(
                     "COSMANEURA_PRACTICE_ID is required for authenticated access"
                 )
+        if self.state_store == "postgres":
+            if self.auth_mode != "container_apps":
+                raise SettingsError(
+                    "Postgres state requires COSMANEURA_AUTH_MODE=container_apps"
+                )
+            if not self.database_url.strip():
+                raise SettingsError(
+                    "DATABASE_URL is required when COSMANEURA_STATE_STORE=postgres"
+                )
+            if not self.practice_id.strip():
+                raise SettingsError(
+                    "COSMANEURA_PRACTICE_ID is required for Postgres state"
+                )
+            try:
+                UUID(self.entra_tenant_id)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise SettingsError(
+                    "COSMANEURA_ENTRA_TENANT_ID is required for Postgres state"
+                ) from exc
+            if self.chase_database_url and self.chase_database_url != self.database_url:
+                raise SettingsError(
+                    "Postgres state and chase must use the same DATABASE_URL "
+                    "for atomic audit transactions"
+                )
+        if self.environment in {"staging", "production"}:
+            if self.state_store != "postgres":
+                raise SettingsError(
+                    "staging and production require COSMANEURA_STATE_STORE=postgres"
+                )
+            if self.chase_store != "postgres":
+                raise SettingsError(
+                    "staging and production require COSMANEURA_CHASE_STORE=postgres"
+                )
+            if not self.database_runtime_role.strip():
+                raise SettingsError("COSMANEURA_DB_RUNTIME_ROLE must not be empty")
+            database_user = urlsplit(self.database_url).username or ""
+            if database_user != self.database_runtime_role:
+                raise SettingsError(
+                    "DATABASE_URL must use the configured least-privilege runtime role"
+                )
+        if self.database_runtime_password and not self.database_runtime_role.strip():
+            raise SettingsError("COSMANEURA_DB_RUNTIME_ROLE must not be empty")
+        if (
+            self.state_store == "postgres" or self.database_runtime_password
+        ) and not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_.-]{0,62}", self.database_runtime_role,
+        ):
+            raise SettingsError(
+                "COSMANEURA_DB_RUNTIME_ROLE must be a safe PostgreSQL role name"
+            )
+        if self.bootstrap_admin_oid:
+            try:
+                UUID(self.bootstrap_admin_oid)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise SettingsError(
+                    "COSMANEURA_BOOTSTRAP_ADMIN_OID must be a UUID"
+                ) from exc
         if not self.allowed_roles or any(not role.strip() for role in self.allowed_roles):
             raise SettingsError("COSMANEURA_ALLOWED_ROLES must not be empty")
         if not set(self.allowed_roles).issubset(_DEFAULT_ALLOWED_ROLES):
@@ -299,6 +366,18 @@ class Settings:
             anthropic_effort=env.get("ANTHROPIC_EFFORT") or "high",
             openai_api_key=env.get("OPENAI_API_KEY", ""),
             database_url=env.get("DATABASE_URL", ""),
+            state_store=(
+                env.get("COSMANEURA_STATE_STORE") or "local"
+            ).strip().lower(),
+            database_runtime_role=(
+                env.get("COSMANEURA_DB_RUNTIME_ROLE") or "cosmaneura_app"
+            ).strip(),
+            database_runtime_password=env.get(
+                "COSMANEURA_DB_RUNTIME_PASSWORD", ""
+            ),
+            bootstrap_admin_oid=(
+                env.get("COSMANEURA_BOOTSTRAP_ADMIN_OID") or ""
+            ).strip(),
             chase_database_url=env.get("COSMANEURA_CHASE_DATABASE_URL", ""),
             chase_store=(env.get("COSMANEURA_CHASE_STORE") or "memory").strip().lower(),
             practice_id=env.get("COSMANEURA_PRACTICE_ID") or "",

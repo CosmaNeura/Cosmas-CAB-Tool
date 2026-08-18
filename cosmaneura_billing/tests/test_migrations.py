@@ -14,6 +14,7 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
     assert [path.name for path in paths] == [
         "001_init_pgvector.up.sql",
         "002_chase_persistence.up.sql",
+        "003_pilot_persistence.up.sql",
     ]
 
 

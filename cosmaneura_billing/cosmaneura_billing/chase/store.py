@@ -12,10 +12,11 @@ them across Container Apps replicas.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import contextmanager
 from typing import Any, Optional, Protocol
 
 from .models import Attempt, ChaseItem
-from .worklist import Worklist
+from .worklist import ChaseActionConflict, Worklist
 from ..settings import Settings
 
 
@@ -23,10 +24,10 @@ class ChaseStore(Protocol):
     """Storage surface consumed by the API and future scheduler."""
 
     def upsert(self, item: ChaseItem) -> ChaseItem: ...
-    def extend(self, items: Iterable[ChaseItem]) -> list[ChaseItem]: ...
+    def extend(self, items: Iterable[ChaseItem], **kwargs) -> list[ChaseItem]: ...
     def get(self, chase_id: str) -> Optional[ChaseItem]: ...
     def mutate(
-        self, chase_id: str, change: Callable[[ChaseItem], Any],
+        self, chase_id: str, change: Callable[[ChaseItem], Any], **kwargs,
     ) -> Optional[ChaseItem]: ...
     def rows(self, **filters: Any) -> list[ChaseItem]: ...
     def counts(self) -> dict[str, Any]: ...
@@ -64,14 +65,27 @@ class PostgresChaseStore:
         self._dsn = dsn
         self.practice_id = practice_id
         self._connect = psycopg.connect
+        self._database_error = psycopg.Error
         self._dict_row = dict_row
         self._jsonb = Jsonb
 
     def __repr__(self) -> str:
         return f"PostgresChaseStore(practice_id={self.practice_id!r}, dsn='<redacted>')"
 
+    @contextmanager
     def _connection(self):
-        return self._connect(self._dsn, row_factory=self._dict_row)
+        try:
+            with self._connect(
+                self._dsn, row_factory=self._dict_row, connect_timeout=3,
+            ) as conn:
+                conn.execute(
+                    "SELECT set_config('cosmaneura.practice_id', %s, true)",
+                    (self.practice_id,),
+                )
+                yield conn
+        except self._database_error as exc:
+            from ..persistence import PersistenceUnavailable
+            raise PersistenceUnavailable("Postgres chase storage is unavailable") from exc
 
     # --------------------------------------------------------------- loading #
     def _load_items(self, conn, chase_ids: list[str] | None = None) -> list[ChaseItem]:
@@ -149,6 +163,16 @@ class PostgresChaseStore:
         with self._connection() as conn:
             items = self._load_items(conn, [chase_id])
             return items[0] if items else None
+
+    def audit_resource_id(self, chase_id: str) -> str:
+        """Return the random DB identity; never audit the patient-derived ID."""
+        with self._connection() as conn:
+            row = conn.execute(
+                """SELECT chase_uid FROM chase_items
+                    WHERE practice_id = %s AND chase_id = %s""",
+                (self.practice_id, chase_id),
+            ).fetchone()
+        return str(row["chase_uid"]) if row else ""
 
     # --------------------------------------------------------------- writing #
     def _item_values(self, item: ChaseItem) -> tuple[Any, ...]:
@@ -241,13 +265,48 @@ class PostgresChaseStore:
                      self._jsonb(item.resolution)),
                 )
 
-    def upsert(self, item: ChaseItem) -> ChaseItem:
-        """Atomically insert or refresh one patient/problem pair."""
-        with self._connection() as conn:
+    def _upsert(self, conn, item: ChaseItem) -> ChaseItem:
+        """Insert/refresh one item inside a caller-owned transaction."""
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT chase_id
+                     FROM chase_items
+                    WHERE practice_id = %s
+                      AND patient_ref = %s AND trigger = %s
+                    FOR UPDATE""",
+                (self.practice_id, item.patient_ref, item.trigger.value),
+            )
+            existing = cur.fetchone()
+
+        if existing is None:
+            # A concurrent first detection can win after our SELECT. The
+            # unique key makes that safe; retry the locked read on conflict.
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT chase_id
-                         FROM chase_items
+                    """INSERT INTO chase_items (
+                           practice_id, chase_id, patient_ref, trigger,
+                           detected_at, appointment_at, state, priority,
+                           bucket, direct_contract, review_reason, assignee,
+                           closed_at
+                       ) VALUES (
+                           %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s, %s, %s
+                       )
+                       ON CONFLICT (practice_id, patient_ref, trigger)
+                       DO NOTHING
+                       RETURNING chase_id""",
+                    (
+                        self.practice_id, item.chase_id,
+                        *self._item_values(item),
+                    ),
+                )
+                inserted = cur.fetchone()
+            if inserted is not None:
+                self._sync_related(conn, item, previous_attempts=[])
+                return item
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT chase_id FROM chase_items
                         WHERE practice_id = %s
                           AND patient_ref = %s AND trigger = %s
                         FOR UPDATE""",
@@ -255,57 +314,89 @@ class PostgresChaseStore:
                 )
                 existing = cur.fetchone()
 
-            if existing is None:
-                # A concurrent first detection can win after our SELECT. The
-                # unique key makes that safe; retry the locked read on conflict.
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO chase_items (
-                               practice_id, chase_id, patient_ref, trigger,
-                               detected_at, appointment_at, state, priority,
-                               bucket, direct_contract, review_reason, assignee,
-                               closed_at
-                           ) VALUES (
-                               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                               %s, %s, %s
-                           )
-                           ON CONFLICT (practice_id, patient_ref, trigger)
-                           DO NOTHING
-                           RETURNING chase_id""",
-                        (
-                            self.practice_id, item.chase_id,
-                            *self._item_values(item),
-                        ),
-                    )
-                    inserted = cur.fetchone()
-                if inserted is not None:
-                    self._sync_related(conn, item, previous_attempts=[])
-                    return item
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """SELECT chase_id FROM chase_items
-                            WHERE practice_id = %s
-                              AND patient_ref = %s AND trigger = %s
-                            FOR UPDATE""",
-                        (self.practice_id, item.patient_ref, item.trigger.value),
-                    )
-                    existing = cur.fetchone()
+        if existing is None:  # defensive: unique conflict must resolve
+            raise RuntimeError("could not resolve concurrent chase upsert")
+        current = self._load_items(conn, [existing["chase_id"]])[0]
+        if current.is_open:
+            current.priority = item.priority
+            current.appointment_at = item.appointment_at or current.appointment_at
+            current.direct_contract = item.direct_contract or current.direct_contract
+            self._update_item(conn, current)
+        return current
 
-            if existing is None:  # defensive: unique conflict must resolve
-                raise RuntimeError("could not resolve concurrent chase upsert")
-            current = self._load_items(conn, [existing["chase_id"]])[0]
-            if current.is_open:
-                current.priority = item.priority
-                current.appointment_at = item.appointment_at or current.appointment_at
-                current.direct_contract = item.direct_contract or current.direct_contract
-                self._update_item(conn, current)
-            return current
+    def _commit_audit(self, conn, event) -> None:
+        if event is None:
+            return
+        if event.practice_id != self.practice_id or event.outcome != "allowed":
+            raise ValueError("chase audit completion does not match the mutation")
+        # Local import avoids coupling the deterministic chase domain to the
+        # HTTP audit types while still sharing one database transaction.
+        from ..persistence import PostgresAccessAuditStore
+        PostgresAccessAuditStore._insert_completion(conn, event)
 
-    def extend(self, items: Iterable[ChaseItem]) -> list[ChaseItem]:
-        return [self.upsert(item) for item in items]
+    def _claim_action(
+        self, conn, *, chase_id: str, action_id: str, payload_hash: str,
+    ) -> bool:
+        """Return true for a new action and false for an exact replay."""
+        row = conn.execute(
+            """INSERT INTO chase_action_receipts (
+                   practice_id, action_id, chase_id, payload_hash
+               ) VALUES (%s, %s::uuid, %s, %s)
+               ON CONFLICT (practice_id, action_id) DO NOTHING
+               RETURNING action_id""",
+            (self.practice_id, action_id, chase_id, payload_hash),
+        ).fetchone()
+        if row is not None:
+            return True
+        existing = conn.execute(
+            """SELECT chase_id, payload_hash FROM chase_action_receipts
+                WHERE practice_id = %s AND action_id = %s::uuid""",
+            (self.practice_id, action_id),
+        ).fetchone()
+        if (
+            existing is None
+            or existing["chase_id"] != chase_id
+            or existing["payload_hash"] != payload_hash
+        ):
+            raise ChaseActionConflict(
+                "action ID conflicts with an existing staff action"
+            )
+        return False
+
+    def upsert(self, item: ChaseItem) -> ChaseItem:
+        """Atomically insert or refresh one patient/problem pair."""
+        with self._connection() as conn:
+            return self._upsert(conn, item)
+
+    def extend(self, items: Iterable[ChaseItem], *, audit_event=None) -> list[ChaseItem]:
+        """Commit one detection batch and its DECIDE audit completion together."""
+        with self._connection() as conn:
+            rows = [self._upsert(conn, item) for item in items]
+            self._commit_audit(conn, audit_event)
+            return rows
+
+    def extend_and_snapshot(
+        self, items: Iterable[ChaseItem], *, audit_event,
+    ) -> dict[str, Any]:
+        """Return the committed response view without a post-audit DB read."""
+        with self._connection() as conn:
+            for item in items:
+                self._upsert(conn, item)
+            snapshot = Worklist()
+            for item in self._load_items(conn):
+                snapshot.items[Worklist._key(item)] = item
+            payload = {
+                "counts": snapshot.counts(),
+                "rows": [item.to_dict() for item in snapshot.rows()],
+            }
+            self._commit_audit(conn, audit_event)
+            return payload
 
     def mutate(
-        self, chase_id: str, change: Callable[[ChaseItem], Any],
+        self, chase_id: str, change: Callable[[ChaseItem], Any], *,
+        audit_event=None, action_id: str | None = None,
+        payload_hash: str | None = None,
+        transaction_check: Callable[[Any], None] | None = None,
     ) -> Optional[ChaseItem]:
         """Lock, transition, and persist exactly one chase row."""
         with self._connection() as conn:
@@ -320,10 +411,22 @@ class PostgresChaseStore:
                     return None
 
             item = self._load_items(conn, [chase_id])[0]
+            if action_id:
+                if not payload_hash:
+                    raise ValueError("an idempotent action requires a payload hash")
+                if not self._claim_action(
+                    conn, chase_id=chase_id, action_id=action_id,
+                    payload_hash=payload_hash,
+                ):
+                    self._commit_audit(conn, audit_event)
+                    return item
+            if transaction_check is not None:
+                transaction_check(conn)
             previous_attempts = list(item.attempts)
             change(item)
             self._update_item(conn, item)
             self._sync_related(conn, item, previous_attempts=previous_attempts)
+            self._commit_audit(conn, audit_event)
             return item
 
     # ---------------------------------------------------------------- views #
@@ -367,6 +470,6 @@ def chase_store_from_env(
 
 
 __all__ = [
-    "ChaseStore", "PostgresChaseStore", "chase_store_from_env",
+    "ChaseActionConflict", "ChaseStore", "PostgresChaseStore", "chase_store_from_env",
     "chase_store_from_settings",
 ]

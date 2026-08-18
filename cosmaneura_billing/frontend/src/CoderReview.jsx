@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Check, X, Pencil, Plus, Clock, ChevronDown, Info, Send, RefreshCw } from "lucide-react";
 import { api } from "./api.js";
 
 /*
   Coder review & feedback, wired to the live engine:
     GET  /api/encounters/{id}/coder-view  -> the pre-coded claim with evidence
-    POST /api/feedback                    -> the coder's decisions (JSONL store)
+    POST /api/feedback                    -> the coder's durable decisions
   Offline (`live` false) it falls back to the demo claim so the flow stays
   walkable.
 */
@@ -140,10 +140,17 @@ export default function CoderReview({ encounterId, live }) {
   const [seconds, setSeconds] = useState(0);
   const [done, setDone] = useState(null);
   const [error, setError] = useState(null);
+  const reviewId = useRef(null);
+  const pendingPayload = useRef(null);
 
   // load the pre-coded claim for this encounter
   useEffect(() => {
     setEngine(null); setDone(null); setError(null); setAdded([]); setSeconds(0);
+    // P3 DATA SEAM: one stable retry key per loaded review draft. Keep it until
+    // the server acknowledges the submission so response loss cannot double
+    // count a preference signal.
+    reviewId.current = globalThis.crypto.randomUUID();
+    pendingPayload.current = null;
     (async () => {
       let eng = live ? null : FALLBACK_ENGINE;
       if (live) {
@@ -201,24 +208,38 @@ export default function CoderReview({ encounterId, live }) {
   const agreed = captured.filter(({ id }) => dec[id]?.action === "accept").length;
 
   const submit = async () => {
+    if (pendingPayload.current) {
+      try {
+        const r = await api("/api/feedback", { method: "POST", body: pendingPayload.current });
+        setDone({ ...pendingPayload.current, _replayed: r.replayed });
+      } catch (e) {
+        setError(`feedback submit failed: ${e.message}`);
+      }
+      return;
+    }
     const decisions = [];
     if (engine.em) decisions.push({ kind: "EM", engine_code: engine.em.code, action: dec.em.action, final_code: dec.em.final, reason_code: dec.em.reason, note: "" });
     (engine.dx || []).forEach((r) => { const d = dec[r.id]; decisions.push({ kind: "ICD10", engine_code: r.code, action: d.action, final_code: d.final, reason_code: d.reason, note: "" }); });
     (engine.withheld || []).forEach((w) => {
       const s = withheld[w.id];
-      if (s?.bill) decisions.push({ kind: "ICD10", engine_code: w.code, action: "add", final_code: w.code, reason_code: s.reason || "dx_missed_by_engine", note: `coder billed engine-${w.status} code` });
-      else decisions.push({ kind: "ICD10", engine_code: w.code, action: "accept", final_code: null, reason_code: null, note: `confirmed not billed (engine ${w.status})` });
+      if (s?.bill) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: w.code, reason_code: s.reason || "dx_missed_by_engine", note: `coder billed engine-${w.status} code` });
+      else decisions.push({ kind: "ICD10", engine_code: w.code, action: "reject", final_code: null, reason_code: "other", note: `confirmed not billed (engine ${w.status})` });
     });
     added.forEach((a) => { if (a.code) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: a.code, reason_code: "dx_missed_by_engine", note: a.note || "" }); });
     const payload = {
-      encounter_id: engine.encounterId, engine_version: engine.engineVersion,
+      review_id: reviewId.current, encounter_id: engine.encounterId,
+      review_context: engine.reviewContext,
+      encounter_version: engine.encounterVersion || 1,
       submitted_em: engine.submittedEm, engine_em: engine.em?.code || null, final_em: dec.em?.final || null,
       decisions, time_spent_seconds: seconds, overall_note: "",
     };
     if (live) {
+      // Freeze the exact first payload. A response-lost retry must reuse both
+      // the UUID and timer value or the server correctly treats it as a conflict.
+      pendingPayload.current = payload;
       try {
         const r = await api("/api/feedback", { method: "POST", body: payload });
-        setDone({ ...payload, _stored: r.stored });
+        setDone({ ...payload, _replayed: r.replayed });
       } catch (e) {
         setError(`feedback submit failed: ${e.message}`);
       }

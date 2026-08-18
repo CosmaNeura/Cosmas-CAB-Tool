@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
+from uuid import UUID
 
 from .auth import AuthPrincipal
 from .security import client_ip, send_json
 from .settings import Settings
 
-_SAFE_RESOURCE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _ENCOUNTER_ROUTE = re.compile(
     r"^/api/encounters/(?P<id>[^/]+)(?P<suffix>/billing|/coder-view|/billing-tab)?$"
 )
@@ -27,6 +27,7 @@ class AccessAuditEvent:
     event_id: str
     occurred_at: str
     practice_id: str
+    actor_tenant_id: str
     actor_user_id: str
     actor_roles: tuple[str, ...]
     action: str
@@ -44,7 +45,7 @@ class AccessAuditStore(Protocol):
 
 
 class FileAccessAuditStore:
-    """Append-only pilot store; P3 replaces this seam with PostgreSQL."""
+    """Append-only local development/test seam; pilots use PostgreSQL."""
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = Path(path)
@@ -91,8 +92,14 @@ class MemoryAccessAuditStore:
         return None
 
 
-def _safe_id(value: str) -> str:
-    return value if isinstance(value, str) and _SAFE_RESOURCE_ID.fullmatch(value) else ""
+def _opaque_resource_id(value: str) -> str:
+    """Accept only server-issued random/opaque UUIDs."""
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return str(UUID(value))
+    except ValueError:
+        return ""
 
 
 def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
@@ -104,7 +111,7 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
     if encounter:
         suffix = encounter.group("suffix") or ""
         action = "encounter.compute" if suffix else "encounter.view"
-        return action, f"/api/encounters/{{id}}{suffix}", _safe_id(encounter.group("id"))
+        return action, f"/api/encounters/{{id}}{suffix}", ""
     if path == "/api/billing":
         return "encounter.compute", "/api/billing", ""
     if path == "/api/completeness":
@@ -119,13 +126,13 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "chase.decide", "/api/chase/detect", ""
     chase = _CHASE_ROUTE.fullmatch(path)
     if chase:
-        return "chase.decide", "/api/chase/{id}/action", _safe_id(chase.group("id"))
+        return "chase.decide", "/api/chase/{id}/action", ""
     if path.startswith("/api/"):
         return "api.access", "unmatched_api_route", ""
     return None
 
 
-def _access_event(
+def build_access_event(
     *,
     settings: Settings,
     scope: dict,
@@ -139,13 +146,14 @@ def _access_event(
     principal = state.get("principal")
     if not isinstance(principal, AuthPrincipal):
         principal = None
-    resource_id = _safe_id(state.get("audit_resource_id", "")) or resource_id
+    resource_id = _opaque_resource_id(state.get("audit_resource_id", "")) or resource_id
     return AccessAuditEvent(
         event_id=event_id,
         occurred_at=datetime.now(timezone.utc).isoformat(),
         practice_id=(
             principal.practice_id if principal else settings.practice_id
         ),
+        actor_tenant_id=(principal.tenant_id if principal else ""),
         actor_user_id=(principal.user_id if principal else ""),
         actor_roles=tuple(sorted(principal.roles)) if principal else (),
         action=action,
@@ -172,7 +180,7 @@ class DeniedAccessAuditor:
         if classified is None:
             return
         outcome = "throttled" if status == 429 else "denied"
-        self.store.append(_access_event(
+        self.store.append(build_access_event(
             settings=self.settings,
             scope=scope,
             classified=classified,
@@ -205,8 +213,9 @@ class AccessAuditMiddleware:
         # to attempt the semantic action. It must exist before a route can read
         # or mutate data; P3 makes the completion and mutation one transaction.
         event_id = str(uuid4())
+        scope.setdefault("state", {})["audit_event_id"] = event_id
         try:
-            self.store.append(_access_event(
+            self.store.append(build_access_event(
                 settings=self.settings,
                 scope=scope,
                 classified=classified,
@@ -239,8 +248,14 @@ class AccessAuditMiddleware:
             else "allowed" if status < 400
             else "error"
         )
+        if scope.get("state", {}).get("audit_completion_committed"):
+            if caught is not None:
+                raise caught
+            for message in messages:
+                await send(message)
+            return
         try:
-            self.store.append(_access_event(
+            self.store.append(build_access_event(
                 settings=self.settings,
                 scope=scope,
                 classified=classified,
@@ -249,6 +264,11 @@ class AccessAuditMiddleware:
                 outcome=outcome,
             ))
         except Exception:
+            if self.settings.state_store == "postgres":
+                await send_json(
+                    send, 503, {"detail": "access audit is unavailable"},
+                )
+                return
             # The pre-route reservation is already durable. Returning the
             # buffered result avoids inviting a duplicate retry after a
             # mutation while the incomplete event flags reconciliation.

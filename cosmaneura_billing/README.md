@@ -33,9 +33,12 @@ cd frontend && npm install && npm run dev     # -> http://localhost:5173
 The UI shows a live-engine status pill (NCCI / coverage / CPT), lets you pick
 an encounter (the GI-bleed demo plus ACI-Bench visits), edit the documentation,
 run the pipeline, and — on the Coder review tab — accept/edit/reject each code
-and submit feedback that lands in the JSONL store for `scripts/analyze_feedback.py`.
-Coder feedback is persisted to `coder_feedback.jsonl` (override with
-`COSMANEURA_FEEDBACK_PATH`).
+and submit feedback. Local development uses `coder_feedback.jsonl` (override
+with `COSMANEURA_FEEDBACK_PATH`), which can be reviewed with
+`scripts/analyze_feedback.py`; staging and production persist normalized
+feedback in PostgreSQL and expose aggregate analysis through the role-scoped
+API. Each draft carries a stable client-generated `review_id`, making an exact
+retry idempotent while a different payload under the same ID fails with 409.
 
 ## Container and Azure deployment
 
@@ -46,9 +49,9 @@ local deployment:
 
 ```bash
 cp .env.example .env
-# Set a long URL-safe POSTGRES_PASSWORD, a synthetic practice ID, and an Entra
-# tenant UUID. For synthetic local browser work only, use development + disabled
-# auth as documented in docs/ACCESS_CONTROL.md.
+# Set distinct long owner/runtime passwords and their RFC 3986 percent-encoded
+# *_URL_PASSWORD forms, plus a synthetic practice ID, tenant UUID, and reviewed
+# synthetic bootstrap-admin UUID. Compose remains an auth-protected smoke stack.
 docker compose up --build --wait
 ```
 
@@ -57,10 +60,12 @@ configuration, protected APIs require a trusted Container Apps principal and
 ordinary requests therefore return 401. Compose has no auth sidecar of its own,
 so it is a packaging smoke topology, not a secure user-facing deployment; never
 expose its port beyond localhost. Use the explicit development bypass only with
-synthetic data. Compose applies both current migrations to a fresh
+synthetic data. Compose applies all current migrations to a fresh
 PostgreSQL 16/pgvector volume, and `/api/ready` stays unavailable until the
-engine, regulatory datasets, database, chase schema, and access-audit store are
-ready. The default chase transport remains inert.
+engine, regulatory datasets, database, encounters, explicit memberships,
+feedback, chase schema, and access-audit store are ready. The migration
+container uses the database-owner credential; the API receives only a separate
+least-privilege runtime credential. The default chase transport remains inert.
 
 Azure Bicep templates and the reviewed deployment sequence are in
 `../infra/README.md`. They create a VNet-injected Container Apps environment,
@@ -70,6 +75,14 @@ defaults private and must remain private until P2 authentication is verified.
 No Azure resources are created by tests or by building the repository.
 The Entra trust boundary, role matrix, request controls, audit event contract,
 and local-development exception are in `docs/ACCESS_CONTROL.md`.
+
+Staging and production are PostgreSQL-only: set both
+`COSMANEURA_STATE_STORE=postgres` and `COSMANEURA_CHASE_STORE=postgres`, and use
+the same runtime `DATABASE_URL` for encounter, feedback, audit, membership, and
+chase state. JSONL and in-memory stores are rejected there. The migration job
+bootstraps only the explicitly named initial Entra administrator; all later
+membership changes use the reviewed owner-only CLI documented in
+`migrations/README.md`. Login never creates a user or membership.
 
 **Offline mode covers one encounter.** Without `ANTHROPIC_API_KEY` the engine
 runs a deterministic model that only knows the bundled GI-bleed demo visit. On
@@ -168,21 +181,30 @@ GET  /api/chase/metrics             outstanding, touches/card, minutes/card, tim
 POST /api/chase/{id}/action         release | suppress | assign | log_attempt | submitted | verify
 ```
 
+Each staff action carries a client-generated UUID `action_id`. An exact retry
+is replayed without adding another contact or minute count; reuse with a
+different action payload returns 409.
+
 The demo and tests default to an in-memory worklist. Production fails closed
 unless the worklist is backed by PostgreSQL, so replicas cannot diverge and a
 restart cannot discard contact history:
 
 ```bash
-psql "$DATABASE_URL" -f migrations/002_chase_persistence.up.sql
+# First run the owner-only migration job documented in migrations/README.md.
 export COSMANEURA_ENV=production
+export COSMANEURA_STATE_STORE=postgres
 export COSMANEURA_CHASE_STORE=postgres
+export COSMANEURA_DB_RUNTIME_ROLE=cosmaneura_app
 export COSMANEURA_PRACTICE_ID=<stable-practice-id>
-# DATABASE_URL must use TLS in the deployed environment.
+# DATABASE_URL is the TLS runtime-role DSN, never the migration-owner DSN.
 ```
 
-`COSMANEURA_CHASE_DATABASE_URL` may be used instead when chase data has a
-dedicated database. The store scopes every primary key, foreign key, query, and
-transaction by the configured practice. The default transport remains inert;
+For the pilot, chase and platform state must use the same `DATABASE_URL`; a
+separate chase DSN is rejected because it would split a mutation from its audit
+completion. The store scopes every primary key, foreign key, query, and
+transaction by the configured practice, with forced database row-level
+security and a runtime-role-to-practice binding. Changing the session practice
+setting cannot expose another practice. The default transport remains inert;
 durable storage alone does not authorize patient contact.
 
 One list, three views — missing, expired, eligibility — matching the buckets

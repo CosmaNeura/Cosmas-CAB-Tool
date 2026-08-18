@@ -21,7 +21,7 @@ def _warm_engine():
 def test_lifespan_warms_engine_before_readiness(monkeypatch, tmp_path):
     calls = []
 
-    def warm(settings):
+    def warm(settings, **_kwargs):
         calls.append(settings.environment)
         return _warm_engine()
 
@@ -41,7 +41,7 @@ def test_lifespan_warms_engine_before_readiness(monkeypatch, tmp_path):
 
 
 def test_startup_failure_never_marks_application_ready(monkeypatch, tmp_path):
-    def fail(settings):
+    def fail(settings, **_kwargs):
         raise RuntimeError("knowledge base unavailable")
 
     monkeypatch.setattr(api, "get_orchestrator", fail)
@@ -57,7 +57,7 @@ def test_missing_regulatory_dataset_fails_startup_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         api,
         "get_orchestrator",
-        lambda settings: SimpleNamespace(
+        lambda settings, **_kwargs: SimpleNamespace(
             ncci=SimpleNamespace(loaded=True),
             coverage=SimpleNamespace(loaded=False),
         ),
@@ -99,8 +99,10 @@ def test_production_refuses_to_start_without_built_frontend(tmp_path):
         environment="production",
         auth_mode="container_apps",
         entra_tenant_id="11111111-1111-4111-8111-111111111111",
+        state_store="postgres",
         chase_store="postgres",
-        database_url="postgresql://example.invalid/db",
+        database_url="postgresql://cosmaneura_app@example.invalid/db",
+        database_runtime_role="cosmaneura_app",
         practice_id="practice-a",
     )
     with pytest.raises(RuntimeError, match="built same-origin frontend"):

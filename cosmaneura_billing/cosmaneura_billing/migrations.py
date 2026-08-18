@@ -7,6 +7,7 @@ with a PostgreSQL advisory lock.  It never prints a DSN or SQL parameter.
 from __future__ import annotations
 
 import re
+import hashlib
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +15,185 @@ from .settings import Settings
 
 _UP_MIGRATION = re.compile(r"^[0-9]{3}_[a-z0-9_]+\.up\.sql$")
 _MIGRATION_LOCK = 4_836_623_987_031_721_441
+
+
+def _checksum(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _provision_runtime_role(conn, settings: Settings) -> None:
+    """Create/rotate the least-privilege runtime login after schema changes."""
+    if not settings.database_runtime_password:
+        return
+    try:
+        from psycopg import sql
+    except ImportError as exc:  # pragma: no cover - deployment wiring
+        raise RuntimeError("runtime role provisioning requires psycopg") from exc
+    role = settings.database_runtime_role
+    if not settings.practice_id:
+        raise RuntimeError("runtime role provisioning requires a practice ID")
+    current_user = conn.execute("SELECT current_user").fetchone()[0]
+    blocked_names = {"postgres", "azure_pg_admin"}
+    if (
+        role.casefold() in blocked_names
+        or role.casefold().startswith("pg_")
+        or role.casefold() == str(current_user).casefold()
+    ):
+        raise RuntimeError("runtime role must be distinct from database administrators")
+    identifier = sql.Identifier(role)
+    password = sql.Literal(settings.database_runtime_password)
+    existing = conn.execute(
+        """SELECT oid, rolsuper, rolcreatedb, rolcreaterole,
+                  rolreplication, rolbypassrls
+             FROM pg_roles WHERE rolname = %s""",
+        (role,),
+    ).fetchone()
+    if existing and any(bool(value) for value in existing[1:]):
+        raise RuntimeError("configured runtime role is already privileged")
+    if existing:
+        membership = conn.execute(
+            "SELECT 1 FROM pg_auth_members WHERE member = %s LIMIT 1",
+            (existing[0],),
+        ).fetchone()
+        ownership = conn.execute(
+            """SELECT 1
+                 FROM pg_class c
+                 JOIN pg_roles r ON r.oid = c.relowner
+                WHERE r.rolname = %s
+                UNION ALL
+               SELECT 1
+                 FROM pg_namespace n
+                 JOIN pg_roles r ON r.oid = n.nspowner
+                WHERE r.rolname = %s
+                UNION ALL
+               SELECT 1
+                 FROM pg_database d
+                 JOIN pg_roles r ON r.oid = d.datdba
+                WHERE r.rolname = %s
+                LIMIT 1""",
+            (role, role, role),
+        ).fetchone()
+        if membership or ownership:
+            raise RuntimeError(
+                "configured runtime role has inherited authority or owns objects"
+            )
+        conn.execute(sql.SQL(
+            "ALTER ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
+            "NOCREATEROLE NOINHERIT NOBYPASSRLS"
+        ).format(identifier, password))
+    else:
+        conn.execute(sql.SQL(
+            "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
+            "NOCREATEROLE NOINHERIT NOBYPASSRLS"
+        ).format(identifier, password))
+    database_name = conn.execute("SELECT current_database()").fetchone()[0]
+    conn.execute(sql.SQL("REVOKE ALL PRIVILEGES ON DATABASE {} FROM {}").format(
+        sql.Identifier(database_name), identifier,
+    ))
+    conn.execute(sql.SQL("REVOKE ALL PRIVILEGES ON SCHEMA public FROM {}").format(
+        identifier,
+    ))
+    conn.execute(sql.SQL(
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM {}"
+    ).format(identifier))
+    conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+        sql.Identifier(database_name), identifier,
+    ))
+    conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT ON practices, users, practice_memberships TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT, UPDATE ON encounters TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT ON coder_feedback, coder_feedback_decisions TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT INSERT ON access_audit_attempts, access_audit_completions TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT, UPDATE ON chase_items TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT ON chase_attempts, chase_action_receipts TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON chase_pending_tasks, "
+        "chase_resolutions TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT USAGE, SELECT ON SEQUENCE coder_feedback_feedback_id_seq TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text), "
+        "cosmaneura_feedback_reviewer_allowed(uuid, uuid), "
+        "cosmaneura_staff_assignee_allowed(uuid, uuid) TO {}"
+    ).format(identifier))
+    existing_binding = conn.execute(
+        "SELECT practice_id FROM runtime_practice_bindings WHERE role_name = %s",
+        (role,),
+    ).fetchone()
+    if existing_binding and existing_binding[0] != settings.practice_id:
+        raise RuntimeError("runtime role is already bound to another practice")
+    conn.execute(
+        """INSERT INTO runtime_practice_bindings (role_name, practice_id)
+           VALUES (%s, %s) ON CONFLICT (role_name) DO NOTHING""",
+        (role, settings.practice_id),
+    )
+
+
+def _bootstrap_practice_admin(conn, settings: Settings) -> None:
+    """Provision only an explicitly configured immutable Entra administrator."""
+    if not settings.bootstrap_admin_oid:
+        return
+    if not settings.entra_tenant_id or not settings.practice_id:
+        raise RuntimeError(
+            "bootstrap administrator requires tenant and practice configuration"
+        )
+    # 003 forces RLS even for the table owner. The locked migration connection
+    # sets the one explicitly configured practice for these bootstrap writes;
+    # it is closed immediately after the migration run.
+    conn.execute(
+        "SELECT set_config('cosmaneura.practice_id', %s, false)",
+        (settings.practice_id,),
+    )
+    conn.execute(
+        """INSERT INTO practices (
+               practice_id, entra_tenant_id, display_name
+           ) VALUES (%s, %s::uuid, %s)
+           ON CONFLICT (practice_id) DO UPDATE SET
+               entra_tenant_id = EXCLUDED.entra_tenant_id,
+               display_name = EXCLUDED.display_name,
+               updated_at = now()
+             WHERE practices.entra_tenant_id IS NULL""",
+        (settings.practice_id, settings.entra_tenant_id, settings.practice_name),
+    )
+    practice = conn.execute(
+        "SELECT entra_tenant_id FROM practices WHERE practice_id = %s",
+        (settings.practice_id,),
+    ).fetchone()
+    if practice and str(practice[0]) != settings.entra_tenant_id:
+        raise RuntimeError("configured practice is bound to another tenant")
+    conn.execute(
+        """INSERT INTO users (tenant_id, user_id)
+           VALUES (%s::uuid, %s::uuid)
+           ON CONFLICT (tenant_id, user_id) DO NOTHING""",
+        (settings.entra_tenant_id, settings.bootstrap_admin_oid),
+    )
+    conn.execute(
+        """INSERT INTO practice_memberships (
+               practice_id, tenant_id, user_id, roles
+           ) VALUES (%s, %s::uuid, %s::uuid, ARRAY['Admin']::text[])
+           ON CONFLICT (practice_id, tenant_id, user_id) DO NOTHING""",
+        (
+            settings.practice_id, settings.entra_tenant_id,
+            settings.bootstrap_admin_oid,
+        ),
+    )
 
 
 def migration_directory(settings: Settings) -> Path:
@@ -88,16 +268,33 @@ def apply_migrations(
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS cosmaneura_schema_migrations (
                        name text PRIMARY KEY,
+                       checksum_sha256 text,
                        applied_at timestamptz NOT NULL DEFAULT now()
                    )"""
             )
+            conn.execute(
+                "ALTER TABLE cosmaneura_schema_migrations "
+                "ADD COLUMN IF NOT EXISTS checksum_sha256 text"
+            )
             applied = {
-                row[0] for row in conn.execute(
-                    "SELECT name FROM cosmaneura_schema_migrations"
+                row[0]: row[1] for row in conn.execute(
+                    "SELECT name, checksum_sha256 FROM cosmaneura_schema_migrations"
                 ).fetchall()
             }
             for path in paths:
+                checksum = _checksum(path)
                 if path.name in applied:
+                    recorded = applied[path.name]
+                    if recorded and recorded != checksum:
+                        raise RuntimeError(
+                            f"applied migration checksum changed: {path.name}"
+                        )
+                    if not recorded:
+                        conn.execute(
+                            """UPDATE cosmaneura_schema_migrations
+                                  SET checksum_sha256 = %s WHERE name = %s""",
+                            (checksum, path.name),
+                        )
                     continue
                 # The schema change and its ledger row commit together. Checked-in
                 # SQL keeps an outer transaction for safe manual psql use; the
@@ -108,10 +305,14 @@ def apply_migrations(
                         prepare=False,
                     )
                     conn.execute(
-                        "INSERT INTO cosmaneura_schema_migrations (name) VALUES (%s)",
-                        (path.name,),
+                        """INSERT INTO cosmaneura_schema_migrations
+                               (name, checksum_sha256) VALUES (%s, %s)""",
+                        (path.name, checksum),
                     )
                 applied_now.append(path.name)
+            with conn.transaction():
+                _bootstrap_practice_admin(conn, config)
+                _provision_runtime_role(conn, config)
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (_MIGRATION_LOCK,))
     return applied_now

@@ -5,6 +5,7 @@ import asyncio
 import base64
 from dataclasses import asdict
 import json
+from uuid import UUID
 
 import pytest
 
@@ -85,6 +86,19 @@ def _client(tmp_path, *, store=None, limiter=None, **settings_overrides):
         rate_limiter=limiter,
     )
     return TestClient(application), store
+
+
+def _server_review_context(client, *, user_id: str = USER_A) -> str:
+    stored = client.app.state.encounter_store.get("ENC-100237")
+    return api._issue_review_context(
+        stored,
+        AuthPrincipal(
+            user_id=user_id,
+            tenant_id=TENANT_ID,
+            practice_id="practice-test",
+            roles=frozenset({"Coder"}),
+        ),
+    )
 
 
 def _run_asgi(app, scope: dict, request_messages: list[dict]) -> list[dict]:
@@ -411,7 +425,17 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     billing_staff = _auth_headers(roles=("BillingStaff",))
 
     assert client.post(
-        "/api/feedback", json={"encounter_id": "SYN-1"}, headers=provider,
+        "/api/feedback",
+        json={
+            "review_id": "20000000-0000-4000-8000-000000000001",
+            "review_context": _server_review_context(client),
+            "encounter_id": "ENC-100237",
+            "encounter_version": 1,
+            "engine_em": "99214",
+            "final_em": "99214",
+            "decisions": [],
+        },
+        headers=provider,
     ).status_code == 403
     assert client.get(
         "/api/chase/worklist", headers=coder,
@@ -422,6 +446,31 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     assert client.get(
         "/api/chase/worklist", headers=billing_staff,
     ).status_code == 200
+
+
+def test_review_context_cannot_be_replayed_by_another_actor(tmp_path):
+    client, _ = _client(tmp_path)
+    context_for_a = _server_review_context(client, user_id=USER_A)
+
+    response = client.post(
+        "/api/feedback",
+        headers=_auth_headers(user_id=USER_B, roles=("Coder",)),
+        json={
+            "review_id": "20000000-0000-4000-8000-000000000099",
+            "review_context": context_for_a,
+            "encounter_id": "ENC-100237",
+            "encounter_version": 1,
+            "engine_em": "99214",
+            "final_em": "99214",
+            "decisions": [],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "review context is invalid; reload the review"
+    )
+    assert not (tmp_path / "feedback.jsonl").exists()
 
 
 def test_auth_runs_before_engine_and_authenticated_unknown_stays_404(tmp_path):
@@ -471,7 +520,10 @@ def test_access_audit_records_minimal_identity_and_not_request_secrets(tmp_path)
     response = client.post(
         "/api/feedback",
         json={
-            "encounter_id": "SYNTHETIC-1",
+            "review_id": "20000000-0000-4000-8000-000000000002",
+            "review_context": _server_review_context(client),
+            "encounter_id": "ENC-100237",
+            "encounter_version": 1,
             "overall_note": raw_note,
             "decisions": [{
                 "kind": "ICD10",
@@ -496,7 +548,8 @@ def test_access_audit_records_minimal_identity_and_not_request_secrets(tmp_path)
     assert event.actor_user_id == USER_A
     assert event.actor_roles == ("Coder",)
     assert event.action == "encounter.decide"
-    assert event.resource_id == "SYNTHETIC-1"
+    UUID(event.resource_id)
+    assert event.resource_id != "ENC-100237"
     assert event.route == "/api/feedback"
     assert event.status == 200
     assert event.outcome == "allowed"
@@ -521,7 +574,15 @@ def test_access_audit_failure_blocks_mutation_before_route_runs(tmp_path):
     response = client.post(
         "/api/feedback",
         headers=_auth_headers(roles=("Coder",)),
-        json={"encounter_id": "SYNTHETIC-NOT-STORED"},
+        json={
+            "review_id": "20000000-0000-4000-8000-000000000003",
+            "review_context": _server_review_context(client),
+            "encounter_id": "ENC-100237",
+            "encounter_version": 1,
+            "engine_em": "99214",
+            "final_em": "99214",
+            "decisions": [],
+        },
     )
 
     assert response.status_code == 503
@@ -548,9 +609,17 @@ def test_durable_reservation_avoids_ambiguous_retry_if_completion_fails(tmp_path
     response = client.post(
         "/api/feedback",
         headers=_auth_headers(roles=("Coder",)),
-        json={"encounter_id": "SYNTHETIC-STORED"},
+        json={
+            "review_id": "20000000-0000-4000-8000-000000000004",
+            "review_context": _server_review_context(client),
+            "encounter_id": "ENC-100237",
+            "encounter_version": 1,
+            "engine_em": "99214",
+            "final_em": "99214",
+            "decisions": [],
+        },
     )
 
     assert response.status_code == 200
     assert store.events[0].outcome == "attempted"
-    assert "SYNTHETIC-STORED" in (tmp_path / "feedback.jsonl").read_text()
+    assert "ENC-100237" in (tmp_path / "feedback.jsonl").read_text()

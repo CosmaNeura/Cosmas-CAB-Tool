@@ -23,11 +23,15 @@ Self-test:  python -m cosmaneura_billing.coder_feedback
 from __future__ import annotations
 
 import json
+import hashlib
+import math
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import median
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 
 # Controlled vocabulary the review UI presents as dropdowns. Stored as strings.
@@ -54,6 +58,14 @@ class Reason:
     OTHER = "other"
 
 
+_KINDS = frozenset({"EM", "ICD10", "PROCEDURE", "MODIFIER"})
+_ACTIONS = frozenset({Action.ACCEPT, Action.MODIFY, Action.REJECT, Action.ADD})
+_REASONS = frozenset(
+    value for name, value in vars(Reason).items()
+    if name.isupper() and isinstance(value, str)
+)
+
+
 @dataclass
 class CodeDecision:
     kind: str                       # "EM" | "ICD10" | "PROCEDURE" | "MODIFIER"
@@ -76,6 +88,9 @@ class EncounterFeedback:
     time_spent_seconds: float | None = None
     overall_note: str = ""
     ts: float = field(default_factory=time.time)
+    review_id: str = field(default_factory=lambda: str(uuid4()))
+    coder_tenant_id: str = ""
+    encounter_version: int = 1
 
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
@@ -84,32 +99,164 @@ class EncounterFeedback:
 
     @classmethod
     def from_dict(cls, d: dict) -> "EncounterFeedback":
-        decs = [CodeDecision(**x) for x in d.get("decisions", [])]
-        return cls(**{**d, "decisions": decs})
+        raw = dict(d)
+        if not raw.get("review_id"):
+            # Legacy JSONL rows predate retry IDs. A stable derived UUID keeps
+            # repeated reads deterministic; the explicit importer adds the
+            # source-file digest and line number when preserving duplicates.
+            canonical = json.dumps(raw, sort_keys=True, separators=(",", ":"))
+            raw["review_id"] = str(uuid5(NAMESPACE_URL, canonical))
+        else:
+            raw["review_id"] = str(UUID(str(raw["review_id"])))
+        raw.setdefault("coder_tenant_id", "")
+        raw.setdefault("encounter_version", 1)
+        decs = [CodeDecision(**x) for x in raw.get("decisions", [])]
+        return cls(**{**raw, "decisions": decs})
+
+
+class FeedbackConflict(ValueError):
+    """One review ID was reused for different content or a different actor."""
+
+
+def feedback_payload_digest(feedback: EncounterFeedback) -> str:
+    """Stable retry comparison, excluding only the server receipt timestamp."""
+    payload = feedback.to_dict()
+    payload.pop("ts", None)
+    payload.pop("review_id", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validate_feedback(feedback: EncounterFeedback) -> None:
+    """Enforce the normalized API/DDL contract before any durable write."""
+    if not isinstance(feedback.encounter_id, str) or not 1 <= len(
+        feedback.encounter_id
+    ) <= 128:
+        raise ValueError("invalid feedback encounter identifier")
+    try:
+        UUID(feedback.review_id)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("invalid feedback review identifier") from exc
+    if not isinstance(feedback.engine_version, str) or not 1 <= len(
+        feedback.engine_version
+    ) <= 256:
+        raise ValueError("invalid feedback engine version")
+    for code in (feedback.submitted_em, feedback.engine_em, feedback.final_em):
+        if code is not None and (
+            not isinstance(code, str) or not 1 <= len(code) <= 32
+        ):
+            raise ValueError("invalid feedback E/M code")
+    if not isinstance(feedback.encounter_version, int) or feedback.encounter_version < 1:
+        raise ValueError("invalid feedback encounter version")
+    if feedback.time_spent_seconds is not None and (
+        not isinstance(feedback.time_spent_seconds, (int, float))
+        or not math.isfinite(float(feedback.time_spent_seconds))
+        or not 0 <= float(feedback.time_spent_seconds) <= 86_400
+    ):
+        raise ValueError("invalid feedback duration")
+    if (
+        not isinstance(feedback.overall_note, str)
+        or len(feedback.overall_note) > 4_000
+        or not isinstance(feedback.ts, (int, float))
+        or not math.isfinite(float(feedback.ts))
+    ):
+        raise ValueError("invalid feedback metadata")
+    if len(feedback.decisions) > 500:
+        raise ValueError("too many feedback decisions")
+    for decision in feedback.decisions:
+        if decision.kind not in _KINDS or decision.action not in _ACTIONS:
+            raise ValueError("invalid controlled feedback decision")
+        for code in (decision.engine_code, decision.final_code):
+            if code is not None and (
+                not isinstance(code, str) or not 1 <= len(code) <= 32
+            ):
+                raise ValueError("invalid feedback decision code")
+        shape_valid = (
+            decision.action == Action.ADD
+            and decision.engine_code is None
+            and decision.final_code is not None
+        ) or (
+            decision.action == Action.REJECT
+            and decision.engine_code is not None
+            and decision.final_code is None
+        ) or (
+            decision.action in {Action.ACCEPT, Action.MODIFY}
+            and decision.engine_code is not None
+            and decision.final_code is not None
+        )
+        if not shape_valid:
+            raise ValueError("feedback decision does not match its action")
+        if decision.reason_code is not None and decision.reason_code not in _REASONS:
+            raise ValueError("invalid feedback decision reason")
+        if not isinstance(decision.note, str) or len(decision.note) > 4_000:
+            raise ValueError("invalid feedback decision note")
+
+
+_FILE_LOCKS: dict[str, threading.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _file_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _FILE_LOCKS_GUARD:
+        return _FILE_LOCKS.setdefault(key, threading.Lock())
 
 
 class FeedbackStore:
-    """Append-only JSONL sink. In production the same records can land in a
-    Postgres table (Azure) instead -- DDL for reference:
-
-        CREATE TABLE coder_feedback (
-            id bigserial PRIMARY KEY,
-            encounter_id text, coder_id text, engine_version text,
-            payload jsonb NOT NULL, created_at timestamptz DEFAULT now());
-    """
+    """Append-only JSONL sink for local development and deterministic tests."""
 
     def __init__(self, path: str | Path = "coder_feedback.jsonl"):
         self.path = Path(path)
 
-    def append(self, fb: EncounterFeedback) -> None:
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(fb.to_dict()) + "\n")
+    def append(self, fb: EncounterFeedback) -> bool:
+        """Append once. Exact retry is a no-op; conflicting reuse fails."""
+        validate_feedback(fb)
+        with _file_lock(self.path):
+            existing = next(
+                (row for row in self.load() if row.review_id == fb.review_id),
+                None,
+            )
+            if existing is not None:
+                if feedback_payload_digest(existing) != feedback_payload_digest(fb):
+                    raise FeedbackConflict("review ID conflicts with an existing review")
+                return False
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(fb.to_dict(), separators=(",", ":")) + "\n")
+            return True
+
+    def exact_replay(self, fb: EncounterFeedback) -> bool:
+        """Classify an existing review before mutable encounter checks."""
+        validate_feedback(fb)
+        with _file_lock(self.path):
+            existing = next(
+                (row for row in self.load() if row.review_id == fb.review_id),
+                None,
+            )
+            if existing is None:
+                return False
+            if feedback_payload_digest(existing) != feedback_payload_digest(fb):
+                raise FeedbackConflict("review ID conflicts with an existing review")
+            return True
 
     def load(self) -> list[EncounterFeedback]:
         if not self.path.exists():
             return []
         return [EncounterFeedback.from_dict(json.loads(line))
                 for line in self.path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def revision(self) -> tuple[str, int, int]:
+        try:
+            stat = self.path.stat()
+        except FileNotFoundError:
+            return (str(self.path), -1, 0)
+        return (str(self.path), stat.st_mtime_ns, stat.st_size)
+
+    def healthcheck(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def count(self) -> int:
+        return len(self.load())
 
 
 # --------------------------------------------------------------------------- #

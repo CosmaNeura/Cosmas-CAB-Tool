@@ -8,42 +8,55 @@ Endpoints (shapes match the documented contracts in frontend/*.jsx):
   POST /api/encounters/{id}/billing       run the pipeline on a stored encounter
   POST /api/billing                       run the pipeline on posted documentation
   GET  /api/encounters/{id}/coder-view    pre-coded claim for the coder review UI
-  POST /api/feedback                      persist a coder's review (JSONL store)
+  POST /api/feedback                      persist a coder's reviewed decisions
   GET  /api/feedback/summary              accuracy metrics + tuning backlog
 
 Run:  uvicorn cosmaneura_billing.api:app --reload
 The orchestrator and its regulatory knowledge bases are warmed during process
-startup. Readiness remains unavailable until that warmup and the durable chase
-schema check both succeed.
+startup. Readiness remains unavailable until that warmup and every configured
+durable persistence boundary succeed.
 """
 from __future__ import annotations
 
+import base64
 from contextlib import asynccontextmanager
+import hashlib
+import hmac
+import json
 import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import coder_feedback
 from .access_audit import (
-    AccessAuditMiddleware, AccessAuditStore, FileAccessAuditStore,
-    MemoryAccessAuditStore, DeniedAccessAuditor,
+    AccessAuditMiddleware, AccessAuditStore, MemoryAccessAuditStore,
+    DeniedAccessAuditor, build_access_event, classify_access,
 )
 from .auth import AuthPrincipal, EntraAuthMiddleware
 from .billing_tab import build_billing_tab_view
-from .coder_feedback import EncounterFeedback, FeedbackStore
+from .chase.worklist import ChaseActionConflict
+from .chase.store import PostgresChaseStore
+from .coder_feedback import EncounterFeedback, FeedbackConflict, FeedbackStore
 from .completeness import OverrideRequiresReason, applicable_rulepack, check_note
 from .corpus.acibench import load_acibench
 from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
 from .orchestrator import BillingOrchestrator
+from .persistence import (
+    MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
+    PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
+    UnknownEncounter, postgres_services,
+)
+from .preferences import PreferenceStore
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
 from .security import (
     FixedWindowLimiter, PrincipalRateLimitMiddleware,
@@ -58,12 +71,94 @@ _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
 _ENGINE_VERSION = "cpt2026u4;icd10-FY2026;ncci-2026Q3-v32.2;mcd-NGS-2026-07-20"
 
 
+def _review_context_binding(
+    encoded_payload: str,
+    principal: AuthPrincipal,
+    encounter_version: int,
+) -> bytes:
+    return json.dumps(
+        [
+            encoded_payload,
+            principal.practice_id,
+            principal.tenant_id,
+            principal.user_id,
+            encounter_version,
+        ],
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _issue_review_context(
+    stored,
+    principal: AuthPrincipal,
+    *,
+    engine_version: str = _ENGINE_VERSION,
+) -> str:
+    """Bind a coder view to its server-owned engine and encounter version.
+
+    The random internal encounter UUID is never returned. It acts as a
+    per-encounter MAC key, so a browser can echo this context across replicas
+    but cannot mint a different engine version or actor binding.
+    """
+    payload = json.dumps(
+        {"v": 1, "engineVersion": engine_version},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    signature = hmac.new(
+        UUID(stored.resource_id).bytes,
+        _review_context_binding(encoded, principal, stored.version),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _verify_review_context(
+    token: str,
+    stored,
+    principal: AuthPrincipal,
+    encounter_version: int,
+) -> str:
+    """Return the issued engine version or reject a forged/stale binding."""
+    if not isinstance(token, str) or len(token) > 1_024:
+        raise ValueError("invalid review context")
+    try:
+        encoded, supplied = token.split(".", 1)
+        if not encoded or len(supplied) != 64:
+            raise ValueError("invalid review context")
+        expected = hmac.new(
+            UUID(stored.resource_id).bytes,
+            _review_context_binding(encoded, principal, encounter_version),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(supplied, expected):
+            raise ValueError("invalid review context")
+        padded = encoded + "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        if set(payload) != {"v", "engineVersion"} or payload["v"] != 1:
+            raise ValueError("invalid review context")
+        engine_version = payload["engineVersion"]
+        if not isinstance(engine_version, str) or not 1 <= len(engine_version) <= 256:
+            raise ValueError("invalid review context")
+        return engine_version
+    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid review context") from exc
+
+
 # --------------------------------------------------------------------------- #
 # Engine + encounter store (lazy singletons)
 # --------------------------------------------------------------------------- #
-def get_orchestrator(settings: Settings | None = None) -> BillingOrchestrator:
+def get_orchestrator(
+    settings: Settings | None = None, *, feedback_store=None,
+) -> BillingOrchestrator:
     """Build an engine using one resolved application configuration."""
-    return BillingOrchestrator(settings=settings or get_settings())
+    config = settings or get_settings()
+    preferences = (
+        PreferenceStore(settings=config, feedback_store=feedback_store)
+        if feedback_store is not None else None
+    )
+    return BillingOrchestrator(settings=config, preferences=preferences)
 
 
 @lru_cache(maxsize=1)
@@ -77,8 +172,11 @@ def get_encounters() -> dict[str, VisitBundle]:
     return store
 
 
-def get_feedback_store(settings: Settings | None = None) -> FeedbackStore:
-    return FeedbackStore((settings or get_settings()).feedback_path)
+def get_feedback_store(settings: Settings | None = None):
+    config = settings or get_settings()
+    if config.state_store == "postgres":
+        return postgres_services(config).feedback
+    return FeedbackStore(config.feedback_path)
 
 
 def _request_settings(request: Request) -> Settings:
@@ -89,7 +187,10 @@ def _request_orchestrator(request: Request) -> BillingOrchestrator:
     orchestrator = getattr(request.app.state, "orchestrator", None)
     if orchestrator is None:
         # TestClient calls outside a lifespan still use stable, app-local state.
-        orchestrator = get_orchestrator(_request_settings(request))
+        orchestrator = get_orchestrator(
+            _request_settings(request),
+            feedback_store=request.app.state.feedback_store,
+        )
         request.app.state.orchestrator = orchestrator
     return orchestrator
 
@@ -99,6 +200,31 @@ def _request_principal(request: Request) -> AuthPrincipal:
     if not isinstance(principal, AuthPrincipal):
         raise HTTPException(status_code=401, detail="authentication required")
     return principal
+
+
+def _request_feedback_store(request: Request):
+    return request.app.state.feedback_store
+
+
+def _request_encounter_store(request: Request):
+    return request.app.state.encounter_store
+
+
+def _set_audit_resource(request: Request, resource_id: str) -> None:
+    # The store generated and tenant-validated this opaque ID. Raw request IDs
+    # and EHR/MRN values must never enter the access-audit stream.
+    request.state.audit_resource_id = resource_id
+
+
+def _completion_event(request: Request, *, status: int = 200, outcome: str = "allowed"):
+    classified = classify_access(request.method, request.url.path)
+    event_id = getattr(request.state, "audit_event_id", "")
+    if classified is None or not event_id:
+        raise RuntimeError("access audit reservation is unavailable")
+    return build_access_event(
+        settings=_request_settings(request), scope=request.scope,
+        classified=classified, event_id=event_id, status=status, outcome=outcome,
+    )
 
 
 def _require_roles(request: Request, *roles: str) -> AuthPrincipal:
@@ -255,6 +381,7 @@ class ChaseDetectRequest(StrictRequest):
 
 
 class ChaseActionRequest(StrictRequest):
+    action_id: UUID
     action: str = Field(min_length=1, max_length=32)
     assignee: str = Field(default="", max_length=128)
     reason: str = Field(default="", max_length=4_000)
@@ -268,20 +395,43 @@ class ChaseActionRequest(StrictRequest):
 
 
 class DecisionModel(StrictRequest):
-    kind: str = Field(min_length=1, max_length=32)
+    kind: Literal["EM", "ICD10", "PROCEDURE", "MODIFIER"]
     engine_code: Optional[str] = Field(default=None, max_length=32)
-    action: str = Field(min_length=1, max_length=32)
+    action: Literal["accept", "modify", "reject", "add"]
     final_code: Optional[str] = Field(default=None, max_length=32)
-    reason_code: Optional[str] = Field(default=None, max_length=128)
+    reason_code: Optional[Literal[
+        "em_doc_supports_higher_level", "em_doc_supports_lower_level",
+        "em_mdm_element_disagreement", "em_time_based_leveling",
+        "dx_not_supported_by_doc", "dx_contradicted_by_doc",
+        "dx_needs_more_specific_code", "dx_primary_secondary_swap",
+        "dx_missed_by_engine", "modifier_required",
+        "procedure_bundling_ncci", "medical_necessity_coverage", "other",
+    ]] = None
     note: str = Field(default="", max_length=4_000)
+
+    @model_validator(mode="after")
+    def validate_action_shape(self):
+        valid = (
+            self.action == "add" and self.engine_code is None and self.final_code
+        ) or (
+            self.action == "reject" and self.engine_code and self.final_code is None
+        ) or (
+            self.action in {"accept", "modify"}
+            and self.engine_code and self.final_code
+        )
+        if not valid:
+            raise ValueError("decision fields do not match the selected action")
+        return self
 
 
 class FeedbackModel(StrictRequest):
+    review_id: UUID
+    review_context: str = Field(min_length=1, max_length=1_024)
     encounter_id: str = Field(min_length=1, max_length=128)
-    engine_version: str = Field(default=_ENGINE_VERSION, max_length=256)
-    submitted_em: Optional[str] = Field(default=None, max_length=32)
-    engine_em: Optional[str] = Field(default=None, max_length=32)
-    final_em: Optional[str] = Field(default=None, max_length=32)
+    encounter_version: int = Field(ge=1)
+    submitted_em: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    engine_em: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    final_em: Optional[str] = Field(default=None, min_length=1, max_length=32)
     decisions: list[DecisionModel] = Field(default_factory=list, max_length=500)
     time_spent_seconds: Optional[float] = Field(default=None, ge=0, le=86_400)
     overall_note: str = Field(default="", max_length=4_000)
@@ -318,7 +468,7 @@ def health(request: Request) -> dict[str, Any]:
         "cptDescriptors": orch.cpt.size if orch.cpt.loaded else 0,
         "cptStatus": _cpt_status(orch.cpt, settings),
         "denialPriors": orch.denial_priors.size,
-        "encounters": len(get_encounters()),
+        "encounters": len(_request_encounter_store(request).all()),
     }
 
 
@@ -342,6 +492,11 @@ def readiness(request: Request):
     try:
         chase_context["store"].healthcheck()
         request.app.state.access_audit_store.healthcheck()
+        request.app.state.encounter_store.healthcheck()
+        request.app.state.feedback_store.healthcheck()
+        membership_store = request.app.state.membership_store
+        if membership_store is not None:
+            membership_store.healthcheck()
     except Exception:
         return JSONResponse(status_code=503, content={"status": "unavailable"})
     return {
@@ -365,19 +520,20 @@ def list_encounters(request: Request) -> list[dict[str, Any]]:
         "encounterType": b.encounter_type,
         "submittedEm": b.submitted_em_code,
         "preview": (b.signed_note or b.transcript)[:110],
-    } for b in get_encounters().values()]
+    } for row in _request_encounter_store(request).all() for b in [row.bundle]]
 
 
-def _get_bundle(encounter_id: str) -> VisitBundle:
-    bundle = get_encounters().get(encounter_id)
-    if bundle is None:
+def _get_stored_encounter(request: Request, encounter_id: str):
+    stored = _request_encounter_store(request).get(encounter_id)
+    if stored is None:
         raise HTTPException(status_code=404, detail=f"unknown encounter '{encounter_id}'")
-    return bundle
+    _set_audit_resource(request, stored.resource_id)
+    return stored
 
 
 @router.get("/api/encounters/{encounter_id}")
-def get_encounter(encounter_id: str) -> dict[str, Any]:
-    b = _get_bundle(encounter_id)
+def get_encounter(request: Request, encounter_id: str) -> dict[str, Any]:
+    b = _get_stored_encounter(request, encounter_id).bundle
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,
             "transcript": b.transcript, "signedNote": b.signed_note,
@@ -386,7 +542,7 @@ def get_encounter(encounter_id: str) -> dict[str, Any]:
 
 @router.post("/api/encounters/{encounter_id}/billing")
 def bill_stored(request: Request, encounter_id: str) -> dict[str, Any]:
-    bundle = _get_bundle(encounter_id)
+    bundle = _get_stored_encounter(request, encounter_id).bundle
     principal = _request_principal(request)
     result = _request_orchestrator(request).process(
         bundle, user_id=principal.user_id
@@ -397,7 +553,6 @@ def bill_stored(request: Request, encounter_id: str) -> dict[str, Any]:
 @router.post("/api/billing")
 def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
     principal = _request_principal(request)
-    request.state.audit_resource_id = req.encounterId
     bundle = VisitBundle(
         encounter_id=req.encounterId, patient_age=req.patientAge,
         patient_sex=req.patientSex, encounter_type=req.encounterType,
@@ -413,11 +568,16 @@ def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
 
 @router.get("/api/encounters/{encounter_id}/coder-view")
 def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
-    bundle = _get_bundle(encounter_id)
+    stored = _get_stored_encounter(request, encounter_id)
+    bundle = stored.bundle
     orch = _request_orchestrator(request)
     uid = _request_principal(request).user_id
     result = orch.process(bundle, user_id=uid)
     view = _coder_view_json(bundle, result, uid)
+    view["encounterVersion"] = stored.version
+    view["reviewContext"] = _issue_review_context(
+        stored, _request_principal(request),
+    )
     # attach learned-history hints so the reviewer sees why a code was
     # refined or held ("you've declined this 3x")
     prefs = orch.preferences.for_user(uid)
@@ -435,7 +595,7 @@ def billing_tab(request: Request, encounter_id: str,
                 generated_at: str = "") -> dict[str, Any]:
     """The provider billing tab (F1): the same visit reorganised as a billing
     reference. The clinical note is never altered — this is a view over it."""
-    bundle = _get_bundle(encounter_id)
+    bundle = _get_stored_encounter(request, encounter_id).bundle
     result = _request_orchestrator(request).process(
         bundle, user_id=_request_principal(request).user_id
     )
@@ -467,17 +627,52 @@ def completeness(req: CompletenessRequest) -> dict[str, Any]:
 @router.post("/api/feedback")
 def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
     principal = _require_roles(request, "Coder", "Admin")
-    request.state.audit_resource_id = fb.encounter_id
-    store = get_feedback_store(_request_settings(request))
+    stored = _get_stored_encounter(request, fb.encounter_id)
+    try:
+        engine_version = _verify_review_context(
+            fb.review_context, stored, principal, fb.encounter_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409, detail="review context is invalid; reload the review",
+        ) from exc
+    store = _request_feedback_store(request)
     record = EncounterFeedback(
         encounter_id=fb.encounter_id, coder_id=principal.user_id,
-        engine_version=fb.engine_version, submitted_em=fb.submitted_em,
+        coder_tenant_id=principal.tenant_id, review_id=str(fb.review_id),
+        encounter_version=fb.encounter_version,
+        engine_version=engine_version, submitted_em=fb.submitted_em,
         engine_em=fb.engine_em, final_em=fb.final_em,
         decisions=[coder_feedback.CodeDecision(**d.model_dump()) for d in fb.decisions],
         time_spent_seconds=fb.time_spent_seconds, overall_note=fb.overall_note,
     )
-    store.append(record)
-    return {"ok": True, "stored": len(store.load())}
+    try:
+        if (
+            isinstance(store, PostgresFeedbackStore)
+            and request.app.state.atomic_feedback_audit
+        ):
+            created = store.append_with_audit(record, _completion_event(request))
+            request.state.audit_completion_committed = True
+        else:
+            if store.exact_replay(record):
+                created = False
+            else:
+                if stored.version != fb.encounter_version:
+                    raise StaleEncounter(fb.encounter_id)
+                created = store.append(record)
+    except FeedbackConflict as exc:
+        raise HTTPException(
+            status_code=409, detail="review ID conflicts with an existing review",
+        ) from exc
+    except UnknownEncounter as exc:
+        raise HTTPException(status_code=404, detail="unknown encounter") from exc
+    except StaleEncounter as exc:
+        raise HTTPException(
+            status_code=409, detail="encounter changed; reload the review",
+        ) from exc
+    except ReviewerNotAuthorized as exc:
+        raise HTTPException(status_code=403, detail="access is not permitted") from exc
+    return {"ok": True, "reviewId": str(fb.review_id), "replayed": not created}
 
 
 @router.get("/api/benchmarks/em")
@@ -585,9 +780,16 @@ def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
     ctx = _request_chase_context(request)
     snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
     found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
-    ctx["store"].extend(found)
-    return {"checked": len(snapshots), "detected": len(found),
-            **ctx["store"].to_dict()}
+    store = ctx["store"]
+    if request.app.state.atomic_chase_audit:
+        worklist = store.extend_and_snapshot(
+            found, audit_event=_completion_event(request),
+        )
+        request.state.audit_completion_committed = True
+    else:
+        store.extend(found)
+        worklist = store.to_dict()
+    return {"checked": len(snapshots), "detected": len(found), **worklist}
 
 
 @router.get("/api/chase/metrics")
@@ -618,6 +820,18 @@ def chase_action(request: Request, chase_id: str,
     ctx = _request_chase_context(request)
     store, runner, action = ctx["store"], ctx["runner"], req.action
     actor = principal.user_id
+    existing = store.get(chase_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    if hasattr(store, "audit_resource_id"):
+        _set_audit_resource(request, store.audit_resource_id(chase_id))
+    assignee = req.assignee or actor
+    membership_store = request.app.state.membership_store
+    atomic_assignee_check = bool(
+        action == "assign"
+        and isinstance(store, PostgresChaseStore)
+        and isinstance(membership_store, PostgresMembershipStore)
+    )
 
     def transition(item):
         if action == "release":
@@ -625,7 +839,10 @@ def chase_action(request: Request, chase_id: str,
         elif action == "suppress":
             runner.suppress(item, by=actor, reason=req.reason)
         elif action == "assign":
-            item.assignee = req.assignee or actor
+            selected_assignee = assignee
+            if membership_store is not None and not atomic_assignee_check:
+                selected_assignee = membership_store.validate_assignee(assignee)
+            item.assignee = selected_assignee
         elif action == "log_attempt":
             runner.log_staff_attempt(
                 item, channel=Channel(req.channel or "phone"),
@@ -641,8 +858,45 @@ def chase_action(request: Request, chase_id: str,
         else:
             raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
 
+    action_payload = {
+        "actorTenantId": principal.tenant_id,
+        "actorUserId": principal.user_id,
+        "chaseId": chase_id,
+        "request": req.model_dump(mode="json", exclude={"action_id"}),
+    }
+    action_hash = hashlib.sha256(json.dumps(
+        action_payload, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+
+    def validate_assignment_in_transaction(conn) -> None:
+        if atomic_assignee_check:
+            membership_store.validate_assignee(assignee, connection=conn)
+
     try:
-        item = store.mutate(chase_id, transition)
+        if request.app.state.atomic_chase_audit:
+            item = store.mutate(
+                chase_id, transition, audit_event=_completion_event(request),
+                action_id=str(req.action_id), payload_hash=action_hash,
+                transaction_check=(
+                    validate_assignment_in_transaction
+                    if atomic_assignee_check else None
+                ),
+            )
+            if item is not None:
+                request.state.audit_completion_committed = True
+        else:
+            item = store.mutate(
+                chase_id, transition, action_id=str(req.action_id),
+                payload_hash=action_hash,
+                transaction_check=(
+                    validate_assignment_in_transaction
+                    if atomic_assignee_check else None
+                ),
+            )
+    except ChaseActionConflict as exc:
+        raise HTTPException(
+            status_code=409, detail="action ID conflicts with an existing action",
+        ) from exc
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     if item is None:
@@ -653,7 +907,7 @@ def chase_action(request: Request, chase_id: str,
 @router.get("/api/feedback/summary")
 def feedback_summary(request: Request) -> dict[str, Any]:
     _require_roles(request, "Admin")
-    feedbacks = get_feedback_store(_request_settings(request)).load()
+    feedbacks = _request_feedback_store(request).load()
     if not feedbacks:
         return {"encounters": 0, "summary": None, "tuningBacklog": [], "goldRows": 0}
     return {
@@ -678,7 +932,13 @@ async def _lifespan(application: FastAPI):
         # chase schema exists; a configured-but-unreachable store is not ready.
         application.state.chase_context["store"].healthcheck()
         application.state.access_audit_store.healthcheck()
-        orchestrator = get_orchestrator(settings)
+        application.state.encounter_store.healthcheck()
+        application.state.feedback_store.healthcheck()
+        if application.state.membership_store is not None:
+            application.state.membership_store.healthcheck()
+        orchestrator = get_orchestrator(
+            settings, feedback_store=application.state.feedback_store,
+        )
         if not (
             orchestrator.ncci
             and orchestrator.ncci.loaded
@@ -706,15 +966,38 @@ def create_app(
     settings: Settings | None = None,
     frontend_dist: str | os.PathLike[str] | None = None,
     access_audit_store: AccessAuditStore | None = None,
+    feedback_store=None,
+    encounter_store=None,
+    membership_store=None,
     rate_limiter: FixedWindowLimiter | None = None,
     auth_failure_limiter: FixedWindowLimiter | None = None,
 ) -> FastAPI:
     """Compose one API instance and its same-origin static frontend."""
     config = settings or get_settings()
-    audit_store = access_audit_store or (
-        FileAccessAuditStore(config.access_audit_path)
-        if config.environment in {"staging", "production"}
-        else MemoryAccessAuditStore()
+    if config.environment in {"staging", "production"} and any(
+        override is not None for override in (
+            access_audit_store, feedback_store, encounter_store, membership_store,
+        )
+    ):
+        raise ValueError(
+            "deployed applications cannot override required Postgres stores"
+        )
+    postgres = postgres_services(config) if config.state_store == "postgres" else None
+    default_encounters = (
+        postgres.encounters if postgres else MemoryEncounterStore(
+            get_encounters().values(), practice_id=config.practice_id or "local",
+        )
+    )
+    default_feedback = (
+        postgres.feedback if postgres else FeedbackStore(config.feedback_path)
+    )
+    default_audit = postgres.audit if postgres else MemoryAccessAuditStore()
+    default_memberships = postgres.memberships if postgres else None
+    selected_encounters = encounter_store or default_encounters
+    selected_feedback = feedback_store or default_feedback
+    audit_store = access_audit_store or default_audit
+    selected_memberships = (
+        membership_store if membership_store is not None else default_memberships
     )
     principal_limiter = rate_limiter or FixedWindowLimiter()
     failed_auth_limiter = auth_failure_limiter or FixedWindowLimiter()
@@ -730,6 +1013,20 @@ def create_app(
     application.state.orchestrator = None
     application.state.chase_context = None
     application.state.access_audit_store = audit_store
+    application.state.encounter_store = selected_encounters
+    application.state.feedback_store = selected_feedback
+    application.state.membership_store = selected_memberships
+    application.state.atomic_feedback_audit = bool(
+        postgres
+        and selected_feedback is postgres.feedback
+        and audit_store is postgres.audit
+    )
+    application.state.atomic_chase_audit = bool(
+        postgres
+        and audit_store is postgres.audit
+        and config.chase_store == "postgres"
+        and config.chase_dsn == config.database_url
+    )
     application.state.rate_limiter = principal_limiter
     application.state.auth_failure_limiter = failed_auth_limiter
 
@@ -754,6 +1051,9 @@ def create_app(
         settings=config,
         failure_limiter=failed_auth_limiter,
         denied_auditor=denied_auditor,
+        principal_authorizer=(
+            selected_memberships.authorize if selected_memberships is not None else None
+        ),
     )
     application.add_middleware(
         StrictOriginMiddleware,
@@ -769,6 +1069,15 @@ def create_app(
         allow_credentials=False,
     )
     application.include_router(router)
+
+    async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):
+        return JSONResponse(
+            status_code=503, content={"detail": "persistent storage is unavailable"},
+        )
+
+    application.add_exception_handler(
+        PersistenceUnavailable, persistence_unavailable,
+    )
 
     configured_dist = (
         frontend_dist if frontend_dist is not None else config.frontend_dist

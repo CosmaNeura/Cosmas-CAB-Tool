@@ -16,6 +16,12 @@ param practiceId string
 @description('Patient-facing practice name used by chase templates.')
 param practiceName string = 'your care team'
 
+@description('Immutable Entra object ID of the first pilot administrator. The migration job provisions this explicit membership.')
+param initialAdminObjectId string
+
+@description('Must match the least-privilege login configured by the foundation deployment.')
+param postgresAppLogin string = 'cosmaneura_app'
+
 @description('Secure card-upload URL used by chase templates.')
 param uploadUrl string = 'https://example.invalid/insurance'
 
@@ -51,12 +57,14 @@ param tags object = {
 
 var suffix = take(uniqueString(subscription().id, resourceGroup().id, namePrefix), 8)
 var compactPrefix = replace(toLower(namePrefix), '-', '')
+var containerNamePrefix = take(namePrefix, 18)
 var environmentName = '${namePrefix}-env-${suffix}'
 var identityName = '${namePrefix}-identity-${suffix}'
+var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
-var appName = '${namePrefix}-api-${suffix}'
-var migrationJobName = '${namePrefix}-migrate-${suffix}'
+var appName = '${containerNamePrefix}-api-${suffix}'
+var migrationJobName = '${containerNamePrefix}-mig-${suffix}'
 var image = '${registry.properties.loginServer}/cosmaneura-billing:${imageTag}'
 var entraSecretSettingName = 'microsoft-provider-authentication-secret'
 var entraIssuer = '${az.environment().authentication.loginEndpoint}${entraTenantId}/v2.0'
@@ -69,6 +77,10 @@ var applicationOrigin = 'https://${appName}.${environment.properties.defaultDoma
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: identityName
+}
+
+resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: migrationIdentityName
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
@@ -88,6 +100,19 @@ resource entraClientSecretVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' =
   }
 }
 
+resource entraClientSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: entraClientSecretVault
+  name: guid(entraClientSecretVault.id, identity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
 resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
   name: migrationJobName
   location: location
@@ -95,7 +120,7 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      '${identity.id}': {}
+      '${migrationIdentity.id}': {}
     }
   }
   properties: {
@@ -111,14 +136,19 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
       registries: [
         {
           server: registry.properties.loginServer
-          identity: identity.id
+          identity: migrationIdentity.id
         }
       ]
       secrets: [
         {
-          name: 'database-url'
-          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-url'
-          identity: identity.id
+          name: 'migration-database-url'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/migration-database-url'
+          identity: migrationIdentity.id
+        }
+        {
+          name: 'database-runtime-password'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-runtime-password'
+          identity: migrationIdentity.id
         }
       ]
     }
@@ -137,7 +167,31 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
           env: [
             {
               name: 'DATABASE_URL'
-              secretRef: 'database-url'
+              secretRef: 'migration-database-url'
+            }
+            {
+              name: 'COSMANEURA_DB_RUNTIME_ROLE'
+              value: postgresAppLogin
+            }
+            {
+              name: 'COSMANEURA_DB_RUNTIME_PASSWORD'
+              secretRef: 'database-runtime-password'
+            }
+            {
+              name: 'COSMANEURA_ENTRA_TENANT_ID'
+              value: entraTenantId
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_ID'
+              value: practiceId
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_NAME'
+              value: practiceName
+            }
+            {
+              name: 'COSMANEURA_BOOTSTRAP_ADMIN_OID'
+              value: initialAdminObjectId
             }
             {
               name: 'COSMANEURA_MIGRATIONS_DIR'
@@ -218,6 +272,14 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               value: '/app/static'
             }
             {
+              name: 'COSMANEURA_STATE_STORE'
+              value: 'postgres'
+            }
+            {
+              name: 'COSMANEURA_DB_RUNTIME_ROLE'
+              value: postgresAppLogin
+            }
+            {
               name: 'COSMANEURA_AUTH_MODE'
               value: 'container_apps'
             }
@@ -250,10 +312,6 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               value: '30'
             }
             {
-              name: 'COSMANEURA_ACCESS_AUDIT_PATH'
-              value: '/tmp/access_audit.jsonl'
-            }
-            {
               name: 'COSMANEURA_MIGRATIONS_DIR'
               value: '/app/migrations'
             }
@@ -280,10 +338,6 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             {
               name: 'CPT_AUTO_FETCH'
               value: '0'
-            }
-            {
-              name: 'COSMANEURA_FEEDBACK_PATH'
-              value: '/tmp/coder_feedback.jsonl'
             }
             {
               name: 'COSMANEURA_DIRECT_CONTRACT_LIST'
@@ -341,6 +395,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
   }
   dependsOn: [
     entraClientSecretVault
+    entraClientSecretReader
   ]
 }
 

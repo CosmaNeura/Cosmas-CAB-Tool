@@ -11,7 +11,8 @@ the spoof-resistance acceptance checks are deployed and verified.
 - VNet-injected Azure Container Apps environment
 - Azure Database for PostgreSQL Flexible Server 16 on a delegated subnet
 - Premium ACR and Key Vault with public access disabled and private endpoints
-- user-assigned managed identity for ACR pull and Key Vault secret access
+- separate user-assigned identities for the API and migration job, each with
+  ACR pull and only its required Key Vault secret grants
 - Log Analytics and workspace-based Application Insights (P5 wires telemetry)
 - a manual Container Apps migration job and the same-origin API/frontend app
 
@@ -29,7 +30,11 @@ the spoof-resistance acceptance checks are deployed and verified.
    `*.parameters.json` files and replace placeholders. Never put a real password
    or client secret in a tracked file or command history. The app template's
    secret parameter is secure and writes the value directly to Key Vault; the
-   application container never receives it as an environment variable.
+   application container never receives it as an environment variable. Supply
+   distinct PostgreSQL administrator and application login names and passwords
+   (the foundation rejects equal login names), and set
+   `initialAdminObjectId` to the reviewed immutable Entra object UUID of the
+   first pilot administrator—not an email address or display name.
 3. Create/select a resource group and deploy `foundation.bicep`. Keep
    `registryPublicNetworkAccess` set to its secure default, `Disabled`.
 4. For the first image only, temporarily set
@@ -52,6 +57,28 @@ the spoof-resistance acceptance checks are deployed and verified.
    `externalIngress=false` only after that verification. Add the output FQDN as
    the Entra web redirect URI:
    `https://<app-fqdn>/.auth/login/aad/callback`.
+
+   If this updates a foundation deployed before the API and migration identities
+   were separated, an incremental Bicep deployment does **not** remove the old
+   vault-scoped role assignment. First verify that the API identity has
+   secret-scoped `Key Vault Secrets User` assignments on only `database-url` and
+   the Entra client secret, and that the migration identity has them on only
+   `migration-database-url` and `database-runtime-password`. Then resolve the
+   old assignment exactly and remove only that vault-scoped grant:
+
+   ```bash
+   az role assignment list \
+     --assignee-object-id <api-identity-principal-id> \
+     --scope <key-vault-resource-id> \
+     --role "Key Vault Secrets User" \
+     --query "[].{id:id,scope:scope}" --output table
+
+   az role assignment delete \
+     --ids <verified-legacy-vault-scope-role-assignment-id>
+   ```
+
+   Do not delete any of the new secret-scoped assignments. A fresh deployment
+   has no legacy grant to remove.
 6. Start the migration job once and require a successful execution before
    considering the app healthy:
 
@@ -59,6 +86,13 @@ the spoof-resistance acceptance checks are deployed and verified.
    az containerapp job start --resource-group <resource-group> \
      --name <app-output-migrationJobName>
    ```
+
+   The job receives the migration-owner DSN and the separate runtime-role
+   password. It applies checksum-locked migrations, provisions/rotates the
+   least-privilege `postgresAppLogin`, binds the configured practice to the
+   Entra tenant, and creates only the explicitly named initial `Admin`
+   membership. The API receives only the runtime DSN. Never copy the owner DSN
+   into the application configuration.
 
 The API startup performs its own database/schema and access-audit checks before `/api/ready`
 returns 200, so a missing migration, unreachable database, or omitted bundled
@@ -89,6 +123,66 @@ Run these against the Container Apps FQDN, not a direct local container:
 The application also validates tenant, immutable object ID, and app role. That
 second check does not make trusted headers safe on a network path that bypasses
 Container Apps. See `../cosmaneura_billing/docs/ACCESS_CONTROL.md`.
+
+## State, membership, and credential boundary
+
+Staging and production run with `COSMANEURA_STATE_STORE=postgres` and
+`COSMANEURA_CHASE_STORE=postgres`. Encounters, feedback, adaptive-preference
+source rows, explicit memberships, access audit, and chase state share the
+runtime `DATABASE_URL`; a separate chase database is intentionally rejected so
+a mutation and its audit completion can commit atomically. JSONL and in-memory
+stores are local development/test seams only.
+
+Entra assignment is necessary but not sufficient for access. There is no
+just-in-time membership creation: the authenticated token roles are intersected
+with an active database membership for the same tenant, object ID, and
+practice. After bootstrap, an operator adds, changes, or disables members only
+through `python -m cosmaneura_billing.memberships` with the migration-owner DSN
+from a private, controlled execution environment. See
+`../cosmaneura_billing/migrations/README.md` for the exact command and role
+rules. A missing/inactive member is denied, and a database outage fails closed.
+
+The runtime login is deliberately unable to bypass row-level security, change
+schema, manage roles, or update/delete access-audit records. The migration
+owner is confined to the manual job and controlled membership administration;
+both DSNs and the runtime password remain separate Key Vault secrets. The API
+and migration job use different managed identities with object-scoped Key Vault
+grants, so the API identity cannot read the migration-owner DSN.
+
+### Private membership administration
+
+PostgreSQL has no public endpoint. Use the existing migration job as the
+controlled private execution environment for reviewed membership changes; it
+already has the owner DSN through its migration-only identity. This per-run
+override leaves the checked-in job template unchanged:
+
+```bash
+az containerapp job start \
+  --resource-group <resource-group> \
+  --name <app-output-migrationJobName> \
+  --container-name migrate \
+  --command "python" \
+  --args "-m" "cosmaneura_billing.memberships" \
+    "<immutable-entra-object-uuid>" "--role" "Coder"
+```
+
+Repeat the `"--role" "<role>"` pair for another reviewed role. To disable the
+membership, include its reviewed role set and append `"--disable"`. Require a
+successful job execution before telling the staff member access is available.
+Never place a DSN or password in the override; the job receives its secrets by
+reference.
+
+```bash
+az containerapp job execution list \
+  --resource-group <resource-group> \
+  --name <app-output-migrationJobName> \
+  --output table
+```
+
+Permission to start a Container Apps job also permits command, image, and
+environment overrides. Grant it only to the small deployment-operator group,
+because this job has the migration-owner credential. Review every execution in
+the Azure activity and job-execution logs.
 
 Actual Azure deployment creates billable resources and is intentionally not
 performed by repository tests. Run it only after reviewing the plan, cost, and

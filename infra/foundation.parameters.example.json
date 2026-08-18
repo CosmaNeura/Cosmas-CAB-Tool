@@ -5,6 +5,8 @@
     "namePrefix": { "value": "cosmaneura-pilot" },
     "postgresAdminLogin": { "value": "cosmaneura_admin" },
     "postgresAdminPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "postgresAppLogin": { "value": "cosmaneura_app" },
+    "postgresAppPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
     "databaseName": { "value": "cosmaneura" },
     "registryPublicNetworkAccess": { "value": "Disabled" }
   }

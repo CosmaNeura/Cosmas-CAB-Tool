@@ -86,8 +86,8 @@ def test_store_configuration_defaults_to_memory_outside_production():
     assert isinstance(chase_store_from_env({}), Worklist)
 
 
-def test_production_refuses_the_restart_unsafe_memory_store():
-    with pytest.raises(RuntimeError, match="forbidden in production"):
+def test_production_refuses_local_state_before_constructing_memory_store():
+    with pytest.raises(ValueError, match="STATE_STORE=postgres"):
         chase_store_from_env({
             "COSMANEURA_ENV": "production",
             "COSMANEURA_AUTH_MODE": "container_apps",

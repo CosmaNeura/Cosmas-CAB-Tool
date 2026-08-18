@@ -15,6 +15,13 @@ param postgresAdminLogin string = 'cosmaneura_admin'
 @description('PostgreSQL administrator password. Supply it from an untracked parameter file.')
 param postgresAdminPassword string
 
+@description('Least-privilege PostgreSQL login used only by the running API.')
+param postgresAppLogin string = 'cosmaneura_app'
+
+@secure()
+@description('Password for the least-privilege runtime login. Supply it from an untracked parameter file.')
+param postgresAppPassword string
+
 @description('Application database created on the Flexible Server.')
 param databaseName string = 'cosmaneura'
 
@@ -33,18 +40,24 @@ param tags object = {
 }
 
 var suffix = take(uniqueString(subscription().id, resourceGroup().id, namePrefix), 8)
+var validatedPostgresAppLogin = toLower(postgresAdminLogin) == toLower(postgresAppLogin)
+  ? fail('postgresAppLogin must differ from postgresAdminLogin')
+  : postgresAppLogin
 var compactPrefix = replace(toLower(namePrefix), '-', '')
 var logAnalyticsName = '${namePrefix}-logs-${suffix}'
 var appInsightsName = '${namePrefix}-insights-${suffix}'
 var vnetName = '${namePrefix}-vnet-${suffix}'
 var environmentName = '${namePrefix}-env-${suffix}'
 var identityName = '${namePrefix}-identity-${suffix}'
+var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
 var postgresName = take('${namePrefix}-pg-${suffix}', 63)
 var postgresHost = '${postgresName}.postgres.database.azure.com'
-var encodedPassword = uriComponent(postgresAdminPassword)
-var databaseUrl = 'postgresql://${postgresAdminLogin}:${encodedPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
+var encodedAdminPassword = uriComponent(postgresAdminPassword)
+var encodedAppPassword = uriComponent(postgresAppPassword)
+var migrationDatabaseUrl = 'postgresql://${postgresAdminLogin}:${encodedAdminPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
+var runtimeDatabaseUrl = 'postgresql://${validatedPostgresAppLogin}:${encodedAppPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -133,6 +146,12 @@ resource workloadIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023
   tags: tags
 }
 
+resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: migrationIdentityName
+  location: location
+  tags: tags
+}
+
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
   location: location
@@ -154,6 +173,19 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(registry.id, workloadIdentity.id, 'acr-pull')
   properties: {
     principalId: workloadIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+  }
+}
+
+resource migrationAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, migrationIdentity.id, 'acr-pull')
+  properties: {
+    principalId: migrationIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
@@ -236,19 +268,6 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
       bypass: 'AzureServices'
       defaultAction: 'Deny'
     }
-  }
-}
-
-resource keyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: keyVault
-  name: guid(keyVault.id, workloadIdentity.id, 'key-vault-secrets-user')
-  properties: {
-    principalId: workloadIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      '4633458b-17de-408a-b874-0445c86b69e6'
-    )
   }
 }
 
@@ -381,12 +400,75 @@ resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: keyVault
   name: 'database-url'
   properties: {
-    contentType: 'PostgreSQL connection string for the CAB runtime'
-    value: databaseUrl
+    contentType: 'Least-privilege PostgreSQL connection string for the CAB runtime'
+    value: runtimeDatabaseUrl
   }
   dependsOn: [
     applicationDatabase
   ]
+}
+
+resource migrationDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'migration-database-url'
+  properties: {
+    contentType: 'PostgreSQL owner connection string for the manual migration job only'
+    value: migrationDatabaseUrl
+  }
+  dependsOn: [
+    applicationDatabase
+  ]
+}
+
+resource runtimeDatabasePasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'database-runtime-password'
+  properties: {
+    contentType: 'Password used only by the migration job to provision the runtime role'
+    value: postgresAppPassword
+  }
+  dependsOn: [
+    applicationDatabase
+  ]
+}
+
+resource runtimeDatabaseSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: databaseUrlSecret
+  name: guid(databaseUrlSecret.id, workloadIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: workloadIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource migrationDatabaseSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: migrationDatabaseUrlSecret
+  name: guid(migrationDatabaseUrlSecret.id, migrationIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: migrationIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource migrationRuntimePasswordSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: runtimeDatabasePasswordSecret
+  name: guid(runtimeDatabasePasswordSecret.id, migrationIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: migrationIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
 }
 
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2026-01-01' = {
@@ -413,6 +495,7 @@ output registryName string = registry.name
 output registryLoginServer string = registry.properties.loginServer
 output containerAppsEnvironmentName string = containerAppsEnvironment.name
 output workloadIdentityName string = workloadIdentity.name
+output migrationIdentityName string = migrationIdentity.name
 output keyVaultName string = keyVault.name
 output postgresServerName string = postgres.name
 output applicationInsightsName string = appInsights.name

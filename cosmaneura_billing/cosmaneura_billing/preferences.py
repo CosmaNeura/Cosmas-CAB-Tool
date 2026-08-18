@@ -106,16 +106,20 @@ class Preferences:
 
 
 class PreferenceStore:
-    """Derives Preferences from the coder-feedback log. Cached on file mtime,
-    so a freshly submitted review is reflected on the next pipeline run."""
+    """Derive conservative preferences from durable coder feedback.
+
+    Local callers cache on file metadata. PostgreSQL callers inject a feedback
+    source whose monotonic revision is shared by every API replica.
+    """
 
     def __init__(self, path: str | os.PathLike | None = None,
                  min_count: int | None = None, global_min_users: int | None = None,
-                 settings: Settings | None = None):
+                 settings: Settings | None = None, feedback_store=None):
         self._path_arg = path
         self._min_count_arg = min_count
         self._global_min_users_arg = global_min_users
         self._settings = settings
+        self._feedback_store = feedback_store
         self._cache_key: tuple | None = None
         self._derived: dict | None = None
 
@@ -140,6 +144,14 @@ class PreferenceStore:
 
     # ---- derivation ------------------------------------------------------ #
     def _load(self) -> dict:
+        if self._feedback_store is not None:
+            key = ("feedback-store", self._feedback_store.revision())
+            if self._derived is not None and key == self._cache_key:
+                return self._derived
+            feedbacks = self._feedback_store.load()
+            self._cache_key = key
+            self._derived = self._derive(feedbacks)
+            return self._derived
         p = self.path
         key = (str(p), p.stat().st_mtime if p.exists() else -1.0)
         if self._derived is not None and key == self._cache_key:

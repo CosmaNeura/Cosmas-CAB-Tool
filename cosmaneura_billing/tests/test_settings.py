@@ -16,6 +16,7 @@ def test_defaults_preserve_local_runtime_behavior():
     assert settings.anthropic_effort == "high"
     assert settings.openai_api_key == ""
     assert settings.database_url == ""
+    assert settings.state_store == "local"
     assert settings.chase_dsn == ""
     assert settings.chase_store == "memory"
     assert settings.icd10_ccsr_csv is None
@@ -53,9 +54,9 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
         "COSMANEURA_PREF_MIN": "4",
         "COSMANEURA_PREF_GLOBAL_USERS": "5",
         "COSMANEURA_PREFS": "off",
+        "COSMANEURA_STATE_STORE": "POSTGRES",
         "COSMANEURA_CHASE_STORE": "POSTGRES",
-        "COSMANEURA_CHASE_DATABASE_URL": "postgresql://chase.invalid/db",
-        "DATABASE_URL": "postgresql://primary.invalid/db",
+        "DATABASE_URL": "postgresql://cosmaneura_app@primary.invalid/db",
         "COSMANEURA_PRACTICE_ID": "practice-a",
         "COSMANEURA_PRACTICE_NAME": "Practice A",
         "COSMANEURA_UPLOAD_URL": "https://practice.invalid/upload",
@@ -79,8 +80,9 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
     assert settings.preferences_enabled is False
     assert settings.auth_mode == "container_apps"
     assert settings.entra_tenant_id == "11111111-1111-4111-8111-111111111111"
+    assert settings.state_store == "postgres"
     assert settings.chase_store == "postgres"
-    assert settings.chase_dsn == "postgresql://chase.invalid/db"
+    assert settings.chase_dsn == "postgresql://cosmaneura_app@primary.invalid/db"
     assert settings.practice_id == "practice-a"
     assert settings.practice_name == "Practice A"
     assert settings.chase_approval == "per_message"
@@ -99,6 +101,7 @@ def test_boolean_true_spellings(value):
     ("COSMANEURA_PREF_GLOBAL_USERS", "0"),
     ("COSMANEURA_LOG_LEVEL", "verbose"),
     ("COSMANEURA_ENV", "invalid-env"),
+    ("COSMANEURA_STATE_STORE", "filesystem"),
     ("COSMANEURA_CHASE_STORE", "filesystem"),
     ("COSMANEURA_CHASE_APPROVAL", "always"),
 ])
@@ -179,6 +182,25 @@ def test_deployed_environments_require_complete_authentication():
             environment="production",
             auth_mode="container_apps",
             practice_id="practice-a",
+        )
+
+
+def test_deployed_environments_require_postgres_and_runtime_credentials():
+    base = {
+        "environment": "production",
+        "auth_mode": "container_apps",
+        "entra_tenant_id": "11111111-1111-4111-8111-111111111111",
+        "practice_id": "practice-a",
+    }
+    with pytest.raises(SettingsError, match="STATE_STORE=postgres"):
+        Settings(**base)
+    with pytest.raises(SettingsError, match="least-privilege runtime role"):
+        Settings(
+            **base,
+            state_store="postgres",
+            chase_store="postgres",
+            database_url="postgresql://postgres@example.invalid/db",
+            database_runtime_role="cosmaneura_app",
         )
 
 
