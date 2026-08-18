@@ -14,12 +14,13 @@ the spoof-resistance acceptance checks are deployed and verified.
 - Premium ACR and Key Vault with public access disabled and private endpoints
 - separate user-assigned identities for the API, migration job, and chase
   worker, each with ACR pull and only its required Key Vault secret grants
-- Log Analytics and workspace-based Application Insights (P5 wires telemetry)
+- Log Analytics for closed-schema stdout events and workspace-based Application
+  Insights for explicit numeric LLM metrics only
 - a manual Container Apps migration job, the same-origin API/frontend app, and
   a no-ingress chase-worker job that is manual by default and scheduled only
   when explicitly enabled
 
-## P4 parameters and secret boundary
+## Platform parameters and secret boundary
 
 Keep `namePrefix`, `postgresAppLogin`, and `postgresChaseWorkerLogin` identical
 between the foundation and app parameter files. The worker login must differ
@@ -31,6 +32,9 @@ The foundation owns credentials and creates these additional P4 inputs:
 - secure `chaseGateHmacKey` (at least 32 bytes)
 - optional secure `acsEmailConnectionString`, empty until the real-email gates
   are satisfied
+- optional secure `anthropicApiKey`, readable only by the API identity and empty
+  until synthetic model acceptance (real PHI additionally requires an
+  Anthropic BAA and approved retention terms)
 
 The app deployment owns behavior and receives these additional P4 inputs:
 
@@ -44,6 +48,8 @@ The app deployment owns behavior and receives these additional P4 inputs:
   `chaseWorkerCronExpression`
 - `uploadUrl`, `directContractListPath`, and `chaseApprovalMode`, which are also
   part of the server-configured policy/evidence boundary
+- `enableAnthropicInference` (false by default), plus non-secret
+  `anthropicModel` and `anthropicEffort`
 
 The two patient-messaging latches must change together. Enabling messaging also
 requires the scheduler and all ACS metadata; otherwise Bicep fails before
@@ -53,7 +59,7 @@ Secret access is intentionally partitioned:
 
 | Principal | May read | Must not read |
 |---|---|---|
-| API identity | `database-url`, Entra client secret, `chase-gate-hmac-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string |
+| API identity | `database-url`, Entra client secret, `chase-gate-hmac-key`, and optional `anthropic-api-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string |
 | Migration identity | `migration-database-url`, `database-runtime-password`, `chase-worker-database-password` | API DSN, worker DSN, gate key, ACS connection string |
 | Chase-worker identity | `chase-worker-database-url`, `chase-gate-hmac-key`, and (only when configured) `acs-email-connection-string` | API/owner DSNs, raw DB passwords, Entra client secret |
 
@@ -82,14 +88,16 @@ grant with a vault-scoped role assignment.
    stable random `chaseGateHmacKey` of at least 32 bytes, and set
    `initialAdminObjectId` to the reviewed immutable Entra object UUID of the
    first pilot administrator—not an email address or display name. Keep
-   `acsEmailConnectionString` and both app messaging latches empty/false for the
-   initial synthetic deployment.
+   `acsEmailConnectionString` and `anthropicApiKey` empty, and the app's
+   messaging/inference enable flags false, for the initial synthetic deployment.
 3. Create/select a resource group and deploy `foundation.bicep`. Keep
    `registryPublicNetworkAccess` set to its secure default, `Disabled`. This
    deployment must precede `app.bicep`: it creates all three identities, the
    worker DSN/password secrets, the shared gate-key secret, and their
-   secret-scoped grants. An ACS secret/grant is created only when the foundation
-   receives a non-empty connection string.
+   secret-scoped grants. ACS and Anthropic secrets/grants are created only when
+   the foundation receives their non-empty credentials. The API identity alone
+   receives `Monitoring Metrics Publisher` at the Application Insights
+   component scope; worker and migration identities receive no telemetry role.
 4. For the first image only, temporarily set
    `registryPublicNetworkAccess` to `Enabled`, redeploy the foundation, and
    build from the repository root with ACR Tasks:
@@ -107,8 +115,9 @@ grant with a vault-scoped role assignment.
    redeploy `foundation.bicep`, and verify the registry reports
    `publicNetworkAccess: Disabled`. Do not proceed while it is enabled.
 5. Deploy `app.bicep` with the exact immutable image tag,
-   `externalIngress=false`, `enableChaseScheduler=false`, and both messaging
-   latches false only after that verification. Add the output FQDN as the Entra
+   `externalIngress=false`, `enableChaseScheduler=false`, both messaging
+   latches false, and `enableAnthropicInference=false` only after that
+   verification. Add the output FQDN as the Entra
    web redirect URI:
    `https://<app-fqdn>/.auth/login/aad/callback`.
 
@@ -224,6 +233,73 @@ When those gates are satisfied, use this order:
 Deploying the app before the foundation secret/grant exists will leave the job
 with an unresolved Key Vault reference. Do not broaden Key Vault access to make
 that ordering error disappear.
+
+## P5 observability and synthetic inference acceptance
+
+Operational logging is a closed contract. The API emits `http_request` events
+with a server-generated request UUID and declared route template; the model
+adapter emits `llm_request` events with fixed status, attempt, latency, and
+provider token counts; the chase worker emits one `chase_worker_run` terminal
+event with aggregate counts only. Prompt/response text, chart content, raw
+paths, query strings, headers, exception messages, delivery IDs, recipients,
+and arbitrary logger extras are never admitted. These JSON events flow on
+stdout through Container Apps to the 30-day Log Analytics workspace.
+
+Application Insights receives only the explicit numeric LLM instruments. It
+has local authentication disabled and unsampled ingestion; the API UAMI uses
+its component-scoped `Monitoring Metrics Publisher` role. The worker and
+migration identities have no publishing role or App Insights configuration.
+The Azure exporter's Statsbeat, customer SDK statistics, and remote control
+plane are explicitly disabled in both process configuration and the factory.
+Do not enable Azure/OpenTelemetry automatic HTTP, SQL, exception, trace,
+profiler, snapshot, live-metrics, or logging instrumentation: those generic
+collectors can observe PHI before the application boundary redacts it.
+
+Validate P5 with synthetic/de-identified values before enabling external model
+inference:
+
+1. Confirm the image contains the telemetry extra and both app/worker processes
+   emit structured JSON only. Run
+   `python -m cosmaneura_billing.log_scanner --self-test`, then capture a
+   synthetic API/worker log sample and run the scanner against that file.
+2. Send a synthetic error request containing unique canaries in its path,
+   query, body, header, and exception text. In Log Analytics, confirm none of
+   those values appears and the request is represented only by a declared route
+   template, status, duration, exception class, and server-owned request ID.
+3. To test the real adapter with **synthetic/de-identified chart text only**,
+   redeploy the foundation first with a reviewed `anthropicApiKey`, verify only
+   the API identity can read `anthropic-api-key`, then redeploy the app with
+   `enableAnthropicInference=true`. A new replica fails readiness if the
+   metrics exporter cannot initialize. Submit one synthetic/de-identified
+   encounter through the real adapter.
+4. Verify Application Insights reports the `cosmaneura.llm.requests`,
+   `cosmaneura.llm.latency`, input/output token, and cache-token metrics with
+   only provider/model/status/attempt dimensions. Confirm no worker or migration
+   identity has the metrics role, then restore `enableAnthropicInference=false`
+   to return to deterministic offline mode until the contractual gate is met.
+
+An Azure/Microsoft BAA does not cover chart text sent to Anthropic. Real patient
+data remains prohibited until an Anthropic BAA and approved retention terms are
+documented (or inference moves to a separately BAA-covered model host), in
+addition to the deployment/auth/logging acceptance checks. Parameter enablement
+is not evidence that this contractual gate has been met.
+
+Conditional resources persist under normal incremental deployments. Setting
+`anthropicApiKey` back to empty does not delete an already-created
+`anthropic-api-key` secret or its reader assignment. First redeploy the app with
+`enableAnthropicInference=false` and verify the API has no secret reference.
+Then list role assignments at the exact secret resource scope, delete only the
+verified Anthropic reader assignment by ID, and soft-delete the named secret:
+
+```bash
+az role assignment list --scope <anthropic-api-key-secret-resource-id> \
+  --query "[].{id:id,principalId:principalId,scope:scope}" --output table
+az role assignment delete --ids <verified-api-anthropic-reader-assignment-id>
+az keyvault secret delete --vault-name <foundation-output-keyVaultName> \
+  --name anthropic-api-key
+```
+
+Do not remove any API database, Entra, or chase-gate grants during this cleanup.
 
 ## Authentication acceptance checks
 

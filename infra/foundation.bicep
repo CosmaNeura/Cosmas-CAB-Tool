@@ -38,6 +38,10 @@ param chaseGateHmacKey string
 @description('Optional Azure Communication Services email connection string. It is stored for the chase worker only; leave empty until BAA, P5, and messaging activation review are complete.')
 param acsEmailConnectionString string = ''
 
+@secure()
+@description('Optional Anthropic API credential for the API only. Before an Anthropic BAA/retention approval it may be used only for synthetic or de-identified acceptance.')
+param anthropicApiKey string = ''
+
 @description('Application database created on the Flexible Server.')
 param databaseName string = 'cosmaneura'
 
@@ -85,6 +89,7 @@ var migrationDatabaseUrl = 'postgresql://${postgresAdminLogin}:${encodedAdminPas
 var runtimeDatabaseUrl = 'postgresql://${validatedPostgresAppLogin}:${encodedAppPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var chaseWorkerDatabaseUrl = 'postgresql://${validatedPostgresChaseWorkerLogin}:${encodedChaseWorkerPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var acsEmailConfigured = !empty(acsEmailConnectionString)
+var anthropicConfigured = !empty(anthropicApiKey)
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -110,6 +115,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
     Application_Type: 'web'
     IngestionMode: 'LogAnalytics'
     WorkspaceResourceId: logAnalytics.id
+    DisableLocalAuth: true
+    SamplingPercentage: 100
   }
 }
 
@@ -236,6 +243,22 @@ resource chaseWorkerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01'
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+  }
+}
+
+// The API publishes only the explicit numeric LLM instruments admitted by the
+// application logging boundary. No worker/migration identity receives this
+// permission and Azure auto-instrumentation remains disabled.
+resource apiMetricsPublisher 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: appInsights
+  name: guid(appInsights.id, workloadIdentity.id, 'monitoring-metrics-publisher')
+  properties: {
+    principalId: workloadIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '3913510d-42f4-4e42-8a64-420c390055eb'
     )
   }
 }
@@ -520,6 +543,15 @@ resource acsEmailConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-
   }
 }
 
+resource anthropicApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (anthropicConfigured) {
+  parent: keyVault
+  name: 'anthropic-api-key'
+  properties: {
+    contentType: 'External model credential for the API only; real PHI requires an Anthropic BAA'
+    value: anthropicApiKey
+  }
+}
+
 resource runtimeDatabaseSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: databaseUrlSecret
   name: guid(databaseUrlSecret.id, workloadIdentity.id, 'key-vault-secrets-user')
@@ -616,6 +648,19 @@ resource chaseWorkerAcsEmailSecretReader 'Microsoft.Authorization/roleAssignment
   name: guid(acsEmailConnectionStringSecret.id, chaseWorkerIdentity.id, 'key-vault-secrets-user')
   properties: {
     principalId: chaseWorkerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource apiAnthropicSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (anthropicConfigured) {
+  scope: anthropicApiKeySecret
+  name: guid(anthropicApiKeySecret.id, workloadIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: workloadIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',

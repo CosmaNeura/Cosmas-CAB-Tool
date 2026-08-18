@@ -56,6 +56,21 @@ param acsEmailSenderAddress string = ''
 @description('Monitored reply-to address; shared as non-secret policy metadata only.')
 param acsEmailReplyToAddress string = ''
 
+@description('Enable API-only Anthropic inference after the foundation secret exists. Before an Anthropic BAA/retention approval, submit synthetic or de-identified text only.')
+param enableAnthropicInference bool = false
+
+@description('Anthropic model alias or dated model ID used by the billing engine.')
+param anthropicModel string = 'claude-opus-5'
+
+@allowed([
+  'low'
+  'medium'
+  'high'
+  'max'
+])
+@description('Adaptive-thinking effort for Anthropic inference.')
+param anthropicEffort string = 'high'
+
 @description('IANA timezone used for chase cadence and quiet-hour calculations.')
 param practiceTimezone string = 'UTC'
 
@@ -111,6 +126,7 @@ var suffix = take(uniqueString(subscription().id, resourceGroup().id, namePrefix
 var compactPrefix = replace(toLower(namePrefix), '-', '')
 var containerNamePrefix = take(namePrefix, 18)
 var environmentName = '${namePrefix}-env-${suffix}'
+var appInsightsName = '${namePrefix}-insights-${suffix}'
 var identityName = '${namePrefix}-identity-${suffix}'
 var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
 var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
@@ -143,6 +159,10 @@ var chaseTransport = validatedPatientMessagingEnabled ? 'acs_email' : 'record_on
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
   name: environmentName
+}
+
+resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
+  name: appInsightsName
 }
 
 var applicationOrigin = 'https://${appName}.${environment.properties.defaultDomain}'
@@ -329,7 +349,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           identity: identity.id
         }
       ]
-      secrets: [
+      secrets: concat([
         {
           name: 'database-url'
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-url'
@@ -345,7 +365,13 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-gate-hmac-key'
           identity: identity.id
         }
-      ]
+      ], enableAnthropicInference ? [
+        {
+          name: 'anthropic-api-key'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/anthropic-api-key'
+          identity: identity.id
+        }
+      ] : [])
     }
     template: {
       containers: [
@@ -360,6 +386,30 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             {
               name: 'COSMANEURA_ENV'
               value: 'production'
+            }
+            {
+              name: 'COSMANEURA_TELEMETRY_ENABLED'
+              value: 'true'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL'
+              value: 'true'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_SDKSTATS_DISABLED'
+              value: 'true'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED'
+              value: 'true'
             }
             {
               name: 'COSMANEURA_FRONTEND_DIST'
@@ -473,7 +523,20 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               name: 'COSMANEURA_DIRECT_CONTRACT_LIST'
               value: directContractListPath
             }
-          ], validatedPatientMessagingEnabled ? [
+          ], enableAnthropicInference ? [
+            {
+              name: 'ANTHROPIC_API_KEY'
+              secretRef: 'anthropic-api-key'
+            }
+            {
+              name: 'ANTHROPIC_MODEL'
+              value: anthropicModel
+            }
+            {
+              name: 'ANTHROPIC_EFFORT'
+              value: anthropicEffort
+            }
+          ] : [], validatedPatientMessagingEnabled ? [
             {
               name: 'COSMANEURA_ACS_EMAIL_ENDPOINT'
               value: validatedAcsEmailEndpoint

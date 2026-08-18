@@ -11,6 +11,7 @@
     "postgresChaseWorkerPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
     "chaseGateHmacKey": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE_32_BYTES_MINIMUM" },
     "acsEmailConnectionString": { "value": "" },
+    "anthropicApiKey": { "value": "" },
     "databaseName": { "value": "cosmaneura" },
     "registryPublicNetworkAccess": { "value": "Disabled" }
   }
