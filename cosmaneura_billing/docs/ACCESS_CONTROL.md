@@ -29,6 +29,8 @@ email addresses are never authoritative.
 | Submit coder feedback | `Admin`, `Coder` |
 | View aggregate feedback | `Admin` |
 | View or act on the chase worklist | `Admin`, `BillingStaff` |
+| Register, approve, activate, or revoke a chase policy | `Admin` |
+| Release an exact direct-contract review or per-message touch | `Admin` |
 
 Configure the Entra enterprise application with **Assignment required = Yes**,
 define exactly those app roles, and assign only pilot staff or controlled staff
@@ -104,6 +106,51 @@ runtime login cannot select another practice by changing the session setting.
 The external EHR/demo encounter identifier is not copied into access audit.
 Audit resource references use the encounter's internal UUID (or a validated
 opaque chase ID), reducing accidental PHI leakage through identifiers.
+
+### Chase scheduler/worker split
+
+The API and scheduled chase worker are separate least-privilege database
+principals bound to the same practice. The API role owns authenticated human
+inputs: detection/contact snapshots, immutable policy revisions, Admin
+approval/revocation events, and exact review or per-message releases. It cannot
+claim or finalize delivery-outbox rows. The worker role can read only the chase
+authorization evidence needed to schedule and can write only cadence, outbox,
+delivery-event, pending-task, and narrowly validated accepted-attempt effects.
+It cannot read identity, encounter, feedback, or access-audit data and cannot
+mint a policy, approval, release, or consent decision.
+
+The worker reads only `COSMANEURA_CHASE_WORKER_DATABASE_URL`; it never falls
+back to the API's `DATABASE_URL`. Its DSN/password and
+`COSMANEURA_ACS_EMAIL_CONNECTION_STRING` belong only to the scheduled job and
+must never be exposed to the API container. The API and worker receive the same
+`COSMANEURA_ACS_EMAIL_ENDPOINT`, sender, and reply-to policy-fingerprint
+metadata, plus the same chase-gate HMAC key. A deployed scheduler requires that
+key to contain at least 32 bytes even when `record_only` is selected.
+
+An Admin approval is bound to the complete immutable policy fingerprint.
+Direct-contract review releases are bound to the current gate evidence, and
+per-message releases are bound to the exact policy revision, cadence step, and
+contact snapshot. Drift invalidates the authorization. Revocation removes the
+active policy and cancels only queued work that provably has not called the
+provider; submitting, accepted, or ambiguous operations are not retried.
+
+The policy status/create/approve/activate/revoke and exact per-message release
+API surfaces are Admin-only. Policy and template bodies are derived from server
+configuration rather than accepted from request bodies. Durable detection
+commits the entire batch and its audit completion atomically, returns counts
+only, and leaves row retrieval to the authenticated worklist. Logging a
+scheduler-created phone attempt completes the exact durable staff task and
+advances its cadence in the same audited transaction.
+
+The one-shot worker is invoked with
+`python -m cosmaneura_billing.chase.worker --once`. `record_only` is the default:
+it creates no patient message but may create a durable manual phone task for
+staff. There is no outbound voice implementation and no SMS transport in this
+slice. ACS email additionally requires the scheduler, patient-messaging enable,
+and operational-activation latches. Any unresolved ambiguous provider
+submission halts new outreach. Keep real messaging disabled until the Azure
+deployment layer, BAA, P5 logging/redaction, and deployment acceptance are all
+complete.
 
 ## Local development
 

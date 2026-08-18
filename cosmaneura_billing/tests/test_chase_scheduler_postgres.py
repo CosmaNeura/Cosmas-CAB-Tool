@@ -35,6 +35,7 @@ from cosmaneura_billing.chase.scheduler_store import (
     SchedulerLeaseExpired,
 )
 from cosmaneura_billing.chase.scheduling import ScheduleAction, cadence_due_at
+from cosmaneura_billing.access_audit import AccessAuditEvent
 from cosmaneura_billing.direct_contract import (
     DirectContractList,
     check_direct_contract,
@@ -338,6 +339,183 @@ def _persist(
             (scope.practice_id, first.chase_id),
         ).fetchone()[0] == 0
     return first.chase_id, first.contact_snapshot_id
+
+
+def _audit_attempt(
+    scope: Scope,
+    *,
+    actor_user_id: str = "",
+    actor_roles: tuple[str, ...] = ("BillingStaff",),
+    action: str = "chase.decide",
+    route: str = "/api/chase/detect",
+) -> AccessAuditEvent:
+    event = AccessAuditEvent(
+        event_id=str(uuid4()),
+        occurred_at=datetime.now(timezone.utc).isoformat(),
+        practice_id=scope.practice_id,
+        actor_tenant_id=scope.tenant_id,
+        actor_user_id=actor_user_id or scope.staff_id,
+        actor_roles=actor_roles,
+        action=action,
+        resource_id="",
+        route=route,
+        method="POST",
+        status=200,
+        outcome="allowed",
+        source_ip="127.0.0.1",
+    )
+    with psycopg.connect(TEST_DSN) as conn:
+        conn.execute(
+            """INSERT INTO access_audit_attempts (
+                   practice_id, event_id, occurred_at, actor_tenant_id,
+                   actor_user_id, actor_roles, action, route, method, source_ip
+               ) VALUES (%s, %s::uuid, %s, %s::uuid, %s::uuid, %s,
+                         %s, %s, %s, %s)""",
+            (
+                event.practice_id, event.event_id, event.occurred_at,
+                event.actor_tenant_id, event.actor_user_id,
+                list(event.actor_roles), event.action, event.route,
+                event.method, event.source_ip,
+            ),
+        )
+    return event
+
+
+def _batch_detection(
+    scope: Scope,
+    *,
+    patient_ref: str,
+    chase_id: str,
+    snapshot_id: str,
+    routes: tuple[ContactRouteInput, ...],
+) -> tuple[ChaseItem, ContactSnapshotInput]:
+    return (
+        ChaseItem(
+            chase_id=chase_id,
+            patient_ref=patient_ref,
+            trigger=Trigger.NO_CARD_ON_FILE,
+            detected_at=scope.base.isoformat(),
+            state=State.READY,
+            priority=80,
+            direct_contract=_gate(patient_ref),
+        ),
+        ContactSnapshotInput(
+            contact_snapshot_id=snapshot_id,
+            source_system="api.coverage_snapshot",
+            source_version="2026-08-18",
+            observed_at=scope.base,
+            verified_at=scope.base + timedelta(seconds=1),
+            verification_method="staff",
+            routes=routes,
+            verified_by_tenant_id=scope.tenant_id,
+            verified_by_user_id=scope.staff_id,
+        ),
+    )
+
+
+def test_detection_batch_commits_all_contacts_and_one_audit(scope):
+    audit = _audit_attempt(scope)
+    first_id, second_id = f"chase-{uuid4()}", f"chase-{uuid4()}"
+    first_snapshot, second_snapshot = str(uuid4()), str(uuid4())
+    rows = (
+        _batch_detection(
+            scope,
+            patient_ref=f"SYNTHETIC-BATCH-ZERO-{uuid4().hex}",
+            chase_id=first_id,
+            snapshot_id=first_snapshot,
+            routes=(),
+        ),
+        _batch_detection(
+            scope,
+            patient_ref=f"SYNTHETIC-BATCH-EMAIL-{uuid4().hex}",
+            chase_id=second_id,
+            snapshot_id=second_snapshot,
+            routes=(ContactRouteInput(
+                Channel.EMAIL,
+                "synthetic.batch@example.invalid",
+                "not_required",
+            ),),
+        ),
+    )
+
+    results = scope.repo.persist_detection_batch(rows, audit_event=audit)
+
+    assert [result.chase_id for result in results] == [first_id, second_id]
+    with psycopg.connect(TEST_DSN) as conn:
+        item_count = conn.execute(
+            """SELECT count(*) FROM chase_items
+                WHERE practice_id = %s AND chase_id = ANY(%s)""",
+            (scope.practice_id, [first_id, second_id]),
+        ).fetchone()[0]
+        route_counts = conn.execute(
+            """SELECT snapshot.contact_snapshot_id, count(route.channel)
+                 FROM chase_contact_snapshots AS snapshot
+                 LEFT JOIN chase_contact_routes AS route
+                   ON route.practice_id = snapshot.practice_id
+                  AND route.contact_snapshot_id = snapshot.contact_snapshot_id
+                WHERE snapshot.practice_id = %s
+                  AND snapshot.contact_snapshot_id = ANY(%s::uuid[])
+                GROUP BY snapshot.contact_snapshot_id""",
+            (scope.practice_id, [first_snapshot, second_snapshot]),
+        ).fetchall()
+        completions = conn.execute(
+            """SELECT count(*) FROM access_audit_completions
+                WHERE practice_id = %s AND event_id = %s::uuid""",
+            (scope.practice_id, audit.event_id),
+        ).fetchone()[0]
+    assert item_count == 2
+    assert {str(row[0]): row[1] for row in route_counts} == {
+        first_snapshot: 0,
+        second_snapshot: 1,
+    }
+    assert completions == 1
+
+
+def test_detection_batch_rolls_back_items_contacts_and_audit(scope):
+    audit = _audit_attempt(scope)
+    first_id, second_id = f"chase-{uuid4()}", f"chase-{uuid4()}"
+    shared_snapshot = str(uuid4())
+    rows = (
+        _batch_detection(
+            scope,
+            patient_ref=f"SYNTHETIC-BATCH-ROLLBACK-A-{uuid4().hex}",
+            chase_id=first_id,
+            snapshot_id=shared_snapshot,
+            routes=(),
+        ),
+        _batch_detection(
+            scope,
+            patient_ref=f"SYNTHETIC-BATCH-ROLLBACK-B-{uuid4().hex}",
+            chase_id=second_id,
+            snapshot_id=shared_snapshot,
+            routes=(ContactRouteInput(
+                Channel.EMAIL,
+                "synthetic.conflict@example.invalid",
+                "not_required",
+            ),),
+        ),
+    )
+
+    with pytest.raises(SchedulerConflict):
+        scope.repo.persist_detection_batch(rows, audit_event=audit)
+
+    with psycopg.connect(TEST_DSN) as conn:
+        item_count = conn.execute(
+            """SELECT count(*) FROM chase_items
+                WHERE practice_id = %s AND chase_id = ANY(%s)""",
+            (scope.practice_id, [first_id, second_id]),
+        ).fetchone()[0]
+        snapshot_count = conn.execute(
+            """SELECT count(*) FROM chase_contact_snapshots
+                WHERE practice_id = %s AND contact_snapshot_id = %s::uuid""",
+            (scope.practice_id, shared_snapshot),
+        ).fetchone()[0]
+        completion_count = conn.execute(
+            """SELECT count(*) FROM access_audit_completions
+                WHERE practice_id = %s AND event_id = %s::uuid""",
+            (scope.practice_id, audit.event_id),
+        ).fetchone()[0]
+    assert (item_count, snapshot_count, completion_count) == (0, 0, 0)
 
 
 def _refresh_gate_detection(
@@ -1583,6 +1761,150 @@ def test_exact_human_releases_are_idempotent_and_revocation_stops_claim(scope):
         as_of=reservation_at + timedelta(seconds=2),
         lease_seconds=60,
     ) is None
+
+
+def test_message_release_exact_retry_survives_cadence_advance(scope):
+    chase_id, snapshot_id = _persist(
+        scope, patient_ref=f"SYNTHETIC-MESSAGE-RETRY-{uuid4().hex}",
+    )
+    policy = _policy(mode=ApprovalMode.PER_MESSAGE, include_phone=True)
+    delivery = _delivery()
+    revision, _ = _approve_and_schedule(
+        scope, chase_id, snapshot_id, policy, delivery,
+    )
+    release_id = str(uuid4())
+    reason = "practice owner reviewed this exact synthetic message"
+    target = scope.repo.message_release_target(
+        release_id=release_id,
+        chase_id=chase_id,
+        expected_policy_fingerprint=revision.policy_fingerprint,
+        actor_tenant_id=scope.tenant_id,
+        actor_user_id=scope.admin_id,
+        reason=reason,
+    )
+    assert target == {
+        "policy_revision_id": revision.policy_revision_id,
+        "contact_snapshot_id": snapshot_id,
+        "step_ordinal": 0,
+    }
+    released = scope.repo.release_message(
+        release_id=release_id,
+        chase_id=chase_id,
+        policy_revision_id=target["policy_revision_id"],
+        expected_policy_fingerprint=revision.policy_fingerprint,
+        step_ordinal=target["step_ordinal"],
+        contact_snapshot_id=target["contact_snapshot_id"],
+        actor_tenant_id=scope.tenant_id,
+        actor_user_id=scope.admin_id,
+        reason=reason,
+    )
+    now = datetime.now(timezone.utc)
+    [reserved] = scope.repo.reserve_due(
+        policy,
+        delivery,
+        practice_timezone="UTC",
+        as_of=now + timedelta(seconds=1),
+    )
+    assert reserved.action is ScheduleAction.TRANSPORT
+    claim = scope.repo.claim_delivery(
+        expected_policy_fingerprint=revision.policy_fingerprint,
+        contact_max_age_hours=24,
+        as_of=now + timedelta(seconds=2),
+        lease_seconds=60,
+    )
+    assert claim is not None
+    finalized = scope.repo.finalize_delivery(
+        delivery_id=claim.delivery_id,
+        lease_token=claim.lease_token,
+        outcome="accepted",
+        as_of=now + timedelta(seconds=3),
+        provider_message_id=f"synthetic-retry-{uuid4()}",
+    )
+    assert finalized.cadence_advanced is True
+
+    retry_audit = _audit_attempt(
+        scope,
+        actor_user_id=scope.admin_id,
+        actor_roles=("Admin",),
+        action="chase.decide",
+        route="/api/chase/{id}/release-message",
+    )
+    retry_target = scope.repo.message_release_target(
+        release_id=release_id,
+        chase_id=chase_id,
+        expected_policy_fingerprint=revision.policy_fingerprint,
+        actor_tenant_id=scope.tenant_id,
+        actor_user_id=scope.admin_id,
+        reason=reason,
+    )
+    assert retry_target == target
+    replay = scope.repo.release_message(
+        release_id=release_id,
+        chase_id=chase_id,
+        policy_revision_id=retry_target["policy_revision_id"],
+        expected_policy_fingerprint=revision.policy_fingerprint,
+        step_ordinal=retry_target["step_ordinal"],
+        contact_snapshot_id=retry_target["contact_snapshot_id"],
+        actor_tenant_id=scope.tenant_id,
+        actor_user_id=scope.admin_id,
+        reason=reason,
+        audit_event=retry_audit,
+    )
+    assert replay == released
+    with psycopg.connect(TEST_DSN) as conn:
+        cadence_ordinal = conn.execute(
+            """SELECT next_step_ordinal FROM chase_cadence_states
+                WHERE practice_id = %s AND chase_id = %s""",
+            (scope.practice_id, chase_id),
+        ).fetchone()[0]
+        completion_count = conn.execute(
+            """SELECT count(*) FROM access_audit_completions
+                WHERE practice_id = %s AND event_id = %s::uuid""",
+            (scope.practice_id, retry_audit.event_id),
+        ).fetchone()[0]
+    assert cadence_ordinal == 1
+    assert completion_count == 1
+
+    with pytest.raises(SchedulerConflict):
+        scope.repo.message_release_target(
+            release_id=release_id,
+            chase_id=chase_id,
+            expected_policy_fingerprint=revision.policy_fingerprint,
+            actor_tenant_id=scope.tenant_id,
+            actor_user_id=scope.admin_id,
+            reason="a changed reason must not replay",
+        )
+    with pytest.raises(SchedulerConflict):
+        scope.repo.message_release_target(
+            release_id=release_id,
+            chase_id=f"different-path-{uuid4()}",
+            expected_policy_fingerprint=revision.policy_fingerprint,
+            actor_tenant_id=scope.tenant_id,
+            actor_user_id=scope.admin_id,
+            reason=reason,
+        )
+
+    second_admin = str(uuid4())
+    with psycopg.connect(TEST_DSN) as conn:
+        conn.execute(
+            "INSERT INTO users (tenant_id, user_id) VALUES (%s::uuid, %s::uuid)",
+            (scope.tenant_id, second_admin),
+        )
+        conn.execute(
+            """INSERT INTO practice_memberships (
+                   practice_id, tenant_id, user_id, roles
+               ) VALUES (%s, %s::uuid, %s::uuid, ARRAY['Admin']::text[])""",
+            (scope.practice_id, scope.tenant_id, second_admin),
+        )
+    with pytest.raises(SchedulerConflict):
+        scope.repo.message_release_target(
+            release_id=release_id,
+            chase_id=chase_id,
+            expected_policy_fingerprint=revision.policy_fingerprint,
+            actor_tenant_id=scope.tenant_id,
+            actor_user_id=second_admin,
+            reason=reason,
+        )
 
 
 def test_contact_snapshot_uuid_conflict_fails_closed(scope):

@@ -66,9 +66,9 @@ engine, regulatory datasets, database, encounters, explicit memberships,
 feedback, chase schema, and access-audit store are ready. The migration
 container uses the database-owner credential; the API receives only a separate
 least-privilege runtime credential. The scheduled chase worker has a third,
-distinct practice-bound database credential; its database and messaging secrets
-must never be injected into the API container. The default chase transport
-remains inert.
+distinct practice-bound database credential. That credential and the ACS
+connection string must never be injected into the API container. The default
+chase transport remains inert.
 
 Azure Bicep templates and the reviewed deployment sequence are in
 `../infra/README.md`. They create a VNet-injected Container Apps environment,
@@ -179,15 +179,33 @@ python demo_chase.py    # end-to-end, synthetic patients, nothing leaves the bui
 ```
 
 ```
-GET  /api/chase/worklist            the master list (filter by bucket/assignee/needs_person)
-POST /api/chase/detect              run detection over coverage snapshots
-GET  /api/chase/metrics             outstanding, touches/card, minutes/card, time-to-card
-POST /api/chase/{id}/action         release | suppress | assign | log_attempt | submitted | verify
+GET  /api/chase/worklist                 master list (filter by bucket/assignee/needs_person)
+POST /api/chase/detect                   detect and durably merge coverage snapshots
+GET  /api/chase/metrics                  outstanding, touches/card, minutes/card, time-to-card
+GET  /api/chase/policy/status            configured policy's PHI-free lifecycle status (Admin)
+POST /api/chase/policy/create            create the server-configured revision (Admin)
+POST /api/chase/policy/approve           append an exact approval event (Admin)
+POST /api/chase/policy/activate          activate the latest exact approval (Admin)
+POST /api/chase/policy/revoke            append revocation and retire queued work (Admin)
+POST /api/chase/{id}/release-message     release one exact per-message cadence step (Admin)
+POST /api/chase/{id}/action              release | suppress | assign | log_attempt | submitted | verify
 ```
 
 Each staff action carries a client-generated UUID `action_id`. An exact retry
 is replayed without adding another contact or minute count; reuse with a
 different action payload returns 409.
+
+In durable PostgreSQL mode, `POST /api/chase/detect` commits its detection,
+contact snapshots, and audit completion as one batch and returns only
+`checked` and `detected` counts. Fetch the resulting rows with
+`GET /api/chase/worklist`; the detect response deliberately does not duplicate
+the worklist or expose partial writes.
+
+Policy cadence, templates, upload URL, transport, ACS endpoint, sender, and
+reply-to values come only from server configuration. Clients submit only the
+operation UUIDs and, where applicable, a reason; they cannot replace an
+approved policy body through an API request. Policy lifecycle endpoints and
+the exact per-message or direct-contract release paths require `Admin`.
 
 The demo and tests default to an in-memory worklist. Production fails closed
 unless the worklist is backed by PostgreSQL, so replicas cannot diverge and a
@@ -241,12 +259,15 @@ slice.
 
 ACS email is available only when the durable scheduler, the patient-messaging
 enable latch, and the separate operational-activation latch are all on, the
-transport is `acs_email`, and the exact configuration has human approval.
-Staging and production also require a chase-gate HMAC key of at least 32 bytes,
-including for `record_only`, so gate evidence cannot silently drift. Keep both
-messaging latches off and use only synthetic/de-identified recipients: real
-patient messaging remains blocked until the deployment layer, BAA, P5
-logging/redaction, and deployment acceptance are complete.
+transport is `acs_email`, and the exact configuration has human approval. The
+API and worker receive the same `COSMANEURA_ACS_EMAIL_ENDPOINT`, sender, and
+reply-to fingerprint metadata; only the worker receives
+`COSMANEURA_ACS_EMAIL_CONNECTION_STRING`. Staging and production also require a
+shared chase-gate HMAC key of at least 32 bytes, including for `record_only`, so
+gate evidence cannot silently drift. Keep both messaging latches off and use
+only synthetic/de-identified recipients: real patient messaging remains
+blocked until the deployment layer, BAA, P5 logging/redaction, and deployment
+acceptance are complete.
 
 One list, three views — missing, expired, eligibility — matching the buckets
 staff already use. Priority comes from appointment proximity: today's visit
@@ -270,10 +291,11 @@ What the code guarantees, and tests:
   time as well as send time.
 - The current automated transport is ACS email. SMS is not implemented; if it
   is added later it remains fail-closed without an authoritative opt-in feed.
-- **Phone is a route- and consent-checked staff task, never an automated call.**
-  The system schedules it, a person makes it and logs the outcome and minutes
-  into the same contact history — which is what makes phone work visible in the
-  metrics. There is no outbound voice transport.
+- **Phone is a route-checked staff task, never an automated call.**
+  The scheduler persists the task; `action=log_attempt` completes that exact
+  durable task, records the outcome and minutes, and advances its cadence in one
+  transaction. This is what makes phone work visible in the metrics. There is
+  no outbound voice transport.
 - A row closes only on a **verified** card plus its write, never on a patient's
   submission.
 

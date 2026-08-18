@@ -17,7 +17,7 @@ available. The deployment provisions separate least-privilege roles.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 import hashlib
@@ -381,6 +381,37 @@ class PostgresChaseSchedulerRepository:
             f"practice_id={self.practice_id!r}, dsn='<redacted>')"
         )
 
+    def healthcheck(self) -> None:
+        """Prove the P4 scheduler schema and API cleanup authority exist."""
+        with self._connection() as conn:
+            row = conn.execute(
+                """SELECT
+                       to_regclass('public.chase_contact_snapshots') IS NOT NULL
+                           AS contact_snapshots,
+                       to_regclass('public.chase_contact_routes') IS NOT NULL
+                           AS contact_routes,
+                       to_regclass('public.chase_policy_revisions') IS NOT NULL
+                           AS policy_revisions,
+                       to_regclass('public.chase_active_policies') IS NOT NULL
+                           AS active_policies,
+                       to_regclass('public.chase_cadence_states') IS NOT NULL
+                           AS cadence_states,
+                       to_regclass('public.chase_delivery_outbox') IS NOT NULL
+                           AS delivery_outbox,
+                       to_regprocedure(
+                           'public.cosmaneura_cancel_revoked_chase_policy(uuid,text)'
+                       ) IS NOT NULL AS revocation_cleanup,
+                       to_regprocedure(
+                           'public.cosmaneura_cancel_stale_chase_work(text)'
+                       ) IS NOT NULL AS stale_cleanup"""
+            ).fetchone()
+        if row is None or not all(row.values()):
+            from ..persistence import PersistenceUnavailable
+
+            raise PersistenceUnavailable(
+                "PostgreSQL chase scheduler schema is unavailable"
+            )
+
     @contextmanager
     def _connection(self):
         try:
@@ -480,8 +511,6 @@ class PostgresChaseSchedulerRepository:
             )
         _uuid(contact.verified_by_tenant_id, field="verifier tenant ID")
         _uuid(contact.verified_by_user_id, field="verifier user ID")
-        if not contact.routes:
-            raise ValueError("a contact snapshot requires at least one route")
         channels = [route.channel for route in contact.routes]
         if len(channels) != len(set(channels)):
             raise ValueError("a contact snapshot cannot repeat a channel")
@@ -523,13 +552,22 @@ class PostgresChaseSchedulerRepository:
         return snapshot_id, observed, verified, rows
 
     def persist_detection(
-        self, item: ChaseItem, contact: ContactSnapshotInput, *, audit_event=None,
+        self,
+        item: ChaseItem,
+        contact: ContactSnapshotInput,
+        *,
+        audit_event=None,
+        _connection=None,
     ) -> DetectionPersistenceResult:
         """Commit one detector upsert and its immutable contact snapshot together."""
         snapshot_id, observed, verified, routes = self._validated_contact(
             contact
         )
-        with self._connection() as conn:
+        connection_scope = (
+            self._connection()
+            if _connection is None else nullcontext(_connection)
+        )
+        with connection_scope as conn:
             tenant, user = self._require_staff(
                 conn,
                 contact.verified_by_tenant_id,
@@ -804,7 +842,131 @@ class PostgresChaseSchedulerRepository:
             )
         return DetectionPersistenceResult(persisted_chase_id, snapshot_id)
 
+    def persist_detection_batch(
+        self,
+        detections: Iterable[tuple[ChaseItem, ContactSnapshotInput]],
+        *,
+        audit_event,
+    ) -> list[DetectionPersistenceResult]:
+        """Commit one complete detector batch and one audit completion.
+
+        The caller-owned HTTP audit event is mandatory: accepting a batch
+        without it would split the clinical worklist mutation from its actor
+        record. Any item, contact, route, authorization, or audit failure rolls
+        the whole transaction back.
+        """
+        rows = list(detections)
+        if len(rows) > 5_000:
+            raise ValueError("detection batch cannot exceed 5000 rows")
+        if audit_event is None:
+            raise ValueError("detection batch requires an audit completion")
+        actor_tenant_id = getattr(audit_event, "actor_tenant_id", "")
+        actor_user_id = getattr(audit_event, "actor_user_id", "")
+        with self._connection() as conn:
+            tenant, user = self._require_staff(
+                conn, actor_tenant_id, actor_user_id,
+            )
+            for _, contact in rows:
+                if (
+                    _uuid(
+                        contact.verified_by_tenant_id,
+                        field="verifier tenant ID",
+                    ) != tenant
+                    or _uuid(
+                        contact.verified_by_user_id,
+                        field="verifier user ID",
+                    ) != user
+                ):
+                    raise ValueError(
+                        "detection verifier does not match the audited actor"
+                    )
+            results = [
+                self.persist_detection(
+                    item, contact, _connection=conn,
+                )
+                for item, contact in rows
+            ]
+            self._commit_audit(
+                conn,
+                audit_event,
+                actor_tenant_id=tenant,
+                actor_user_id=user,
+            )
+            return results
+
     # ----------------------------------------------------------- policies --
+    def policy_status(self, *, expected_policy_fingerprint: str) -> dict[str, Any]:
+        """Return configured-policy lifecycle metadata without patient data."""
+        exact = _fingerprint(
+            expected_policy_fingerprint, field="policy fingerprint",
+        )
+        with self._connection() as conn:
+            self._lock_active_policy(conn)
+            row = conn.execute(
+                """SELECT revision.policy_revision_id,
+                          revision.revision_no,
+                          revision.approval_mode,
+                          approval.approval_event_id,
+                          approval.event_type,
+                          approval.occurred_at,
+                          active.approval_event_id AS active_approval_event_id,
+                          active.activated_at
+                     FROM chase_policy_revisions AS revision
+                     LEFT JOIN LATERAL (
+                         SELECT event.approval_event_id, event.event_type,
+                                event.occurred_at
+                           FROM chase_policy_approval_events AS event
+                          WHERE event.practice_id = revision.practice_id
+                            AND event.policy_revision_id =
+                                revision.policy_revision_id
+                          ORDER BY event.occurred_at DESC,
+                                   event.approval_event_id DESC
+                          LIMIT 1
+                     ) AS approval ON true
+                     LEFT JOIN chase_active_policies AS active
+                       ON active.practice_id = revision.practice_id
+                      AND active.policy_revision_id =
+                          revision.policy_revision_id
+                      AND active.policy_fingerprint =
+                          revision.policy_fingerprint
+                    WHERE revision.practice_id = %s
+                      AND revision.policy_fingerprint = %s
+                    ORDER BY revision.revision_no DESC LIMIT 1""",
+                (self.practice_id, exact),
+            ).fetchone()
+        if row is None:
+            return {
+                "configuredPolicyFingerprint": exact,
+                "registered": False,
+                "active": False,
+            }
+        active_event = (
+            str(row["active_approval_event_id"])
+            if row["active_approval_event_id"] is not None else ""
+        )
+        return {
+            "configuredPolicyFingerprint": exact,
+            "registered": True,
+            "active": bool(active_event),
+            "policyRevisionId": str(row["policy_revision_id"]),
+            "revisionNo": row["revision_no"],
+            "approvalMode": row["approval_mode"],
+            "latestApprovalEventId": (
+                str(row["approval_event_id"])
+                if row["approval_event_id"] is not None else ""
+            ),
+            "latestApprovalEventType": row["event_type"] or "",
+            "latestApprovalAt": (
+                _iso(row["occurred_at"])
+                if row["occurred_at"] is not None else ""
+            ),
+            "activeApprovalEventId": active_event,
+            "activatedAt": (
+                _iso(row["activated_at"])
+                if row["activated_at"] is not None else ""
+            ),
+        }
+
     @staticmethod
     def _policy_row(row: dict[str, Any]) -> PolicyRevisionRecord:
         return PolicyRevisionRecord(
@@ -1367,6 +1529,87 @@ class PostgresChaseSchedulerRepository:
             return record
 
     # ------------------------------------------------------------ releases --
+    def message_release_target(
+        self,
+        *,
+        release_id: str,
+        chase_id: str,
+        expected_policy_fingerprint: str,
+        actor_tenant_id: str,
+        actor_user_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Resolve a replayed release first, otherwise the current cadence.
+
+        This is an API convenience read only. ``release_message`` repeats every
+        authorization and cadence check in its mutation transaction, so a
+        concurrent policy/contact/gate change fails closed rather than releasing
+        a different message.
+        """
+        release_uuid = _uuid(release_id, field="message release ID")
+        exact = _fingerprint(
+            expected_policy_fingerprint, field="policy fingerprint",
+        )
+        reason = _bounded(reason, field="message release reason", maximum=2000)
+        with self._connection() as conn:
+            tenant, user = self._require_admin(
+                conn, actor_tenant_id, actor_user_id,
+            )
+            # A client may retry after the worker consumed this release and
+            # advanced (or exhausted) the cadence. Resolve the immutable ID
+            # before consulting mutable scheduler state.
+            existing = conn.execute(
+                """SELECT chase_id, policy_revision_id, policy_fingerprint,
+                          step_ordinal, contact_snapshot_id,
+                          actor_tenant_id, actor_user_id, reason
+                     FROM chase_message_releases
+                    WHERE practice_id = %s AND release_id = %s::uuid""",
+                (self.practice_id, release_uuid),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["chase_id"] != chase_id
+                    or existing["policy_fingerprint"] != exact
+                    or str(existing["actor_tenant_id"]) != tenant
+                    or str(existing["actor_user_id"]) != user
+                    or existing["reason"] != reason
+                ):
+                    raise SchedulerConflict(
+                        "message release conflicts with existing exact evidence"
+                    )
+                return {
+                    "policy_revision_id": str(existing["policy_revision_id"]),
+                    "contact_snapshot_id": str(existing["contact_snapshot_id"]),
+                    "step_ordinal": existing["step_ordinal"],
+                }
+            self._lock_active_policy(conn)
+            row = conn.execute(
+                """SELECT cadence.policy_revision_id,
+                          cadence.contact_snapshot_id,
+                          cadence.next_step_ordinal
+                     FROM chase_cadence_states AS cadence
+                     JOIN chase_active_policies AS active
+                       ON active.practice_id = cadence.practice_id
+                      AND active.policy_revision_id = cadence.policy_revision_id
+                     JOIN chase_policy_revisions AS revision
+                       ON revision.practice_id = cadence.practice_id
+                      AND revision.policy_revision_id = cadence.policy_revision_id
+                      AND revision.policy_fingerprint = active.policy_fingerprint
+                    WHERE cadence.practice_id = %s AND cadence.chase_id = %s
+                      AND active.policy_fingerprint = %s
+                      AND revision.approval_mode = 'per_message'""",
+                (self.practice_id, chase_id, exact),
+            ).fetchone()
+        if row is None:
+            raise SchedulerConflict(
+                "message release does not match the active exact cadence"
+            )
+        return {
+            "policy_revision_id": str(row["policy_revision_id"]),
+            "contact_snapshot_id": str(row["contact_snapshot_id"]),
+            "step_ordinal": row["next_step_ordinal"],
+        }
+
     def release_direct_contract(
         self,
         *,
@@ -1524,6 +1767,37 @@ class PostgresChaseSchedulerRepository:
             )
             self._lock_active_policy(conn)
             self._lock_policy_action(conn, revision_id)
+            payload = _payload_hash({
+                "schema": "cosmaneura.chase-message-release.v1",
+                "chase_id": chase_id,
+                "policy_revision_id": revision_id,
+                "policy_fingerprint": exact,
+                "step_ordinal": step_ordinal,
+                "contact_snapshot_id": snapshot_id,
+                "actor_tenant_id": tenant,
+                "actor_user_id": user,
+                "reason": reason,
+            })
+            existing = conn.execute(
+                """SELECT release_id, chase_id, payload_hash
+                     FROM chase_message_releases
+                    WHERE practice_id = %s AND release_id = %s::uuid""",
+                (self.practice_id, release_uuid),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["chase_id"] != chase_id
+                    or existing["payload_hash"] != payload
+                ):
+                    raise SchedulerConflict(
+                        "message release conflicts with existing exact evidence"
+                    )
+                record = ReleaseRecord(release_uuid, chase_id, payload)
+                self._commit_audit(
+                    conn, audit_event,
+                    actor_tenant_id=tenant, actor_user_id=user,
+                )
+                return record
             released = self._database_now(conn)
             cadence = conn.execute(
                 """SELECT cadence.policy_revision_id,
@@ -1553,29 +1827,17 @@ class PostgresChaseSchedulerRepository:
                 raise SchedulerConflict(
                     "message release does not match the active exact cadence"
                 )
-            payload = _payload_hash({
-                "schema": "cosmaneura.chase-message-release.v1",
-                "chase_id": chase_id,
-                "policy_revision_id": revision_id,
-                "policy_fingerprint": exact,
-                "step_ordinal": step_ordinal,
-                "contact_snapshot_id": snapshot_id,
-                "actor_tenant_id": tenant,
-                "actor_user_id": user,
-                "reason": reason,
-            })
             existing = conn.execute(
                 """SELECT release_id, chase_id, payload_hash
                      FROM chase_message_releases
                     WHERE practice_id = %s
-                      AND (release_id = %s::uuid OR (
-                           chase_id = %s AND policy_revision_id = %s::uuid
-                           AND step_ordinal = %s
-                           AND contact_snapshot_id = %s::uuid
-                      ))""",
+                      AND chase_id = %s
+                      AND policy_revision_id = %s::uuid
+                      AND step_ordinal = %s
+                      AND contact_snapshot_id = %s::uuid""",
                 (
-                    self.practice_id, release_uuid, chase_id, revision_id,
-                    step_ordinal, snapshot_id,
+                    self.practice_id, chase_id, revision_id, step_ordinal,
+                    snapshot_id,
                 ),
             ).fetchone()
             if existing is not None:

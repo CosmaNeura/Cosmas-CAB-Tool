@@ -20,6 +20,15 @@ _ENCOUNTER_ROUTE = re.compile(
     r"^/api/encounters/(?P<id>[^/]+)(?P<suffix>/billing|/coder-view|/billing-tab)?$"
 )
 _CHASE_ROUTE = re.compile(r"^/api/chase/(?P<id>[^/]+)/action$")
+_CHASE_MESSAGE_RELEASE_ROUTE = re.compile(
+    r"^/api/chase/(?P<id>[^/]+)/release-message$"
+)
+_CHASE_POLICY_MUTATIONS = frozenset({
+    "/api/chase/policy/create",
+    "/api/chase/policy/approve",
+    "/api/chase/policy/activate",
+    "/api/chase/policy/revoke",
+})
 
 
 @dataclass(frozen=True)
@@ -124,6 +133,12 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "chase.view", path, ""
     if path == "/api/chase/detect":
         return "chase.decide", "/api/chase/detect", ""
+    if path == "/api/chase/policy/status":
+        return "chase.policy.view", "/api/chase/policy/status", ""
+    if path in _CHASE_POLICY_MUTATIONS:
+        return "chase.policy.decide", path, ""
+    if _CHASE_MESSAGE_RELEASE_ROUTE.fullmatch(path):
+        return "chase.decide", "/api/chase/{id}/release-message", ""
     chase = _CHASE_ROUTE.fullmatch(path)
     if chase:
         return "chase.decide", "/api/chase/{id}/action", ""

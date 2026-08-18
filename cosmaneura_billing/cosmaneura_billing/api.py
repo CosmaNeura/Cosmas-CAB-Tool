@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -28,7 +29,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -394,6 +395,32 @@ class ChaseActionRequest(StrictRequest):
     eligibility_status: str = Field(default="", max_length=128)
 
 
+class ChasePolicyCreateRequest(StrictRequest):
+    policy_revision_id: UUID
+
+
+class ChasePolicyApprovalRequest(StrictRequest):
+    approval_event_id: UUID
+    policy_revision_id: UUID
+    reason: str = Field(default="", max_length=2_000)
+
+
+class ChasePolicyActivationRequest(StrictRequest):
+    approval_event_id: UUID
+    policy_revision_id: UUID
+
+
+class ChasePolicyRevocationRequest(StrictRequest):
+    approval_event_id: UUID
+    policy_revision_id: UUID
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class ChaseMessageReleaseRequest(StrictRequest):
+    release_id: UUID
+    reason: str = Field(default="", max_length=2_000)
+
+
 class DecisionModel(StrictRequest):
     kind: Literal["EM", "ICD10", "PROCEDURE", "MODIFIER"]
     engine_code: Optional[str] = Field(default=None, max_length=32)
@@ -491,6 +518,9 @@ def readiness(request: Request):
         return JSONResponse(status_code=503, content={"status": "warming"})
     try:
         chase_context["store"].healthcheck()
+        scheduler = chase_context.get("scheduler")
+        if scheduler is not None:
+            scheduler.healthcheck()
         request.app.state.access_audit_store.healthcheck()
         request.app.state.encounter_store.healthcheck()
         request.app.state.feedback_store.healthcheck()
@@ -734,7 +764,7 @@ def _build_chase_context(settings: Settings) -> dict[str, Any]:
         upload_url=settings.upload_url,
         approval_mode=ApprovalMode(settings.chase_approval),
     )
-    return {
+    context = {
         # This object is safe to cache: PostgresChaseStore carries only immutable
         # connection configuration. Chase rows themselves live in PostgreSQL.
         "store": chase_store_from_settings(settings),
@@ -744,6 +774,29 @@ def _build_chase_context(settings: Settings) -> dict[str, Any]:
         "runner": SequenceRunner(policy=policy),
         "roster": DirectContractList(settings=settings),
     }
+    # The P4 repository is a second, deliberately narrower authority over the
+    # shared chase schema. Construct it only for the fully durable application
+    # topology so local/demo callers retain the legacy in-memory behavior.
+    if settings.state_store == "postgres" and settings.chase_store == "postgres":
+        from .chase.policy_fingerprint import (
+            DeliveryConfiguration, policy_fingerprint,
+        )
+        from .chase.scheduler_store import PostgresChaseSchedulerRepository
+
+        delivery = DeliveryConfiguration.from_settings(settings)
+        context.update({
+            "scheduler": PostgresChaseSchedulerRepository(
+                settings.chase_dsn, practice_id=settings.practice_id,
+            ),
+            "delivery": delivery,
+            "practice_timezone": settings.practice_timezone,
+            "policy_fingerprint": policy_fingerprint(
+                policy,
+                practice_timezone=settings.practice_timezone,
+                delivery=delivery,
+            ),
+        })
+    return context
 
 
 def _request_chase_context(request: Request) -> dict[str, Any]:
@@ -754,17 +807,199 @@ def _request_chase_context(request: Request) -> dict[str, Any]:
     return context
 
 
+def _scheduler_context(request: Request) -> tuple[dict[str, Any], Any]:
+    context = _request_chase_context(request)
+    scheduler = context.get("scheduler")
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503, detail="durable chase scheduling is unavailable",
+        )
+    return context, scheduler
+
+
+def _scheduler_audit_event(request: Request):
+    # P4 mutations and their allowed access completion are one PostgreSQL
+    # transaction. Never silently fall back to a later best-effort append.
+    if not request.app.state.atomic_chase_audit:
+        raise HTTPException(
+            status_code=503, detail="durable chase audit is unavailable",
+        )
+    return _completion_event(request)
+
+
+def _raise_scheduler_http(exc: Exception) -> None:
+    from .chase.scheduler_store import (
+        SchedulerAuthorizationError, SchedulerConflict, SchedulerNotFound,
+    )
+
+    if isinstance(exc, SchedulerAuthorizationError):
+        raise HTTPException(status_code=403, detail="access is not permitted") from exc
+    if isinstance(exc, SchedulerNotFound):
+        raise HTTPException(
+            status_code=404, detail="scheduler resource was not found",
+        ) from exc
+    if isinstance(exc, SchedulerConflict):
+        raise HTTPException(
+            status_code=409,
+            detail="scheduler action conflicts with the current state",
+        ) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise exc
+
+
+def _policy_record_json(record) -> dict[str, Any]:
+    return {
+        "policyRevisionId": record.policy_revision_id,
+        "policyName": record.policy_name,
+        "revisionNo": record.revision_no,
+        "policyFingerprint": record.policy_fingerprint,
+        "approvalMode": record.approval_mode,
+    }
+
+
+def _approval_record_json(record) -> dict[str, Any]:
+    return {
+        "approvalEventId": record.approval_event_id,
+        "policyRevisionId": record.policy_revision_id,
+        "policyFingerprint": record.policy_fingerprint,
+        "eventType": record.event_type,
+        "occurredAt": record.occurred_at.isoformat(),
+    }
+
+
 @router.get("/api/chase/worklist")
 def chase_worklist(request: Request, bucket: str = "", assignee: str = "",
                    needs_person: bool = False) -> dict[str, Any]:
     """The master list: one integrated view over missing, expired and eligibility."""
     _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
+    policy_view = ctx["policy"].to_dict()
+    scheduler = ctx.get("scheduler")
+    if scheduler is not None:
+        try:
+            durable = scheduler.policy_status(
+                expected_policy_fingerprint=ctx["policy_fingerprint"],
+            )
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+        # Minimal backend seam for the existing UI contract: durable approval
+        # replaces the legacy process-local flag, while the PHI-free lifecycle
+        # object remains available to future UI work without redesign here.
+        policy_view.update({
+            "approved": bool(durable.get("active")),
+            "approved_by": None,
+            "approved_at": durable.get("activatedAt") or None,
+            "durable_status": durable,
+        })
     return {
         **ctx["store"].to_dict(bucket=bucket, assignee=assignee,
                                needs_person=needs_person),
-        "policy": ctx["policy"].to_dict(),
+        "policy": policy_view,
     }
+
+
+@router.get("/api/chase/policy/status")
+def chase_policy_status(request: Request) -> dict[str, Any]:
+    """Return only the configured policy's PHI-free lifecycle metadata."""
+    _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        return scheduler.policy_status(
+            expected_policy_fingerprint=context["policy_fingerprint"],
+        )
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/create")
+def chase_policy_create(
+    request: Request, req: ChasePolicyCreateRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        record = scheduler.create_policy(
+            context["policy"], context["delivery"],
+            practice_timezone=context["practice_timezone"],
+            policy_revision_id=str(req.policy_revision_id),
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return _policy_record_json(record)
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/approve")
+def chase_policy_approve(
+    request: Request, req: ChasePolicyApprovalRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        record = scheduler.approve_policy(
+            context["policy"], context["delivery"],
+            practice_timezone=context["practice_timezone"],
+            approval_event_id=str(req.approval_event_id),
+            policy_revision_id=str(req.policy_revision_id),
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return _approval_record_json(record)
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/activate")
+def chase_policy_activate(
+    request: Request, req: ChasePolicyActivationRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        scheduler.activate_policy(
+            context["policy"], context["delivery"],
+            practice_timezone=context["practice_timezone"],
+            policy_revision_id=str(req.policy_revision_id),
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            approval_event_id=str(req.approval_event_id),
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return {"status": "active"}
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/revoke")
+def chase_policy_revoke(
+    request: Request, req: ChasePolicyRevocationRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        record = scheduler.revoke_policy(
+            approval_event_id=str(req.approval_event_id),
+            policy_revision_id=str(req.policy_revision_id),
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return _approval_record_json(record)
+    except Exception as exc:
+        _raise_scheduler_http(exc)
 
 
 @router.post("/api/chase/detect")
@@ -774,13 +1009,82 @@ def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
     Re-running is safe: an open row for the same patient and trigger is refreshed
     rather than duplicated, so daily detection does not inflate the backlog.
     """
-    from .chase import CoverageSnapshot, detect_all
+    from .chase import Channel, CoverageSnapshot, detect, detect_all
 
     _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
+    if (
+        ctx.get("scheduler") is not None
+        and any(snapshot.get("sms_consent") is True for snapshot in req.snapshots)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "posted detection cannot grant SMS consent; consent must come "
+                "from the trusted opt-in feed"
+            ),
+        )
     snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
-    found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
     store = ctx["store"]
+    scheduler = ctx.get("scheduler")
+    if scheduler is not None:
+        from .chase.scheduler_store import (
+            ContactRouteInput, ContactSnapshotInput,
+        )
+
+        principal = _request_principal(request)
+        detected_at = datetime.now(timezone.utc)
+        entries = []
+        for snapshot in snapshots:
+            item = detect(
+                snapshot,
+                today=req.today,
+                now=lambda: detected_at.isoformat(),
+                roster=ctx["roster"],
+            )
+            if item is None:
+                continue
+            routes = []
+            if snapshot.email:
+                routes.append(ContactRouteInput(
+                    Channel.EMAIL, snapshot.email, "not_required",
+                ))
+            if snapshot.portal_enrolled:
+                routes.append(ContactRouteInput(
+                    Channel.PORTAL, snapshot.patient_ref, "not_required",
+                ))
+            if snapshot.phone:
+                # A posted coverage snapshot is not an opt-in authority. Keep
+                # SMS fail-closed while preserving the manual staff-call route.
+                routes.extend((
+                    ContactRouteInput(Channel.SMS, snapshot.phone, "unknown"),
+                    ContactRouteInput(
+                        Channel.PHONE, snapshot.phone, "not_required",
+                    ),
+                ))
+            contact = ContactSnapshotInput(
+                contact_snapshot_id=str(uuid4()),
+                source_system="api.coverage_snapshot",
+                source_version=req.today,
+                observed_at=detected_at,
+                verified_at=detected_at,
+                verification_method="staff",
+                routes=tuple(routes),
+                verified_by_tenant_id=principal.tenant_id,
+                verified_by_user_id=principal.user_id,
+            )
+            entries.append((item, contact))
+        entries.sort(key=lambda entry: (-entry[0].priority, entry[0].patient_ref))
+        try:
+            results = scheduler.persist_detection_batch(
+                entries, audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+        return {"checked": len(snapshots), "detected": len(results)}
+
+    found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
     if request.app.state.atomic_chase_audit:
         worklist = store.extend_and_snapshot(
             found, audit_event=_completion_event(request),
@@ -805,6 +1109,47 @@ def chase_metrics(request: Request,
         baseline_claims_held_monthly=baseline_claims_held_monthly)
 
 
+@router.post("/api/chase/{chase_id}/release-message")
+def chase_release_message(
+    request: Request,
+    chase_id: str,
+    req: ChaseMessageReleaseRequest,
+) -> dict[str, Any]:
+    """Admin release of the current exact per-message cadence rung."""
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    store = context["store"]
+    if store.get(chase_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    if hasattr(store, "audit_resource_id"):
+        _set_audit_resource(request, store.audit_resource_id(chase_id))
+    try:
+        target = scheduler.message_release_target(
+            release_id=str(req.release_id),
+            chase_id=chase_id,
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+        )
+        record = scheduler.release_message(
+            release_id=str(req.release_id),
+            chase_id=chase_id,
+            policy_revision_id=target["policy_revision_id"],
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            step_ordinal=target["step_ordinal"],
+            contact_snapshot_id=target["contact_snapshot_id"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return {"status": "released", "releaseId": record.release_id}
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
 @router.post("/api/chase/{chase_id}/action")
 def chase_action(request: Request, chase_id: str,
                  req: ChaseActionRequest) -> dict[str, Any]:
@@ -825,6 +1170,62 @@ def chase_action(request: Request, chase_id: str,
         raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
     if hasattr(store, "audit_resource_id"):
         _set_audit_resource(request, store.audit_resource_id(chase_id))
+    scheduler = ctx.get("scheduler")
+    if scheduler is not None and action == "release":
+        principal = _require_roles(request, "Admin")
+        gate_fingerprint = str(
+            (existing.direct_contract or {}).get("gate_fingerprint") or ""
+        )
+        try:
+            record = scheduler.release_direct_contract(
+                review_release_id=str(req.action_id),
+                chase_id=chase_id,
+                gate_fingerprint=gate_fingerprint,
+                actor_tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                reason=req.reason,
+                audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+            return {
+                "chaseId": chase_id,
+                "status": "released",
+                "releaseId": record.release_id,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+    if scheduler is not None and action == "log_attempt":
+        if req.channel not in {None, "phone"}:
+            raise HTTPException(
+                status_code=422,
+                detail="scheduler staff tasks can only log a manual phone call",
+            )
+        try:
+            result = scheduler.complete_staff_task(
+                ctx["policy"], ctx["delivery"],
+                practice_timezone=ctx["practice_timezone"],
+                chase_id=chase_id,
+                action_id=str(req.action_id),
+                actor_tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                outcome=req.outcome or "reached",
+                minutes_spent=req.minutes_spent,
+                note=req.note,
+                audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+            return {
+                "chaseId": result.chase_id,
+                "status": "completed",
+                "attemptRecorded": result.attempt_recorded,
+                "cadenceAdvanced": result.cadence_advanced,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_scheduler_http(exc)
     assignee = req.assignee or actor
     membership_store = request.app.state.membership_store
     atomic_assignee_check = bool(
@@ -931,6 +1332,9 @@ async def _lifespan(application: FastAPI):
         # Force one database round trip so readiness also proves the durable
         # chase schema exists; a configured-but-unreachable store is not ready.
         application.state.chase_context["store"].healthcheck()
+        scheduler = application.state.chase_context.get("scheduler")
+        if scheduler is not None:
+            scheduler.healthcheck()
         application.state.access_audit_store.healthcheck()
         application.state.encounter_store.healthcheck()
         application.state.feedback_store.healthcheck()
