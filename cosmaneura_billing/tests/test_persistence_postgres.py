@@ -410,10 +410,28 @@ def test_runtime_role_is_bound_to_one_practice_and_cannot_erase_history(
                     has_table_privilege(current_user, 'chase_attempts', 'UPDATE'),
                     has_table_privilege(current_user, 'chase_attempts', 'DELETE'),
                     has_table_privilege(
+                        current_user, 'access_audit_attempts', 'SELECT'
+                    ),
+                    has_any_column_privilege(
+                        current_user, 'access_audit_attempts', 'SELECT'
+                    ),
+                    has_table_privilege(
                         current_user, 'access_audit_attempts', 'UPDATE'
                     ),
                     has_table_privilege(
                         current_user, 'access_audit_attempts', 'DELETE'
+                    ),
+                    has_table_privilege(
+                        current_user, 'access_audit_completions', 'SELECT'
+                    ),
+                    has_any_column_privilege(
+                        current_user, 'access_audit_completions', 'SELECT'
+                    ),
+                    has_table_privilege(
+                        current_user, 'access_audit_completions', 'UPDATE'
+                    ),
+                    has_table_privilege(
+                        current_user, 'access_audit_completions', 'DELETE'
                     ),
                     has_table_privilege(
                         current_user, 'practice_memberships', 'UPDATE'
@@ -421,7 +439,7 @@ def test_runtime_role_is_bound_to_one_practice_and_cannot_erase_history(
                     has_table_privilege(current_user, 'users', 'UPDATE'
                     )"""
             ).fetchone()
-            assert privileges == (False, False, False, False, False, False, False)
+            assert privileges == (False,) * 13
 
         runtime_context = PostgresContext(
             make_conninfo(TEST_DSN, user=role, password=password),
@@ -433,6 +451,39 @@ def test_runtime_role_is_bound_to_one_practice_and_cannot_erase_history(
         assert PostgresMembershipStore(
             runtime_context, tenant_id=pilot_scope.tenant_a,
         ).validate_assignee(pilot_scope.admin_a) == pilot_scope.admin_a
+        denied_event = AccessAuditEvent(
+            event_id=str(uuid4()),
+            occurred_at="2026-08-18T12:00:00+00:00",
+            practice_id=pilot_scope.practice_a,
+            actor_tenant_id="",
+            actor_user_id="",
+            actor_roles=(),
+            action="api.access",
+            resource_id="",
+            route="unmatched_api_route",
+            method="GET",
+            status=401,
+            outcome="denied",
+            source_ip="127.0.0.1",
+        )
+        PostgresAccessAuditStore(runtime_context).append(denied_event)
+        with pilot_scope.context_a().connection() as conn:
+            audited = conn.execute(
+                """SELECT
+                       (SELECT count(*) FROM access_audit_attempts
+                         WHERE practice_id = %s AND event_id = %s::uuid)
+                           AS attempt_count,
+                       (SELECT count(*) FROM access_audit_completions
+                         WHERE practice_id = %s AND event_id = %s::uuid)
+                           AS completion_count""",
+                (
+                    pilot_scope.practice_a,
+                    denied_event.event_id,
+                    pilot_scope.practice_a,
+                    denied_event.event_id,
+                ),
+            ).fetchone()
+        assert tuple(audited.values()) == (1, 1)
 
         with pytest.raises(RuntimeError, match="bound to another practice"):
             with psycopg.connect(TEST_DSN) as conn:

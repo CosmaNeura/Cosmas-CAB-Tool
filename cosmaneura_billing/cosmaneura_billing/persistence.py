@@ -360,6 +360,9 @@ class PostgresAccessAuditStore:
 
     @staticmethod
     def _insert_attempt(conn, event: AccessAuditEvent) -> None:
+        # An explicit conflict target requires SELECT on its columns. Omit it
+        # so the runtime role remains append-only; the primary key is the only
+        # unique constraint on this table.
         conn.execute(
             """INSERT INTO access_audit_attempts (
                    practice_id, event_id, occurred_at, actor_tenant_id,
@@ -367,7 +370,7 @@ class PostgresAccessAuditStore:
                ) VALUES (
                    %s, %s::uuid, %s::timestamptz, NULLIF(%s, '')::uuid,
                    NULLIF(%s, '')::uuid, %s, %s, %s, %s, %s
-               ) ON CONFLICT (practice_id, event_id) DO NOTHING""",
+               ) ON CONFLICT DO NOTHING""",
             (
                 event.practice_id, event.event_id, event.occurred_at,
                 event.actor_tenant_id, event.actor_user_id,
