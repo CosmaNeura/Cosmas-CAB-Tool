@@ -123,7 +123,7 @@ class Step:
     """One rung of the cadence."""
     channel: Channel
     template_id: str
-    # Days after detection (or after the previous step) this step becomes due.
+    # Absolute local calendar days after detection when this step becomes due.
     day_offset: int
 
 

@@ -43,6 +43,35 @@ class ScheduleAction(str, Enum):
     STAFF_TASK = "staff_task"
 
 
+class ScheduleReason(str, Enum):
+    """Stable machine reasons; persistence must never branch on prose."""
+
+    ITEM_TERMINAL = "item_terminal"
+    AWAITING_VERIFICATION = "awaiting_verification"
+    HUMAN_REVIEW_REQUIRED = "human_review_required"
+    STAFF_TASK_PENDING = "staff_task_pending"
+    DURABLE_EVIDENCE_MISSING = "durable_evidence_missing"
+    POLICY_INACTIVE = "policy_inactive"
+    EVIDENCE_MALFORMED = "evidence_malformed"
+    POLICY_FINGERPRINT_MISMATCH = "policy_fingerprint_mismatch"
+    SCHEDULER_DISABLED = "scheduler_disabled"
+    STEP_IDENTITY_MISMATCH = "step_identity_mismatch"
+    GATE_EVIDENCE_CHANGED = "gate_evidence_changed"
+    GATE_RELEASE_INVALID = "gate_release_invalid"
+    GATE_NOT_CLEARED = "gate_not_cleared"
+    MESSAGE_RELEASE_MISSING = "message_release_missing"
+    MESSAGE_RELEASE_UNEXPECTED = "message_release_unexpected"
+    CONTACT_TIMESTAMP_FUTURE = "contact_timestamp_future"
+    CONTACT_SNAPSHOT_STALE = "contact_snapshot_stale"
+    NOT_DUE = "not_due"
+    STAFF_TASK_READY = "staff_task_ready"
+    MESSAGING_DISABLED = "messaging_disabled"
+    CHANNEL_UNAVAILABLE = "channel_unavailable"
+    CONSENT_REQUIRED = "consent_required"
+    CHANNEL_NOT_AUTOMATED = "channel_not_automated"
+    TRANSPORT_READY = "transport_ready"
+
+
 @dataclass(frozen=True)
 class ScheduleDecision:
     """A side-effect-free scheduling decision.
@@ -53,6 +82,7 @@ class ScheduleDecision:
     """
 
     action: ScheduleAction
+    reason_code: ScheduleReason
     reason: str
     cadence_due_at: Optional[datetime] = None
     next_permitted_at: Optional[datetime] = None
@@ -64,6 +94,22 @@ class ScheduleDecision:
     @property
     def staff_task_due(self) -> bool:
         return self.action is ScheduleAction.STAFF_TASK
+
+    @property
+    def skippable_without_touch(self) -> bool:
+        """True only for a cadence rung that cannot use a deployed route.
+
+        Approval, direct-contract, contact freshness, and kill-switch failures
+        are intentionally absent. A worker may move past an unavailable channel
+        without counting a touch, but it may never skip a safety gate.
+        """
+        return (
+            self.action is ScheduleAction.BLOCKED
+            and self.reason_code in {
+                ScheduleReason.CHANNEL_UNAVAILABLE,
+                ScheduleReason.CONSENT_REQUIRED,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -298,29 +344,33 @@ def evaluate_step(
 
     if item.state in TERMINAL:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, f"item is terminal ({item.state.value})"
+            ScheduleAction.BLOCKED, ScheduleReason.ITEM_TERMINAL,
+            f"item is terminal ({item.state.value})",
         )
     if item.state is State.SUBMITTED:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.AWAITING_VERIFICATION,
             "patient submission is awaiting verification",
         )
     if item.state is State.NEEDS_REVIEW:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "item requires human review"
+            ScheduleAction.BLOCKED, ScheduleReason.HUMAN_REVIEW_REQUIRED,
+            "item requires human review",
         )
     if item.pending_task is not None:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "item already has a pending staff task"
+            ScheduleAction.BLOCKED, ScheduleReason.STAFF_TASK_PENDING,
+            "item already has a pending staff task",
         )
     if authorization is None:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.DURABLE_EVIDENCE_MISSING,
             "durable policy, contact, and gate evidence is absent",
         )
     if authorization.active is not True:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "policy version is not active"
+            ScheduleAction.BLOCKED, ScheduleReason.POLICY_INACTIVE,
+            "policy version is not active",
         )
     if (
         not _uuid(authorization.policy_revision_id)
@@ -331,7 +381,7 @@ def evaluate_step(
         or not _SHA256.fullmatch(authorization.reserved_gate_fingerprint)
     ):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.EVIDENCE_MALFORMED,
             "durable scheduling evidence is malformed",
         )
 
@@ -342,11 +392,13 @@ def evaluate_step(
     if executable_fingerprint != authorization.approved_policy_fingerprint:
         return ScheduleDecision(
             ScheduleAction.BLOCKED,
+            ScheduleReason.POLICY_FINGERPRINT_MISMATCH,
             "current executable policy does not match the exact approval",
         )
     if delivery.scheduler_enabled is not True:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "durable chase scheduler is disabled",
+            ScheduleAction.BLOCKED, ScheduleReason.SCHEDULER_DISABLED,
+            "durable chase scheduler is disabled",
         )
     if (
         type(authorization.policy_step_ordinal) is not int
@@ -355,38 +407,43 @@ def evaluate_step(
         or policy.steps[authorization.policy_step_ordinal] != step
     ):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "policy step is outside the approved cadence",
+            ScheduleAction.BLOCKED, ScheduleReason.STEP_IDENTITY_MISMATCH,
+            "policy step is outside the approved cadence",
         )
     if (
         authorization.current_gate_fingerprint
         != authorization.reserved_gate_fingerprint
     ):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "direct-contract gate evidence changed",
+            ScheduleAction.BLOCKED, ScheduleReason.GATE_EVIDENCE_CHANGED,
+            "direct-contract gate evidence changed",
         )
     if authorization.gate_disposition == "clear":
         if authorization.review_release_id:
             return ScheduleDecision(
-                ScheduleAction.BLOCKED, "clear gate has an invalid review release",
+                ScheduleAction.BLOCKED, ScheduleReason.GATE_RELEASE_INVALID,
+                "clear gate has an invalid review release",
             )
     elif authorization.gate_disposition == "released":
         if not _uuid(authorization.review_release_id):
             return ScheduleDecision(
-                ScheduleAction.BLOCKED, "blocked gate has no exact review release",
+                ScheduleAction.BLOCKED, ScheduleReason.GATE_RELEASE_INVALID,
+                "blocked gate has no exact review release",
             )
     else:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "direct-contract gate is not cleared",
+            ScheduleAction.BLOCKED, ScheduleReason.GATE_NOT_CLEARED,
+            "direct-contract gate is not cleared",
         )
     if policy.approval_mode is ApprovalMode.PER_MESSAGE:
         if not _uuid(authorization.message_release_id):
             return ScheduleDecision(
-                ScheduleAction.BLOCKED,
+                ScheduleAction.BLOCKED, ScheduleReason.MESSAGE_RELEASE_MISSING,
                 "per-message policy step has no durable exact release",
             )
     elif authorization.message_release_id:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.MESSAGE_RELEASE_UNEXPECTED,
             "per-policy cadence has an unexpected message release",
         )
 
@@ -396,13 +453,15 @@ def evaluate_step(
     ).astimezone(timezone.utc)
     if verified_at > current:
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "contact snapshot timestamp is in the future",
+            ScheduleAction.BLOCKED, ScheduleReason.CONTACT_TIMESTAMP_FUTURE,
+            "contact snapshot timestamp is in the future",
         )
     if current - verified_at > timedelta(
         hours=delivery.contact_snapshot_max_age_hours,
     ):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED, "verified contact snapshot is stale",
+            ScheduleAction.BLOCKED, ScheduleReason.CONTACT_SNAPSHOT_STALE,
+            "verified contact snapshot is stale",
         )
     cadence_due = cadence_due_at(
         item.detected_at,
@@ -418,7 +477,7 @@ def evaluate_step(
     )
     if current < permitted:
         return ScheduleDecision(
-            ScheduleAction.WAIT,
+            ScheduleAction.WAIT, ScheduleReason.NOT_DUE,
             "step is not due outside quiet hours",
             cadence_due_at=cadence_due,
             next_permitted_at=permitted,
@@ -426,41 +485,42 @@ def evaluate_step(
 
     if step.channel is Channel.PHONE:
         return ScheduleDecision(
-            ScheduleAction.STAFF_TASK,
+            ScheduleAction.STAFF_TASK, ScheduleReason.STAFF_TASK_READY,
             "phone contact is a staff task and never an automated transport",
-            cadence_due_at=cadence_due,
-            next_permitted_at=permitted,
-        )
-    if delivery.operational_enabled is not True:
-        return ScheduleDecision(
-            ScheduleAction.BLOCKED, "patient messaging operational latch is off",
             cadence_due_at=cadence_due,
             next_permitted_at=permitted,
         )
     if step.channel not in frozenset(delivery.enabled_channels):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.CHANNEL_UNAVAILABLE,
             f"{step.channel.value} has no enabled production transport",
+            cadence_due_at=cadence_due,
+            next_permitted_at=permitted,
+        )
+    if delivery.operational_enabled is not True:
+        return ScheduleDecision(
+            ScheduleAction.BLOCKED, ScheduleReason.MESSAGING_DISABLED,
+            "patient messaging operational latch is off",
             cadence_due_at=cadence_due,
             next_permitted_at=permitted,
         )
     if (step.channel is Channel.SMS
             and authoritative_sms_consent is not True):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.CONSENT_REQUIRED,
             "SMS has no authoritative explicit consent record",
             cadence_due_at=cadence_due,
             next_permitted_at=permitted,
         )
     if not policy.is_system_send(step.channel):
         return ScheduleDecision(
-            ScheduleAction.BLOCKED,
+            ScheduleAction.BLOCKED, ScheduleReason.CHANNEL_NOT_AUTOMATED,
             f"{step.channel.value} is not an automated transport channel",
             cadence_due_at=cadence_due,
             next_permitted_at=permitted,
         )
     return ScheduleDecision(
-        ScheduleAction.TRANSPORT,
+        ScheduleAction.TRANSPORT, ScheduleReason.TRANSPORT_READY,
         f"{step.channel.value} step is due",
         cadence_due_at=cadence_due,
         next_permitted_at=permitted,

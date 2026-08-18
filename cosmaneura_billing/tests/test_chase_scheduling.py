@@ -10,6 +10,7 @@ from cosmaneura_billing.chase.scheduling import (
     DurableScheduleEvidence,
     ScheduleAction,
     ScheduleConfigurationError,
+    ScheduleReason,
     cadence_due_at,
     evaluate_step,
     next_permitted_due_at,
@@ -239,8 +240,10 @@ def test_exact_due_boundary_is_eligible_but_one_microsecond_before_is_not():
     )
 
     assert waiting.action is ScheduleAction.WAIT
+    assert waiting.reason_code is ScheduleReason.NOT_DUE
     assert waiting.next_permitted_at == _utc(due)
     assert exact.action is ScheduleAction.TRANSPORT
+    assert exact.reason_code is ScheduleReason.TRANSPORT_READY
     assert exact.automated_dispatch_eligible
 
 
@@ -284,6 +287,7 @@ def test_pending_phone_task_blocks_every_further_automated_step():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.STAFF_TASK_PENDING
     assert "pending staff task" in decision.reason
 
 
@@ -312,7 +316,9 @@ def test_absent_and_inactive_durable_policy_evidence_never_dispatches():
     )
 
     assert no_approval.action is ScheduleAction.BLOCKED
+    assert no_approval.reason_code is ScheduleReason.DURABLE_EVIDENCE_MISSING
     assert retired.action is ScheduleAction.BLOCKED
+    assert retired.reason_code is ScheduleReason.POLICY_INACTIVE
 
 
 def test_per_message_mode_requires_a_durable_exact_release():
@@ -356,6 +362,7 @@ def test_phone_step_is_a_staff_task_and_never_transport():
     )
 
     assert decision.action is ScheduleAction.STAFF_TASK
+    assert decision.reason_code is ScheduleReason.STAFF_TASK_READY
     assert decision.staff_task_due
     assert not decision.automated_dispatch_eligible
 
@@ -376,6 +383,7 @@ def test_phone_staff_task_survives_automated_messaging_kill_switch():
     )
 
     assert decision.action is ScheduleAction.STAFF_TASK
+    assert decision.reason_code is ScheduleReason.STAFF_TASK_READY
     assert decision.staff_task_due
     assert not decision.automated_dispatch_eligible
 
@@ -401,6 +409,8 @@ def test_sms_is_fail_closed_without_an_enabled_adapter_and_explicit_consent():
     )
     assert absent.action is ScheduleAction.BLOCKED
     assert recorded.action is ScheduleAction.BLOCKED
+    assert recorded.reason_code is ScheduleReason.CHANNEL_UNAVAILABLE
+    assert recorded.skippable_without_touch
     assert "no enabled production transport" in recorded.reason
 
 
@@ -432,6 +442,7 @@ def test_portal_is_blocked_without_a_deployed_portal_adapter():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.CHANNEL_UNAVAILABLE
     assert "no enabled production transport" in decision.reason
 
 
@@ -447,6 +458,7 @@ def test_email_may_proceed_without_an_opt_in_feed():
     )
 
     assert decision.action is ScheduleAction.TRANSPORT
+    assert decision.reason_code is ScheduleReason.TRANSPORT_READY
     assert decision.automated_dispatch_eligible
 
 
@@ -465,6 +477,7 @@ def test_policy_or_transport_drift_invalidates_durable_approval():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.POLICY_FINGERPRINT_MISMATCH
     assert "exact approval" in decision.reason
 
 
@@ -486,7 +499,31 @@ def test_preconfigured_transport_cannot_bypass_operational_kill_switches():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.MESSAGING_DISABLED
+    assert not decision.skippable_without_touch
     assert "operational latch is off" in decision.reason
+
+
+def test_record_only_skips_unavailable_system_channels_without_counting_touch():
+    policy = _policy(steps=(Step(Channel.EMAIL, "email.first", 0),))
+    record_only = DeliveryConfiguration(scheduler_enabled=True)
+    evidence = replace(
+        _authorization(policy, policy.steps[0]),
+        approved_policy_fingerprint=policy_fingerprint(
+            policy, practice_timezone=EASTERN, delivery=record_only,
+        ),
+    )
+
+    decision = _evaluate(
+        _item(), policy, policy.steps[0],
+        now="2026-08-17T13:15:00+00:00",
+        authorization=evidence,
+        delivery=record_only,
+    )
+
+    assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.CHANNEL_UNAVAILABLE
+    assert decision.skippable_without_touch
 
 
 def test_changed_direct_contract_gate_invalidates_release_evidence():
@@ -503,6 +540,8 @@ def test_changed_direct_contract_gate_invalidates_release_evidence():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.GATE_EVIDENCE_CHANGED
+    assert not decision.skippable_without_touch
     assert "gate evidence changed" in decision.reason
 
 
@@ -515,6 +554,7 @@ def test_stale_verified_contact_snapshot_never_dispatches():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.CONTACT_SNAPSHOT_STALE
     assert "contact snapshot is stale" in decision.reason
 
 
@@ -528,4 +568,5 @@ def test_step_beyond_approved_max_touches_never_dispatches():
     )
 
     assert decision.action is ScheduleAction.BLOCKED
+    assert decision.reason_code is ScheduleReason.STEP_IDENTITY_MISMATCH
     assert "outside the approved cadence" in decision.reason
