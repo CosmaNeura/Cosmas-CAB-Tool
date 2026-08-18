@@ -17,7 +17,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY cosmaneura_billing/ ./cosmaneura_billing/
-RUN python -m pip wheel --wheel-dir /wheels ".[api,postgres]"
+RUN python -m pip wheel --wheel-dir /wheels ".[api,postgres,messaging]"
 
 
 FROM python:3.12-slim AS runtime
@@ -40,7 +40,8 @@ RUN groupadd --system --gid 10001 cosmaneura \
 
 COPY --from=python-builder /wheels /wheels
 RUN python -m pip install --no-index --find-links=/wheels \
-        "cosmaneura-billing[api,postgres]" \
+        "cosmaneura-billing[api,postgres,messaging]" \
+    && python -I -c "from azure.communication.email import EmailClient" \
     && python -I -c "from cosmaneura_billing.orchestrator import BillingOrchestrator; o=BillingOrchestrator(); assert o.ncci.loaded and o.coverage.loaded" \
     && rm -rf /wheels
 

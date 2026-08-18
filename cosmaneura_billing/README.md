@@ -65,7 +65,10 @@ PostgreSQL 16/pgvector volume, and `/api/ready` stays unavailable until the
 engine, regulatory datasets, database, encounters, explicit memberships,
 feedback, chase schema, and access-audit store are ready. The migration
 container uses the database-owner credential; the API receives only a separate
-least-privilege runtime credential. The default chase transport remains inert.
+least-privilege runtime credential. The scheduled chase worker has a third,
+distinct practice-bound database credential; its database and messaging secrets
+must never be injected into the API container. The default chase transport
+remains inert.
 
 Azure Bicep templates and the reviewed deployment sequence are in
 `../infra/README.md`. They create a VNet-injected Container Apps environment,
@@ -167,8 +170,9 @@ CPT content stays under your license, outside the repository.
 The billers' #1 stated pain: 300–500 claims a month held for missing insurance
 information. The validated finding is that the bottleneck is **patient
 submission, not OCR** — card capture already works. What was missing is the
-system that gets the card *to* capture: a master worklist, worked across email,
-SMS, portal and phone, by the staff whose whole job this is (not the coders).
+system that gets the card *to* capture: a master worklist, worked across ACS
+email when enabled and manual phone tasks, by the staff whose whole job this is
+(not the coders). SMS and portal delivery are not implemented in this slice.
 
 ```bash
 python demo_chase.py    # end-to-end, synthetic patients, nothing leaves the building
@@ -207,17 +211,54 @@ security and a runtime-role-to-practice binding. Changing the session practice
 setting cannot expose another practice. The default transport remains inert;
 durable storage alone does not authorize patient contact.
 
+### Durable scheduler and one-shot worker (P4)
+
+Migrations `004`–`006` add immutable policy revisions and approval events,
+contact snapshots, exact human releases, durable cadence/outbox state, delivery
+events, and narrow database functions for accepted-delivery logging and safe
+revocation cleanup. Policy approval, activation, revocation, direct-contract
+review release, and per-message release are Admin-only actions. Every release
+is bound to the exact policy, cadence step, contact snapshot, or gate evidence
+it reviewed; changed evidence requires a new human decision. Revoking a policy
+cancels only queued work that has not reached the provider and does not turn an
+in-flight or ambiguous submission into a retry.
+
+Run one bounded scheduler pass as the dedicated worker, never with the API's
+`DATABASE_URL`:
+
+```bash
+python -m cosmaneura_billing.chase.worker --once
+```
+
+The worker has no daemon mode or internal retry loop. An expired or otherwise
+uncertain provider submission becomes `ambiguous`; any unresolved ambiguity
+causes the invocation to stop with a non-zero result before scheduling or
+sending new outreach. The default `record_only` transport never contacts a
+patient, but it still advances the configured cadence far enough to create a
+durable manual phone task. A staff member makes that call and records the time;
+there is no outbound voice implementation. SMS is not implemented in this
+slice.
+
+ACS email is available only when the durable scheduler, the patient-messaging
+enable latch, and the separate operational-activation latch are all on, the
+transport is `acs_email`, and the exact configuration has human approval.
+Staging and production also require a chase-gate HMAC key of at least 32 bytes,
+including for `record_only`, so gate evidence cannot silently drift. Keep both
+messaging latches off and use only synthetic/de-identified recipients: real
+patient messaging remains blocked until the deployment layer, BAA, P5
+logging/redaction, and deployment acceptance are complete.
+
 One list, three views — missing, expired, eligibility — matching the buckets
 staff already use. Priority comes from appointment proximity: today's visit
 outranks next month's, and a visit that already happened outranks both, because
 the claim is already being held.
 
-**Automated, with a human behind it.** A named person approves the *policy*
+**Automated, with a human behind it.** A named Admin approves the exact *policy*
 once; the system then works the list unattended and escalates what it cannot
-handle (`COSMANEURA_CHASE_APPROVAL=per_message` switches to approving every
-touch). Cadence, channel order, templates, quiet hours and max touches are all
-configuration — they are the open questions the staff interview will settle, so
-they are values, not code.
+handle (`COSMANEURA_CHASE_APPROVAL=per_message` requires an exact release for
+every touch). Cadence, channel order, templates, quiet hours and max touches are
+all configuration — they are the open questions the staff interview will
+settle, so they are values, not code.
 
 What the code guarantees, and tests:
 
@@ -227,11 +268,12 @@ What the code guarantees, and tests:
 - No outbound message body contains insurance data. There is no template
   placeholder that could carry a member id, and the check runs at configuration
   time as well as send time.
-- SMS and phone require recorded consent, re-checked at every touch, so consent
-  withdrawn between touches stops the next message.
-- **Phone is a staff task, never an automated call.** The system schedules it,
-  a person makes it and logs the outcome and minutes into the same contact
-  history — which is what makes phone work visible in the metrics.
+- The current automated transport is ACS email. SMS is not implemented; if it
+  is added later it remains fail-closed without an authoritative opt-in feed.
+- **Phone is a route- and consent-checked staff task, never an automated call.**
+  The system schedules it, a person makes it and logs the outcome and minutes
+  into the same contact history — which is what makes phone work visible in the
+  metrics. There is no outbound voice transport.
 - A row closes only on a **verified** card plus its write, never on a patient's
   submission.
 
