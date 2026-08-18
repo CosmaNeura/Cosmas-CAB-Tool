@@ -39,6 +39,7 @@ def test_defaults_preserve_local_runtime_behavior():
     assert settings.chase_scheduler_enabled is False
     assert settings.chase_transport == "record_only"
     assert settings.acs_email_connection_string == ""
+    assert settings.acs_email_endpoint == ""
     assert settings.acs_email_sender_address == ""
     assert settings.acs_email_reply_to_address == ""
     assert settings.practice_timezone == "UTC"
@@ -79,8 +80,8 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
         "COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED": "true",
         "COSMANEURA_CHASE_SCHEDULER_ENABLED": "true",
         "COSMANEURA_CHASE_TRANSPORT": "ACS_EMAIL",
-        "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": (
-            "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
+        "COSMANEURA_ACS_EMAIL_ENDPOINT": (
+            "https://pilot.communication.azure.com"
         ),
         "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "DoNotReply@pilot.example",
         "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "billing@pilot.example",
@@ -118,6 +119,8 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
     assert settings.patient_messaging_operationally_activated is True
     assert settings.chase_scheduler_enabled is True
     assert settings.chase_transport == "acs_email"
+    assert settings.acs_email_connection_string == ""
+    assert settings.acs_email_endpoint == "https://pilot.communication.azure.com"
     assert settings.practice_timezone == "America/New_York"
     assert settings.contact_snapshot_max_age_hours == 48
     assert settings.chase_worker_batch_size == 40
@@ -201,7 +204,12 @@ def test_repr_redacts_every_credential_and_database_dsn():
         "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "reply-secret@pilot.example",
         "COSMANEURA_CHASE_GATE_HMAC_KEY": "gate-secret-that-is-at-least-32-bytes",
     }
-    settings = Settings.from_env(secrets)
+    settings = Settings.from_env({
+        **secrets,
+        "COSMANEURA_ACS_EMAIL_ENDPOINT": (
+            "https://pilot.communication.azure.com"
+        ),
+    })
 
     rendered = repr(settings)
     credentials_rendered = repr(settings.ama_credentials)
@@ -250,7 +258,7 @@ def test_deployed_environments_require_postgres_and_runtime_credentials():
         )
 
 
-def test_acs_email_settings_are_all_or_none_without_echoing_secrets():
+def test_acs_email_policy_metadata_is_all_or_none_without_echoing_secrets():
     secret = (
         "endpoint=https://pilot.communication.azure.com;"
         "accesskey=connection-secret="
@@ -258,6 +266,9 @@ def test_acs_email_settings_are_all_or_none_without_echoing_secrets():
     with pytest.raises(SettingsError, match="configured together") as exc_info:
         Settings.from_env({
             "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": secret,
+            "COSMANEURA_ACS_EMAIL_ENDPOINT": (
+                "https://pilot.communication.azure.com"
+            ),
             "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "sender@pilot.example",
         })
 
@@ -305,12 +316,23 @@ def test_practice_timezone_must_resolve_as_iana_name_without_echoing_input():
             "COSMANEURA_ACS_EMAIL_CONNECTION_STRING",
             "endpoint=https://[invalid;accesskey=do-not-echo",
         ),
+        (
+            "COSMANEURA_ACS_EMAIL_ENDPOINT",
+            "http://pilot.communication.azure.com",
+        ),
+        (
+            "COSMANEURA_ACS_EMAIL_ENDPOINT",
+            "https://[invalid",
+        ),
     ],
 )
 def test_acs_email_fields_reject_invalid_values_without_echoing_them(name, value):
     env = {
         "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": (
             "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
+        ),
+        "COSMANEURA_ACS_EMAIL_ENDPOINT": (
+            "https://pilot.communication.azure.com"
         ),
         "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "sender@pilot.example",
         "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "billing@pilot.example",
@@ -335,9 +357,7 @@ def _production_messaging_settings(**overrides):
         "chase_store": "postgres",
         "database_runtime_role": "cosmaneura_app",
         "database_url": "postgresql://cosmaneura_app@primary.invalid/db",
-        "acs_email_connection_string": (
-            "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
-        ),
+        "acs_email_endpoint": "https://pilot.communication.azure.com",
         "acs_email_sender_address": "sender@pilot.example",
         "acs_email_reply_to_address": "billing@pilot.example",
         "upload_url": "https://upload.cosmaneura.dev/cards",
@@ -355,15 +375,28 @@ def test_production_patient_messaging_is_disabled_by_default():
     assert settings.chase_transport == "record_only"
 
 
+def test_deployed_api_rejects_the_worker_only_acs_connection_secret():
+    secret = (
+        "endpoint=https://pilot.communication.azure.com;"
+        "accesskey=must-not-enter-api="
+    )
+
+    with pytest.raises(SettingsError, match="worker-only") as exc_info:
+        _production_messaging_settings(acs_email_connection_string=secret)
+
+    assert secret not in str(exc_info.value)
+    assert "must-not-enter-api" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
 def test_real_patient_messaging_requires_staging_or_production():
     with pytest.raises(SettingsError, match="staging or production"):
         Settings(
             patient_messaging_enabled=True,
             patient_messaging_operationally_activated=True,
             chase_transport="acs_email",
-            acs_email_connection_string=(
-                "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
-            ),
+            acs_email_endpoint="https://pilot.communication.azure.com",
             acs_email_sender_address="sender@pilot.example",
             acs_email_reply_to_address="billing@pilot.example",
         )
@@ -388,7 +421,7 @@ def test_real_patient_messaging_requires_complete_acs_configuration():
             patient_messaging_enabled=True,
             patient_messaging_operationally_activated=True,
             chase_transport="acs_email",
-            acs_email_connection_string="",
+            acs_email_endpoint="",
             acs_email_sender_address="",
             acs_email_reply_to_address="",
         )

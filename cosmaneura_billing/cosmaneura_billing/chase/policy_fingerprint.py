@@ -11,9 +11,9 @@ from dataclasses import dataclass
 import hashlib
 import json
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..settings import _canonicalize_acs_email_endpoint
 from .models import Channel
 from .policy import ChasePolicy, Template, assert_no_phi
 
@@ -97,15 +97,9 @@ class DeliveryConfiguration:
                 contact_snapshot_max_age_hours=settings.contact_snapshot_max_age_hours,
                 scheduler_enabled=settings.chase_scheduler_enabled,
             )
-        segments = {
-            key.strip().lower(): value
-            for segment in settings.acs_email_connection_string.split(";")
-            if "=" in segment
-            for key, value in (segment.split("=", 1),)
-        }
-        endpoint = segments.get("endpoint") or ""
-        parsed = urlsplit(endpoint)
-        resource = f"{parsed.scheme.lower()}://{(parsed.hostname or '').lower()}"
+        resource = _canonicalize_acs_email_endpoint(
+            settings.acs_email_endpoint
+        )
         return cls(
             provider="azure_communication_services_email",
             provider_resource=resource,

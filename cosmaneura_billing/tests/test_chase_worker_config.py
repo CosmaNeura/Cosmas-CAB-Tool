@@ -16,6 +16,7 @@ ACS_CONNECTION = (
     "endpoint=https://pilot.communication.azure.com;"
     "accesskey=synthetic-acs-secret="
 )
+ACS_ENDPOINT = "https://pilot.communication.azure.com"
 
 
 def _record_only_env(**changes: str) -> dict[str, str]:
@@ -40,6 +41,7 @@ def _real_email_env(**changes: str) -> dict[str, str]:
         COSMANEURA_PATIENT_MESSAGING_ENABLED="true",
         COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED="true",
         COSMANEURA_ACS_EMAIL_CONNECTION_STRING=ACS_CONNECTION,
+        COSMANEURA_ACS_EMAIL_ENDPOINT=ACS_ENDPOINT,
         COSMANEURA_ACS_EMAIL_SENDER_ADDRESS="DoNotReply@pilot.example",
         COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS="billing@pilot.example",
         COSMANEURA_UPLOAD_URL="https://upload.cosmaneura.dev/insurance",
@@ -56,6 +58,7 @@ def test_inert_defaults_never_fall_back_to_the_api_database_url():
 
     assert config.chase_scheduler_enabled is False
     assert config.worker_database_url == ""
+    assert config.acs_email_endpoint == ""
     assert api_url not in repr(config)
     policy = config.build_chase_policy()
     delivery = config.build_delivery_configuration()
@@ -233,6 +236,40 @@ def test_acs_transport_requires_complete_configuration_even_before_activation():
     assert "secret=" not in str(exc_info.value)
 
 
+def test_worker_requires_connection_endpoint_to_match_policy_metadata():
+    secret = (
+        "endpoint=https://other.communication.azure.com;"
+        "accesskey=mismatch-secret="
+    )
+
+    with pytest.raises(SettingsError, match="endpoint must match") as exc_info:
+        ChaseWorkerConfig.from_env(_real_email_env(
+            COSMANEURA_ACS_EMAIL_CONNECTION_STRING=secret,
+        ))
+
+    assert secret not in str(exc_info.value)
+    assert "mismatch-secret" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_worker_compares_connection_and_metadata_endpoints_canonically():
+    config = ChaseWorkerConfig.from_env(_real_email_env(
+        COSMANEURA_ACS_EMAIL_CONNECTION_STRING=(
+            "Endpoint=https://PILOT.communication.azure.com/;"
+            "AccessKey=synthetic-acs-secret="
+        ),
+        COSMANEURA_ACS_EMAIL_ENDPOINT=(
+            "https://pilot.communication.azure.com"
+        ),
+    ))
+
+    assert (
+        config.build_delivery_configuration().provider_resource
+        == "https://pilot.communication.azure.com"
+    )
+
+
 def test_repr_redacts_every_worker_secret():
     secrets = {
         "COSMANEURA_CHASE_WORKER_DATABASE_URL": WORKER_URL,
@@ -245,6 +282,7 @@ def test_repr_redacts_every_worker_secret():
     }
     config = ChaseWorkerConfig.from_env({
         **secrets,
+        "COSMANEURA_ACS_EMAIL_ENDPOINT": ACS_ENDPOINT,
         "COSMANEURA_CHASE_TRANSPORT": "acs_email",
     })
 
@@ -252,6 +290,7 @@ def test_repr_redacts_every_worker_secret():
     for secret in secrets.values():
         assert secret not in rendered
     assert rendered.count("<redacted>") == len(secrets)
+    assert f"acs_email_endpoint={ACS_ENDPOINT!r}" in rendered
 
 
 @pytest.mark.parametrize(

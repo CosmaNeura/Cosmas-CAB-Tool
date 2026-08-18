@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..settings import (
     SettingsError,
+    _canonicalize_acs_email_endpoint,
     _database_url_uses_role,
     _parse_bool,
     _parse_bounded_int,
@@ -82,6 +83,7 @@ class ChaseWorkerConfig:
     acs_email_connection_string: str = field(
         default="", repr=False, metadata={"secret": True},
     )
+    acs_email_endpoint: str = ""
     acs_email_sender_address: str = field(
         default="", repr=False, metadata={"secret": True},
     )
@@ -204,6 +206,7 @@ class ChaseWorkerConfig:
             "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": bool(
                 self.acs_email_connection_string
             ),
+            "COSMANEURA_ACS_EMAIL_ENDPOINT": bool(self.acs_email_endpoint),
             "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": bool(
                 self.acs_email_sender_address
             ),
@@ -225,7 +228,17 @@ class ChaseWorkerConfig:
                 "email settings"
             )
         if all(acs_fields.values()):
-            _validate_acs_connection_string(self.acs_email_connection_string)
+            connection_endpoint = _validate_acs_connection_string(
+                self.acs_email_connection_string
+            )
+            metadata_endpoint = _canonicalize_acs_email_endpoint(
+                self.acs_email_endpoint
+            )
+            if connection_endpoint != metadata_endpoint:
+                raise SettingsError(
+                    "COSMANEURA_ACS_EMAIL_CONNECTION_STRING endpoint must match "
+                    "COSMANEURA_ACS_EMAIL_ENDPOINT"
+                )
             _validate_email_address(
                 self.acs_email_sender_address,
                 setting="COSMANEURA_ACS_EMAIL_SENDER_ADDRESS",
@@ -310,6 +323,9 @@ class ChaseWorkerConfig:
             ).strip().lower(),
             acs_email_connection_string=(
                 env.get("COSMANEURA_ACS_EMAIL_CONNECTION_STRING") or ""
+            ).strip(),
+            acs_email_endpoint=(
+                env.get("COSMANEURA_ACS_EMAIL_ENDPOINT") or ""
             ).strip(),
             acs_email_sender_address=(
                 env.get("COSMANEURA_ACS_EMAIL_SENDER_ADDRESS") or ""

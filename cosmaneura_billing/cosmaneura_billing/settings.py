@@ -99,8 +99,48 @@ def _validate_email_address(value: str, *, setting: str) -> None:
         raise SettingsError(f"{setting} must be one valid email address")
 
 
-def _validate_acs_connection_string(value: str) -> None:
-    """Validate the non-secret shape without ever reflecting its contents."""
+def _canonicalize_acs_email_endpoint(
+    value: str,
+    *,
+    setting: str = "COSMANEURA_ACS_EMAIL_ENDPOINT",
+) -> str:
+    """Validate ACS endpoint metadata and return its approval-safe identity."""
+    if not isinstance(value, str) or any(
+        char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
+    ):
+        raise SettingsError(f"{setting} must be a valid ACS HTTPS endpoint")
+    malformed = False
+    try:
+        endpoint = urlsplit(value)
+        endpoint_port = endpoint.port
+        hostname = (endpoint.hostname or "").lower()
+    except (TypeError, ValueError):
+        malformed = True
+        endpoint = None
+        endpoint_port = None
+        hostname = ""
+    if malformed:
+        raise SettingsError(
+            f"{setting} must be a valid ACS HTTPS endpoint"
+        ) from None
+    assert endpoint is not None
+    if (
+        endpoint.scheme.lower() != "https"
+        or not hostname
+        or not hostname.endswith(".communication.azure.com")
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or endpoint_port is not None
+        or endpoint.path not in {"", "/"}
+        or endpoint.query
+        or endpoint.fragment
+    ):
+        raise SettingsError(f"{setting} must be a valid ACS HTTPS endpoint")
+    return f"https://{hostname}"
+
+
+def _validate_acs_connection_string(value: str) -> str:
+    """Validate the secret shape and return only its canonical ACS endpoint."""
     if not isinstance(value, str) or any(
         ord(char) < 32 or ord(char) == 127 for char in value
     ):
@@ -129,35 +169,10 @@ def _validate_acs_connection_string(value: str) -> None:
         raise SettingsError(
             "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
         )
-    endpoint_error = False
-    try:
-        endpoint = urlsplit(parts["endpoint"])
-        endpoint_port = endpoint.port
-    except ValueError:
-        endpoint_error = True
-        endpoint = None
-        endpoint_port = None
-    if endpoint_error:
-        # Raise after leaving the handler so a malformed secret is not retained
-        # in an exception context that an error collector could serialize.
-        raise SettingsError(
-            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
-        ) from None
-    assert endpoint is not None
-    if (
-        endpoint.scheme != "https"
-        or not endpoint.hostname
-        or not endpoint.hostname.endswith(".communication.azure.com")
-        or endpoint.username is not None
-        or endpoint.password is not None
-        or endpoint_port is not None
-        or endpoint.path not in {"", "/"}
-        or endpoint.query
-        or endpoint.fragment
-    ):
-        raise SettingsError(
-            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
-        )
+    return _canonicalize_acs_email_endpoint(
+        parts["endpoint"],
+        setting="COSMANEURA_ACS_EMAIL_CONNECTION_STRING",
+    )
 
 
 def _validate_patient_upload_url(value: str) -> None:
@@ -332,6 +347,7 @@ class Settings:
     acs_email_connection_string: str = field(
         default="", repr=False, metadata={"secret": True}
     )
+    acs_email_endpoint: str = ""
     acs_email_sender_address: str = field(
         default="", repr=False, metadata={"secret": True}
     )
@@ -433,10 +449,8 @@ class Settings:
                 raise SettingsError(
                     f"{name} must be an integer from {minimum} through {maximum}"
                 )
-        acs_fields = {
-            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": bool(
-                self.acs_email_connection_string
-            ),
+        acs_metadata_fields = {
+            "COSMANEURA_ACS_EMAIL_ENDPOINT": bool(self.acs_email_endpoint),
             "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": bool(
                 self.acs_email_sender_address
             ),
@@ -444,16 +458,20 @@ class Settings:
                 self.acs_email_reply_to_address
             ),
         }
-        if any(acs_fields.values()) and not all(acs_fields.values()):
+        if any(acs_metadata_fields.values()) and not all(
+            acs_metadata_fields.values()
+        ):
             missing = ", ".join(
-                name for name, configured in acs_fields.items() if not configured
+                name
+                for name, configured in acs_metadata_fields.items()
+                if not configured
             )
             raise SettingsError(
-                "ACS email settings must be configured together; "
+                "ACS email policy metadata must be configured together; "
                 f"missing: {missing}"
             )
-        if all(acs_fields.values()):
-            _validate_acs_connection_string(self.acs_email_connection_string)
+        if all(acs_metadata_fields.values()):
+            _canonicalize_acs_email_endpoint(self.acs_email_endpoint)
             _validate_email_address(
                 self.acs_email_sender_address,
                 setting="COSMANEURA_ACS_EMAIL_SENDER_ADDRESS",
@@ -461,6 +479,22 @@ class Settings:
             _validate_email_address(
                 self.acs_email_reply_to_address,
                 setting="COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS",
+            )
+        if self.environment in {"staging", "production"} and (
+            self.acs_email_connection_string
+        ):
+            raise SettingsError(
+                "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is worker-only and "
+                "must not be configured in the deployed API"
+            )
+        if self.acs_email_connection_string:
+            _validate_acs_connection_string(self.acs_email_connection_string)
+        if self.chase_transport == "acs_email" and not all(
+            acs_metadata_fields.values()
+        ):
+            raise SettingsError(
+                "COSMANEURA_CHASE_TRANSPORT=acs_email requires complete ACS "
+                "email settings metadata"
             )
         if (
             self.patient_messaging_operationally_activated
@@ -492,9 +526,10 @@ class Settings:
                     "real patient messaging requires "
                     "COSMANEURA_CHASE_TRANSPORT=acs_email"
                 )
-            if not all(acs_fields.values()):
+            if not all(acs_metadata_fields.values()):
                 raise SettingsError(
-                    "real patient messaging requires complete ACS email settings"
+                    "real patient messaging requires complete ACS email "
+                    "settings metadata"
                 )
             if not self.patient_messaging_operationally_activated:
                 raise SettingsError(
@@ -776,6 +811,9 @@ class Settings:
             ).strip().lower(),
             acs_email_connection_string=(
                 env.get("COSMANEURA_ACS_EMAIL_CONNECTION_STRING") or ""
+            ).strip(),
+            acs_email_endpoint=(
+                env.get("COSMANEURA_ACS_EMAIL_ENDPOINT") or ""
             ).strip(),
             acs_email_sender_address=(
                 env.get("COSMANEURA_ACS_EMAIL_SENDER_ADDRESS") or ""

@@ -8,6 +8,8 @@ from cosmaneura_billing.chase.policy import ChasePolicy, Step, Template
 from cosmaneura_billing.chase.policy_fingerprint import (
     DeliveryConfiguration, policy_fingerprint, policy_step_records,
 )
+from cosmaneura_billing.chase.worker_config import ChaseWorkerConfig
+from cosmaneura_billing.settings import Settings
 
 
 def _fingerprint(policy: ChasePolicy, timezone: str = "America/New_York") -> str:
@@ -164,3 +166,56 @@ def test_delivery_configuration_repr_redacts_addresses_and_provider_resource():
     assert "billing@" not in rendered
     assert "communication.azure.com" not in rendered
     assert rendered.count("<redacted>") == 2
+
+
+def test_api_and_worker_build_the_same_delivery_identity_without_sharing_secret():
+    api_settings = Settings(
+        chase_transport="acs_email",
+        acs_email_endpoint="HTTPS://PILOT.communication.azure.com/",
+        acs_email_sender_address="sender@pilot.example",
+        acs_email_reply_to_address="billing@pilot.example",
+    )
+    worker_settings = ChaseWorkerConfig(
+        chase_transport="acs_email",
+        acs_email_connection_string=(
+            "Endpoint=https://pilot.communication.azure.com;"
+            "AccessKey=worker-only-secret="
+        ),
+        acs_email_endpoint="https://pilot.communication.azure.com",
+        acs_email_sender_address="sender@pilot.example",
+        acs_email_reply_to_address="billing@pilot.example",
+    )
+
+    api_delivery = DeliveryConfiguration.from_settings(api_settings)
+    worker_delivery = worker_settings.build_delivery_configuration()
+
+    assert api_settings.acs_email_connection_string == ""
+    assert api_delivery == worker_delivery
+    assert api_delivery.provider_resource == (
+        "https://pilot.communication.azure.com"
+    )
+    assert policy_fingerprint(
+        ChasePolicy(), practice_timezone="UTC", delivery=api_delivery,
+    ) == policy_fingerprint(
+        ChasePolicy(), practice_timezone="UTC", delivery=worker_delivery,
+    )
+
+
+def test_delivery_configuration_never_reads_the_worker_connection_secret():
+    class MetadataOnlySettings:
+        chase_transport = "acs_email"
+        acs_email_endpoint = "https://pilot.communication.azure.com"
+        acs_email_sender_address = "sender@pilot.example"
+        acs_email_reply_to_address = "billing@pilot.example"
+        contact_snapshot_max_age_hours = 24
+        chase_scheduler_enabled = False
+        patient_messaging_enabled = False
+        patient_messaging_operationally_activated = False
+
+        @property
+        def acs_email_connection_string(self):
+            raise AssertionError("worker secret must not be read")
+
+    delivery = DeliveryConfiguration.from_settings(MetadataOnlySettings())
+
+    assert delivery.provider_resource == "https://pilot.communication.azure.com"

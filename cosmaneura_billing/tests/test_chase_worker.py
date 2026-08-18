@@ -52,6 +52,7 @@ def _email_config(**changes) -> ChaseWorkerConfig:
         "patient_messaging_operationally_activated": True,
         "chase_transport": "acs_email",
         "acs_email_connection_string": ACS_CONNECTION,
+        "acs_email_endpoint": "https://pilot.communication.azure.com",
         "acs_email_sender_address": "sender@pilot.example",
         "acs_email_reply_to_address": "billing@pilot.example",
         "upload_url": "https://upload.cosmaneura.dev/insurance",

@@ -130,7 +130,9 @@ Keep three credentials:
   read immutable chase authorization evidence and write only scheduler effects;
   it cannot read identity, encounter, feedback, or access-audit tables and
   cannot create policies, approvals, or human releases. Never pass this DSN,
-  its password, the ACS connection string, or the chase-gate key to the API.
+  its password, or the ACS connection string to the API. The API and worker
+  instead receive identical non-credential ACS endpoint/sender/reply metadata
+  and the shared chase-gate key needed to compute the same exact evidence.
 
 The Azure deployment must store these as separate Key Vault secrets and expose
 each only to its owning job or service. Never paste a real DSN or password into
