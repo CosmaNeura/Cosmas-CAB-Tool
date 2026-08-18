@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class SettingsError(ValueError):
@@ -36,8 +37,15 @@ _CHASE_STORES = frozenset({"memory", "postgres"})
 _STATE_STORES = frozenset({"local", "postgres"})
 _APPROVAL_MODES = frozenset({"per_policy", "per_message"})
 _AUTH_MODES = frozenset({"disabled", "container_apps"})
+_CHASE_TRANSPORTS = frozenset({"record_only", "acs_email"})
 _DEFAULT_ALLOWED_ROLES = ("Admin", "BillingStaff", "Coder", "Provider")
 _LOCAL_CORS_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
+_EMAIL = re.compile(
+    r"(?=.{3,254}\Z)(?![^@]*\.\.)"
+    r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]{1,64}@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z"
+)
 
 
 def _parse_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
@@ -65,6 +73,126 @@ def _parse_positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     if value < 1:
         raise SettingsError(f"{name} must be a positive integer")
     return value
+
+
+def _parse_bounded_int(
+    env: Mapping[str, str], name: str, default: int, minimum: int, maximum: int,
+) -> int:
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise SettingsError(
+            f"{name} must be an integer from {minimum} through {maximum}"
+        ) from exc
+    if not minimum <= value <= maximum:
+        raise SettingsError(
+            f"{name} must be an integer from {minimum} through {maximum}"
+        )
+    return value
+
+
+def _validate_email_address(value: str, *, setting: str) -> None:
+    if not isinstance(value, str) or not _EMAIL.fullmatch(value):
+        raise SettingsError(f"{setting} must be one valid email address")
+
+
+def _validate_acs_connection_string(value: str) -> None:
+    """Validate the non-secret shape without ever reflecting its contents."""
+    if not isinstance(value, str) or any(
+        ord(char) < 32 or ord(char) == 127 for char in value
+    ):
+        raise SettingsError(
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
+        )
+    parts: dict[str, str] = {}
+    for segment in value.split(";"):
+        if not segment or "=" not in segment:
+            raise SettingsError(
+                "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
+            )
+        key, part_value = segment.split("=", 1)
+        key = key.strip().lower()
+        if (
+            key in parts
+            or key not in {"endpoint", "accesskey"}
+            or not part_value
+            or any(char.isspace() for char in part_value)
+        ):
+            raise SettingsError(
+                "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
+            )
+        parts[key] = part_value
+    if set(parts) != {"endpoint", "accesskey"}:
+        raise SettingsError(
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
+        )
+    endpoint_error = False
+    try:
+        endpoint = urlsplit(parts["endpoint"])
+        endpoint_port = endpoint.port
+    except ValueError:
+        endpoint_error = True
+        endpoint = None
+        endpoint_port = None
+    if endpoint_error:
+        # Raise after leaving the handler so a malformed secret is not retained
+        # in an exception context that an error collector could serialize.
+        raise SettingsError(
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
+        ) from None
+    assert endpoint is not None
+    if (
+        endpoint.scheme != "https"
+        or not endpoint.hostname
+        or not endpoint.hostname.endswith(".communication.azure.com")
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or endpoint_port is not None
+        or endpoint.path not in {"", "/"}
+        or endpoint.query
+        or endpoint.fragment
+    ):
+        raise SettingsError(
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING is malformed"
+        )
+
+
+def _validate_patient_upload_url(value: str) -> None:
+    """Require a public-looking HTTPS route without a bearer-like query token."""
+    malformed = False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        hostname = (parsed.hostname or "").lower()
+    except (TypeError, ValueError):
+        malformed = True
+        parsed = None
+        port = None
+        hostname = ""
+    if malformed:
+        raise SettingsError(
+            "COSMANEURA_UPLOAD_URL is not a deployable secure upload route"
+        ) from None
+    assert parsed is not None
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or hostname == "localhost"
+        or hostname.endswith((".invalid", ".example", ".localhost", ".local"))
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise SettingsError(
+            "COSMANEURA_UPLOAD_URL is not a deployable secure upload route"
+        )
 
 
 def _optional(env: Mapping[str, str], name: str) -> str | None:
@@ -145,6 +273,27 @@ class Settings:
     )
     chase_approval: str = "per_policy"
     direct_contract_list: str = "direct_contract_patients.csv"
+    chase_gate_hmac_key: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+
+    patient_messaging_enabled: bool = False
+    patient_messaging_operationally_activated: bool = False
+    chase_scheduler_enabled: bool = False
+    chase_transport: str = "record_only"
+    acs_email_connection_string: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    acs_email_sender_address: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    acs_email_reply_to_address: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
+    practice_timezone: str = "UTC"
+    contact_snapshot_max_age_hours: int = 24
+    chase_worker_batch_size: int = 25
+    chase_worker_lease_seconds: int = 300
 
     icd10_ccsr_csv: str | None = None
     cpt_data_dir: str | None = None
@@ -198,6 +347,112 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_CHASE_APPROVAL must be per_policy or per_message"
             )
+        if self.chase_transport not in _CHASE_TRANSPORTS:
+            raise SettingsError(
+                "COSMANEURA_CHASE_TRANSPORT must be record_only or acs_email"
+            )
+        try:
+            ZoneInfo(self.practice_timezone)
+        except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+            raise SettingsError(
+                "COSMANEURA_PRACTICE_TIMEZONE must be a valid IANA timezone"
+            ) from exc
+        for name, value, minimum, maximum in (
+            (
+                "COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS",
+                self.contact_snapshot_max_age_hours,
+                1,
+                168,
+            ),
+            (
+                "COSMANEURA_CHASE_WORKER_BATCH_SIZE",
+                self.chase_worker_batch_size,
+                1,
+                500,
+            ),
+            (
+                "COSMANEURA_CHASE_WORKER_LEASE_SECONDS",
+                self.chase_worker_lease_seconds,
+                30,
+                3_600,
+            ),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not minimum <= value <= maximum
+            ):
+                raise SettingsError(
+                    f"{name} must be an integer from {minimum} through {maximum}"
+                )
+        acs_fields = {
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": bool(
+                self.acs_email_connection_string
+            ),
+            "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": bool(
+                self.acs_email_sender_address
+            ),
+            "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": bool(
+                self.acs_email_reply_to_address
+            ),
+        }
+        if any(acs_fields.values()) and not all(acs_fields.values()):
+            missing = ", ".join(
+                name for name, configured in acs_fields.items() if not configured
+            )
+            raise SettingsError(
+                "ACS email settings must be configured together; "
+                f"missing: {missing}"
+            )
+        if all(acs_fields.values()):
+            _validate_acs_connection_string(self.acs_email_connection_string)
+            _validate_email_address(
+                self.acs_email_sender_address,
+                setting="COSMANEURA_ACS_EMAIL_SENDER_ADDRESS",
+            )
+            _validate_email_address(
+                self.acs_email_reply_to_address,
+                setting="COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS",
+            )
+        if (
+            self.patient_messaging_operationally_activated
+            and not self.patient_messaging_enabled
+        ):
+            raise SettingsError(
+                "COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED requires "
+                "COSMANEURA_PATIENT_MESSAGING_ENABLED=true"
+            )
+        if self.patient_messaging_enabled:
+            if self.environment not in {"staging", "production"}:
+                raise SettingsError(
+                    "real patient messaging is allowed only in staging or production"
+                )
+            if self.state_store != "postgres" or self.chase_store != "postgres":
+                raise SettingsError(
+                    "real patient messaging requires durable PostgreSQL stores"
+                )
+            if self.chase_transport != "acs_email":
+                raise SettingsError(
+                    "real patient messaging requires "
+                    "COSMANEURA_CHASE_TRANSPORT=acs_email"
+                )
+            if not all(acs_fields.values()):
+                raise SettingsError(
+                    "real patient messaging requires complete ACS email settings"
+                )
+            if not self.patient_messaging_operationally_activated:
+                raise SettingsError(
+                    "real patient messaging requires explicit operational activation"
+                )
+            if not self.chase_scheduler_enabled:
+                raise SettingsError(
+                    "real patient messaging requires the durable chase scheduler"
+                )
+            _validate_patient_upload_url(self.upload_url)
+            if len(self.chase_gate_hmac_key.encode("utf-8")) < 32:
+                raise SettingsError(
+                    "real patient messaging requires a 32-byte chase gate key"
+                )
         if self.auth_mode not in _AUTH_MODES:
             raise SettingsError(
                 "COSMANEURA_AUTH_MODE must be disabled or container_apps"
@@ -392,6 +647,48 @@ class Settings:
             direct_contract_list=(
                 env.get("COSMANEURA_DIRECT_CONTRACT_LIST")
                 or "direct_contract_patients.csv"
+            ),
+            chase_gate_hmac_key=(
+                env.get("COSMANEURA_CHASE_GATE_HMAC_KEY") or ""
+            ),
+            patient_messaging_enabled=_parse_bool(
+                env, "COSMANEURA_PATIENT_MESSAGING_ENABLED", False
+            ),
+            patient_messaging_operationally_activated=_parse_bool(
+                env,
+                "COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED",
+                False,
+            ),
+            chase_scheduler_enabled=_parse_bool(
+                env, "COSMANEURA_CHASE_SCHEDULER_ENABLED", False
+            ),
+            chase_transport=(
+                env.get("COSMANEURA_CHASE_TRANSPORT") or "record_only"
+            ).strip().lower(),
+            acs_email_connection_string=(
+                env.get("COSMANEURA_ACS_EMAIL_CONNECTION_STRING") or ""
+            ).strip(),
+            acs_email_sender_address=(
+                env.get("COSMANEURA_ACS_EMAIL_SENDER_ADDRESS") or ""
+            ).strip(),
+            acs_email_reply_to_address=(
+                env.get("COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS") or ""
+            ).strip(),
+            practice_timezone=(
+                env.get("COSMANEURA_PRACTICE_TIMEZONE") or "UTC"
+            ).strip(),
+            contact_snapshot_max_age_hours=_parse_bounded_int(
+                env,
+                "COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS",
+                24,
+                1,
+                168,
+            ),
+            chase_worker_batch_size=_parse_bounded_int(
+                env, "COSMANEURA_CHASE_WORKER_BATCH_SIZE", 25, 1, 500
+            ),
+            chase_worker_lease_seconds=_parse_bounded_int(
+                env, "COSMANEURA_CHASE_WORKER_LEASE_SECONDS", 300, 30, 3_600
             ),
             icd10_ccsr_csv=_optional(env, "ICD10_CCSR_CSV"),
             cpt_data_dir=_optional(env, "CPT_DATA_DIR"),

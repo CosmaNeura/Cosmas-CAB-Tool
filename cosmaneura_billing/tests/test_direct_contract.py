@@ -5,6 +5,8 @@ non-match, and missing-list fail-closed; plus an integration test proving a
 direct-contract patient can never enter a chase sequence (that one lives in
 test_chase.py, where the sequence does).
 """
+import os
+
 import pytest
 
 from cosmaneura_billing.direct_contract import (
@@ -47,6 +49,36 @@ def test_unparseable_list_fails_closed(tmp_path):
     path.write_text("some,other,columns\n1,2,3\n", encoding="utf-8")
     c = _check("PT-1001", DirectContractList(path=path))
     assert not c.known and c.blocked
+
+
+@pytest.mark.parametrize("document", [
+    "[123]",
+    '{"patients": 7}',
+    '{"patients": [null]}',
+    '{"patients": [{"patient_ref": 123}]}',
+])
+def test_malformed_json_shapes_fail_closed_without_parser_exceptions(
+    tmp_path, document,
+):
+    path = tmp_path / "bad.json"
+    path.write_text(document, encoding="utf-8")
+
+    check = _check("PT-1001", DirectContractList(path=path))
+
+    assert check.known is False
+    assert check.blocked is True
+    assert "unparseable" in check.source
+
+
+def test_invalid_utf8_roster_fails_closed_without_leaking_decoder_details(tmp_path):
+    path = tmp_path / "bad.csv"
+    path.write_bytes(b"patient_ref\nPT-1001\xff\n")
+
+    check = _check("PT-1001", DirectContractList(path=path))
+
+    assert check.known is False
+    assert check.blocked is True
+    assert "UnicodeDecodeError" in check.source
 
 
 # --------------------------------------------------------------------------- #
@@ -144,4 +176,57 @@ def test_check_serializes_with_its_uncertainty_visible():
     assert body["blocked"] is True and body["known"] is True
     assert body["checked_at"] == "2026-08-17T12:00:00+00:00"
     assert set(body) == {"patient_ref", "is_direct_contract", "known", "blocked",
-                         "source", "checked_at"}
+                         "source", "gate_fingerprint", "checked_at"}
+    assert len(body["gate_fingerprint"]) == 64
+
+
+def test_gate_release_identity_changes_with_source_revision_not_check_time():
+    first = DirectContractList(refs=["PT-1001"], version="revision-1")
+    changed = DirectContractList(refs=["PT-1001", "PT-1002"], version="revision-2")
+
+    at_noon = check_direct_contract("PT-1001", roster=first, now=CLOCK)
+    later = check_direct_contract(
+        "PT-1001", roster=first,
+        now=lambda: "2026-08-18T12:00:00+00:00",
+    )
+    new_roster = check_direct_contract("PT-1001", roster=changed, now=CLOCK)
+
+    assert at_noon.gate_fingerprint == later.gate_fingerprint
+    assert at_noon.gate_fingerprint != new_roster.gate_fingerprint
+
+
+def test_keyed_gate_identity_reloads_exact_same_size_file_content(tmp_path):
+    path = tmp_path / "direct.csv"
+    path.write_text("patient_ref\nPT-1001\n", encoding="utf-8")
+    roster = DirectContractList(
+        path=path, fingerprint_key="synthetic-key-that-is-at-least-32-bytes",
+    )
+    first = _check("PT-1001", roster)
+    original_stat = path.stat()
+
+    path.write_text("patient_ref\nPT-2002\n", encoding="utf-8")
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    second = _check("PT-1001", roster)
+
+    assert first.is_direct_contract is True
+    assert second.is_direct_contract is False
+    assert first.gate_fingerprint != second.gate_fingerprint
+
+
+def test_one_gate_check_reads_exactly_one_locked_roster_generation():
+    class CountingRoster(DirectContractList):
+        reads = 0
+
+        def _ensure(self):
+            self.reads += 1
+            return super()._ensure()
+
+    roster = CountingRoster(
+        refs=["PT-1001"], version="revision-1",
+        fingerprint_key="synthetic-key-that-is-at-least-32-bytes",
+    )
+
+    check = _check("PT-1001", roster)
+
+    assert check.is_direct_contract is True
+    assert roster.reads == 1

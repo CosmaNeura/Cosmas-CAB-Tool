@@ -34,6 +34,18 @@ def test_defaults_preserve_local_runtime_behavior():
     )
     assert settings.frontend_dist is None
     assert settings.migrations_dir is None
+    assert settings.patient_messaging_enabled is False
+    assert settings.patient_messaging_operationally_activated is False
+    assert settings.chase_scheduler_enabled is False
+    assert settings.chase_transport == "record_only"
+    assert settings.acs_email_connection_string == ""
+    assert settings.acs_email_sender_address == ""
+    assert settings.acs_email_reply_to_address == ""
+    assert settings.practice_timezone == "UTC"
+    assert settings.contact_snapshot_max_age_hours == 24
+    assert settings.chase_worker_batch_size == 25
+    assert settings.chase_worker_lease_seconds == 300
+    assert settings.chase_gate_hmac_key == ""
 
 
 def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
@@ -59,9 +71,23 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
         "DATABASE_URL": "postgresql://cosmaneura_app@primary.invalid/db",
         "COSMANEURA_PRACTICE_ID": "practice-a",
         "COSMANEURA_PRACTICE_NAME": "Practice A",
-        "COSMANEURA_UPLOAD_URL": "https://practice.invalid/upload",
+        "COSMANEURA_UPLOAD_URL": "https://upload.cosmaneura.dev/cards",
         "COSMANEURA_CHASE_APPROVAL": "per_message",
         "COSMANEURA_DIRECT_CONTRACT_LIST": str(tmp_path / "direct.csv"),
+        "COSMANEURA_CHASE_GATE_HMAC_KEY": "g" * 32,
+        "COSMANEURA_PATIENT_MESSAGING_ENABLED": "true",
+        "COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED": "true",
+        "COSMANEURA_CHASE_SCHEDULER_ENABLED": "true",
+        "COSMANEURA_CHASE_TRANSPORT": "ACS_EMAIL",
+        "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": (
+            "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
+        ),
+        "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "DoNotReply@pilot.example",
+        "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "billing@pilot.example",
+        "COSMANEURA_PRACTICE_TIMEZONE": "America/New_York",
+        "COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS": "48",
+        "COSMANEURA_CHASE_WORKER_BATCH_SIZE": "40",
+        "COSMANEURA_CHASE_WORKER_LEASE_SECONDS": "600",
     })
 
     assert settings.environment == "staging"
@@ -87,6 +113,15 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
     assert settings.practice_name == "Practice A"
     assert settings.chase_approval == "per_message"
     assert settings.direct_contract_list == str(tmp_path / "direct.csv")
+    assert settings.chase_gate_hmac_key == "g" * 32
+    assert settings.patient_messaging_enabled is True
+    assert settings.patient_messaging_operationally_activated is True
+    assert settings.chase_scheduler_enabled is True
+    assert settings.chase_transport == "acs_email"
+    assert settings.practice_timezone == "America/New_York"
+    assert settings.contact_snapshot_max_age_hours == 48
+    assert settings.chase_worker_batch_size == 40
+    assert settings.chase_worker_lease_seconds == 600
 
 
 @pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
@@ -104,6 +139,10 @@ def test_boolean_true_spellings(value):
     ("COSMANEURA_STATE_STORE", "filesystem"),
     ("COSMANEURA_CHASE_STORE", "filesystem"),
     ("COSMANEURA_CHASE_APPROVAL", "always"),
+    ("COSMANEURA_CHASE_TRANSPORT", "sms"),
+    ("COSMANEURA_PATIENT_MESSAGING_ENABLED", "maybe"),
+    ("COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED", "maybe"),
+    ("COSMANEURA_CHASE_SCHEDULER_ENABLED", "maybe"),
 ])
 def test_invalid_values_raise_safe_specific_errors(name, value):
     with pytest.raises(SettingsError) as exc_info:
@@ -154,6 +193,13 @@ def test_repr_redacts_every_credential_and_database_dsn():
         "AMA_CONSUMER_KEY": "ama-key-secret",
         "AMA_CONSUMER_SECRET": "ama-consumer-secret",
         "COSMANEURA_UPLOAD_URL": "https://upload.example/secret-link-token",
+        "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": (
+            "endpoint=https://pilot.communication.azure.com;"
+            "accesskey=acs-secret-key="
+        ),
+        "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "sender-secret@pilot.example",
+        "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "reply-secret@pilot.example",
+        "COSMANEURA_CHASE_GATE_HMAC_KEY": "gate-secret-that-is-at-least-32-bytes",
     }
     settings = Settings.from_env(secrets)
 
@@ -202,6 +248,218 @@ def test_deployed_environments_require_postgres_and_runtime_credentials():
             database_url="postgresql://postgres@example.invalid/db",
             database_runtime_role="cosmaneura_app",
         )
+
+
+def test_acs_email_settings_are_all_or_none_without_echoing_secrets():
+    secret = (
+        "endpoint=https://pilot.communication.azure.com;"
+        "accesskey=connection-secret="
+    )
+    with pytest.raises(SettingsError, match="configured together") as exc_info:
+        Settings.from_env({
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": secret,
+            "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "sender@pilot.example",
+        })
+
+    message = str(exc_info.value)
+    assert "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS" in message
+    assert secret not in message
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS", "0"),
+        ("COSMANEURA_CONTACT_SNAPSHOT_MAX_AGE_HOURS", "169"),
+        ("COSMANEURA_CHASE_WORKER_BATCH_SIZE", "0"),
+        ("COSMANEURA_CHASE_WORKER_BATCH_SIZE", "501"),
+        ("COSMANEURA_CHASE_WORKER_LEASE_SECONDS", "29"),
+        ("COSMANEURA_CHASE_WORKER_LEASE_SECONDS", "3601"),
+    ],
+)
+def test_chase_worker_numeric_controls_are_bounded(name, value):
+    with pytest.raises(SettingsError) as exc_info:
+        Settings.from_env({name: value})
+
+    assert name in str(exc_info.value)
+
+
+def test_practice_timezone_must_resolve_as_iana_name_without_echoing_input():
+    invalid = "Not/A-Real-Patient-Timezone"
+    with pytest.raises(SettingsError, match="IANA timezone") as exc_info:
+        Settings.from_env({"COSMANEURA_PRACTICE_TIMEZONE": invalid})
+
+    assert invalid not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("COSMANEURA_ACS_EMAIL_SENDER_ADDRESS", "sender\n@pilot.example"),
+        ("COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS", "not-an-email"),
+        (
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING",
+            "endpoint=http://pilot.invalid;accesskey=do-not-echo",
+        ),
+        (
+            "COSMANEURA_ACS_EMAIL_CONNECTION_STRING",
+            "endpoint=https://[invalid;accesskey=do-not-echo",
+        ),
+    ],
+)
+def test_acs_email_fields_reject_invalid_values_without_echoing_them(name, value):
+    env = {
+        "COSMANEURA_ACS_EMAIL_CONNECTION_STRING": (
+            "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
+        ),
+        "COSMANEURA_ACS_EMAIL_SENDER_ADDRESS": "sender@pilot.example",
+        "COSMANEURA_ACS_EMAIL_REPLY_TO_ADDRESS": "billing@pilot.example",
+        name: value,
+    }
+    with pytest.raises(SettingsError) as exc_info:
+        Settings.from_env(env)
+
+    assert name in str(exc_info.value)
+    assert value not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def _production_messaging_settings(**overrides):
+    values = {
+        "environment": "production",
+        "auth_mode": "container_apps",
+        "entra_tenant_id": "11111111-1111-4111-8111-111111111111",
+        "practice_id": "practice-a",
+        "state_store": "postgres",
+        "chase_store": "postgres",
+        "database_runtime_role": "cosmaneura_app",
+        "database_url": "postgresql://cosmaneura_app@primary.invalid/db",
+        "acs_email_connection_string": (
+            "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
+        ),
+        "acs_email_sender_address": "sender@pilot.example",
+        "acs_email_reply_to_address": "billing@pilot.example",
+        "upload_url": "https://upload.cosmaneura.dev/cards",
+        "chase_gate_hmac_key": "synthetic-gate-key-that-is-32-bytes",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_production_patient_messaging_is_disabled_by_default():
+    settings = _production_messaging_settings()
+
+    assert settings.patient_messaging_enabled is False
+    assert settings.patient_messaging_operationally_activated is False
+    assert settings.chase_transport == "record_only"
+
+
+def test_real_patient_messaging_requires_staging_or_production():
+    with pytest.raises(SettingsError, match="staging or production"):
+        Settings(
+            patient_messaging_enabled=True,
+            patient_messaging_operationally_activated=True,
+            chase_transport="acs_email",
+            acs_email_connection_string=(
+                "endpoint=https://pilot.communication.azure.com;accesskey=fake-key="
+            ),
+            acs_email_sender_address="sender@pilot.example",
+            acs_email_reply_to_address="billing@pilot.example",
+        )
+
+
+def test_real_patient_messaging_requires_exact_transport_and_activation():
+    with pytest.raises(SettingsError, match="TRANSPORT=acs_email"):
+        _production_messaging_settings(
+            patient_messaging_enabled=True,
+            patient_messaging_operationally_activated=True,
+        )
+    with pytest.raises(SettingsError, match="explicit operational activation"):
+        _production_messaging_settings(
+            patient_messaging_enabled=True,
+            chase_transport="acs_email",
+        )
+
+
+def test_real_patient_messaging_requires_complete_acs_configuration():
+    with pytest.raises(SettingsError, match="complete ACS email settings"):
+        _production_messaging_settings(
+            patient_messaging_enabled=True,
+            patient_messaging_operationally_activated=True,
+            chase_transport="acs_email",
+            acs_email_connection_string="",
+            acs_email_sender_address="",
+            acs_email_reply_to_address="",
+        )
+
+
+def test_real_patient_messaging_requires_the_durable_scheduler():
+    with pytest.raises(SettingsError, match="durable chase scheduler"):
+        _production_messaging_settings(
+            patient_messaging_enabled=True,
+            patient_messaging_operationally_activated=True,
+            chase_transport="acs_email",
+        )
+
+
+@pytest.mark.parametrize("upload_url", [
+    "http://upload.pilot.example/cards",
+    "https://example.invalid/cards",
+    "https://upload.pilot.example/cards",
+    "https://upload.pilot.example/cards?token=do-not-store",
+    "https://user:secret@upload.pilot.example/cards",
+    "https://upload.pilot.example/",
+])
+def test_real_patient_messaging_requires_a_non_tokenized_secure_upload_route(
+    upload_url,
+):
+    with pytest.raises(SettingsError, match="secure upload route") as exc_info:
+        _production_messaging_settings(
+            patient_messaging_enabled=True,
+            patient_messaging_operationally_activated=True,
+            chase_scheduler_enabled=True,
+            chase_transport="acs_email",
+            upload_url=upload_url,
+        )
+
+    assert upload_url not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_real_patient_messaging_requires_a_secret_gate_fingerprint_key():
+    with pytest.raises(SettingsError, match="32-byte chase gate key") as exc_info:
+        _production_messaging_settings(
+            patient_messaging_enabled=True,
+            patient_messaging_operationally_activated=True,
+            chase_scheduler_enabled=True,
+            chase_transport="acs_email",
+            chase_gate_hmac_key="too-short-secret",
+        )
+
+    assert "too-short-secret" not in str(exc_info.value)
+
+
+def test_operational_activation_cannot_be_armed_without_messaging_enabled():
+    with pytest.raises(SettingsError, match="MESSAGING_ENABLED=true"):
+        _production_messaging_settings(
+            patient_messaging_operationally_activated=True,
+        )
+
+
+def test_complete_production_email_configuration_can_be_activated():
+    settings = _production_messaging_settings(
+        patient_messaging_enabled=True,
+        patient_messaging_operationally_activated=True,
+        chase_scheduler_enabled=True,
+        chase_transport="acs_email",
+        practice_timezone="America/New_York",
+    )
+
+    assert settings.patient_messaging_enabled is True
+    assert settings.chase_scheduler_enabled is True
+    assert settings.chase_transport == "acs_email"
 
 
 @pytest.mark.parametrize(

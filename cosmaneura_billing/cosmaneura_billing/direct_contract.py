@@ -36,10 +36,13 @@ gate semantics do not.
 from __future__ import annotations
 
 import csv
+import hashlib
+import hmac
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Callable, Iterable, Optional
 
 from .settings import Settings
@@ -56,6 +59,7 @@ class DirectContractCheck:
     is_direct_contract: bool
     known: bool
     source: str
+    source_fingerprint: str
     checked_at: str
 
     @property
@@ -74,8 +78,20 @@ class DirectContractCheck:
             "known": self.known,
             "blocked": self.blocked,
             "source": self.source,
+            "gate_fingerprint": self.gate_fingerprint,
             "checked_at": self.checked_at,
         }
+
+    @property
+    def gate_fingerprint(self) -> str:
+        """Bind a human release to the exact roster answer, not its timestamp."""
+        value = json.dumps({
+            "schema": "cosmaneura.direct-contract-gate.v1",
+            "known": self.known,
+            "is_direct_contract": self.is_direct_contract,
+            "source_fingerprint": self.source_fingerprint,
+        }, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class DirectContractList:
@@ -88,7 +104,8 @@ class DirectContractList:
 
     def __init__(self, path: str | os.PathLike | None = None,
                  refs: Optional[Iterable[str]] = None,
-                 version: str = "", settings: Settings | None = None):
+                 version: str = "", settings: Settings | None = None,
+                 fingerprint_key: str = ""):
         self._explicit = {self._normalize(r) for r in refs} if refs is not None else None
         if path is not None:
             resolved_path = path
@@ -101,8 +118,15 @@ class DirectContractList:
             resolved_path = Settings.from_env().direct_contract_list
         self._path = Path(resolved_path)
         self._version = version
+        self._fingerprint_key = (
+            settings.chase_gate_hmac_key if settings is not None
+            else fingerprint_key
+        ).encode("utf-8")
         self._loaded: Optional[set[str]] = None
         self._load_error: str = ""
+        self._source_fingerprint: str = ""
+        self._loaded_signature: tuple[int, int, int, int] | None = None
+        self._lock = RLock()
 
     @staticmethod
     def _normalize(ref: str) -> str:
@@ -110,42 +134,134 @@ class DirectContractList:
 
     @property
     def available(self) -> bool:
-        self._ensure()
-        return self._loaded is not None
+        with self._lock:
+            self._ensure()
+            return self._loaded is not None
 
     @property
     def source(self) -> str:
+        with self._lock:
+            self._ensure()
+            return self._source_value()
+
+    def _source_value(self) -> str:
         if self._explicit is not None:
             return f"in_memory:{self._version or 'test'}"
-        self._ensure()
         if self._loaded is None:
             return f"{LIST_VERSION_UNKNOWN}:{self._load_error or 'not found'}"
         return f"{self._path.name}:{self._version or 'v1'}"
 
+    @property
+    def source_fingerprint(self) -> str:
+        """Opaque identity of the normalized roster content and source version."""
+        with self._lock:
+            self._ensure()
+            return self._fingerprint_value()
+
+    def _fingerprint_value(self) -> str:
+        if not self._source_fingerprint:
+            marker = json.dumps({
+                "schema": "cosmaneura.direct-contract-source.v1",
+                "source": self._source_value(),
+                "available": self._loaded is not None,
+            }, sort_keys=True, separators=(",", ":"))
+            self._source_fingerprint = hashlib.sha256(marker.encode("utf-8")).hexdigest()
+        return self._source_fingerprint
+
     def _ensure(self) -> None:
         if self._explicit is not None:
             self._loaded = self._explicit
+            self._source_fingerprint = self._fingerprint_source({
+                "kind": "explicit",
+                "version": self._version or "test",
+            }, refs=self._loaded)
             return
-        if self._loaded is not None or self._load_error:
-            return
+
         try:
-            text = self._path.read_text(encoding="utf-8")
-        except OSError as e:
-            self._load_error = type(e).__name__
+            path_stat = self._path.stat()
+        except OSError as exc:
+            self._loaded = None
+            self._loaded_signature = None
+            self._source_fingerprint = ""
+            self._load_error = type(exc).__name__
             return
+        path_signature = self._stat_signature(path_stat)
+        if not self._fingerprint_key and self._loaded_signature == path_signature:
+            return
+
+        try:
+            with self._path.open("r", encoding="utf-8") as source:
+                opened_stat = os.fstat(source.fileno())
+                text = source.read()
+        except (OSError, UnicodeError) as exc:
+            self._loaded = None
+            self._loaded_signature = None
+            self._source_fingerprint = ""
+            self._load_error = type(exc).__name__
+            return
+        opened_signature = self._stat_signature(opened_stat)
         try:
             self._loaded = self._parse(text)
-        except (ValueError, KeyError) as e:
-            self._load_error = f"unparseable ({type(e).__name__})"
+            self._load_error = ""
+            self._loaded_signature = opened_signature
+            self._source_fingerprint = self._fingerprint_source({
+                "kind": "file",
+                "name": self._path.name,
+                "version": self._version or "v1",
+                "size": opened_stat.st_size,
+                "mtime_ns": opened_stat.st_mtime_ns,
+            }, refs=self._loaded)
+        except (ValueError, KeyError) as exc:
+            self._loaded = None
+            self._loaded_signature = opened_signature
+            self._source_fingerprint = ""
+            self._load_error = f"unparseable ({type(exc).__name__})"
+
+    @staticmethod
+    def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int]:
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+    def _fingerprint_source(
+        self, marker: dict[str, object], *, refs: set[str] | None = None,
+    ) -> str:
+        document = {
+            "schema": "cosmaneura.direct-contract-source.v1",
+            **marker,
+        }
+        if self._fingerprint_key:
+            # Patient references are covered only by a secret-keyed digest;
+            # they never become a reversible low-entropy hash in persistence.
+            document["refs"] = sorted(refs or set())
+        value = json.dumps(
+            document, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        if self._fingerprint_key:
+            return hmac.new(self._fingerprint_key, value, hashlib.sha256).hexdigest()
+        return hashlib.sha256(value).hexdigest()
 
     @classmethod
     def _parse(cls, text: str) -> set[str]:
         stripped = text.lstrip()
         if stripped.startswith(("[", "{")):
             data = json.loads(stripped)
-            rows = data if isinstance(data, list) else data.get("patients", [])
-            return {cls._normalize(r if isinstance(r, str) else r.get("patient_ref", ""))
-                    for r in rows} - {""}
+            if isinstance(data, list):
+                rows = data
+            elif isinstance(data, dict) and isinstance(data.get("patients"), list):
+                rows = data["patients"]
+            else:
+                raise ValueError("JSON roster must be a list of patient references")
+            refs: set[str] = set()
+            for row in rows:
+                if isinstance(row, str):
+                    ref = row
+                elif isinstance(row, dict) and isinstance(row.get("patient_ref"), str):
+                    ref = row["patient_ref"]
+                else:
+                    raise ValueError("JSON roster contains an invalid patient row")
+                normalized = cls._normalize(ref)
+                if normalized:
+                    refs.add(normalized)
+            return refs
         reader = csv.DictReader(text.splitlines())
         if not reader.fieldnames or "patient_ref" not in reader.fieldnames:
             raise ValueError("CSV needs a patient_ref column")
@@ -153,10 +269,18 @@ class DirectContractList:
 
     def contains(self, patient_ref: str) -> Optional[bool]:
         """True / False, or None when the list is unavailable."""
-        self._ensure()
-        if self._loaded is None:
-            return None
-        return self._normalize(patient_ref) in self._loaded
+        present, _, _ = self.lookup(patient_ref)
+        return present
+
+    def lookup(self, patient_ref: str) -> tuple[Optional[bool], str, str]:
+        """Return answer, provenance, and fingerprint from one locked generation."""
+        with self._lock:
+            self._ensure()
+            present = (
+                None if self._loaded is None
+                else self._normalize(patient_ref) in self._loaded
+            )
+            return present, self._source_value(), self._fingerprint_value()
 
 
 def check_direct_contract(
@@ -172,14 +296,16 @@ def check_direct_contract(
     """
     roster = roster if roster is not None else DirectContractList()
     checked_at = (now or _default_now)()
-    present = roster.contains(patient_ref)
+    present, source, source_fingerprint = roster.lookup(patient_ref)
     if present is None:
         return DirectContractCheck(
             patient_ref=patient_ref, is_direct_contract=False, known=False,
-            source=roster.source, checked_at=checked_at)
+            source=source, source_fingerprint=source_fingerprint,
+            checked_at=checked_at)
     return DirectContractCheck(
         patient_ref=patient_ref, is_direct_contract=present, known=True,
-        source=roster.source, checked_at=checked_at)
+        source=source, source_fingerprint=source_fingerprint,
+        checked_at=checked_at)
 
 
 def _default_now() -> str:
