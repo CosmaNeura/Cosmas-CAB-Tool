@@ -29,9 +29,14 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import coder_feedback
+from .access_audit import (
+    AccessAuditMiddleware, AccessAuditStore, FileAccessAuditStore,
+    MemoryAccessAuditStore, DeniedAccessAuditor,
+)
+from .auth import AuthPrincipal, EntraAuthMiddleware
 from .billing_tab import build_billing_tab_view
 from .coder_feedback import EncounterFeedback, FeedbackStore
 from .completeness import OverrideRequiresReason, applicable_rulepack, check_note
@@ -40,6 +45,10 @@ from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
 from .orchestrator import BillingOrchestrator
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
+from .security import (
+    FixedWindowLimiter, PrincipalRateLimitMiddleware,
+    RequestBodyLimitMiddleware, StrictOriginMiddleware,
+)
 from .settings import Settings, get_settings
 
 router = APIRouter()
@@ -83,6 +92,20 @@ def _request_orchestrator(request: Request) -> BillingOrchestrator:
         orchestrator = get_orchestrator(_request_settings(request))
         request.app.state.orchestrator = orchestrator
     return orchestrator
+
+
+def _request_principal(request: Request) -> AuthPrincipal:
+    principal = getattr(request.state, "principal", None)
+    if not isinstance(principal, AuthPrincipal):
+        raise HTTPException(status_code=401, detail="authentication required")
+    return principal
+
+
+def _require_roles(request: Request, *roles: str) -> AuthPrincipal:
+    principal = _request_principal(request)
+    if not principal.has_any_role(roles):
+        raise HTTPException(status_code=403, detail="access is not permitted")
+    return principal
 
 
 # --------------------------------------------------------------------------- #
@@ -165,8 +188,9 @@ def _degraded_json(result: BillingResult) -> Optional[dict[str, str]]:
     return {"reason": d.reason, "detail": d.detail} if d else None
 
 
-def _coder_view_json(bundle: VisitBundle, result: BillingResult,
-                     settings: Settings | None = None) -> dict[str, Any]:
+def _coder_view_json(
+    bundle: VisitBundle, result: BillingResult, coder_id: str,
+) -> dict[str, Any]:
     card = result.provider_card
 
     def row(s: CodeSuggestion) -> dict[str, Any]:
@@ -186,7 +210,7 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult,
         "encounterId": bundle.encounter_id,
         "engineVersion": _ENGINE_VERSION,
         "submittedEm": bundle.submitted_em_code,
-        "coderId": (settings or get_settings()).coder_id,
+        "coderId": coder_id,
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
@@ -198,67 +222,69 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult,
 # --------------------------------------------------------------------------- #
 # Request models
 # --------------------------------------------------------------------------- #
-class ProcessRequest(BaseModel):
-    encounterId: str = "ADHOC-1"
-    intake: str = ""
-    transcript: str = ""
-    signedNote: str = ""
-    submittedEm: Optional[str] = None
-    encounterType: str = "office_established"
-    placeOfService: str = "11"
-    patientAge: int = 0
-    patientSex: str = "unknown"
-    userId: Optional[str] = None      # reviewer identity for learned preferences
+class StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-class CompletenessRequest(BaseModel):
-    note: str = ""
-    placeOfService: str = "10"
-    encounterType: str = "telehealth_established"
-    rulepack: Optional[str] = None
+class ProcessRequest(StrictRequest):
+    encounterId: str = Field(default="ADHOC-1", min_length=1, max_length=128)
+    intake: str = Field(default="", max_length=250_000)
+    transcript: str = Field(default="", max_length=500_000)
+    signedNote: str = Field(default="", max_length=250_000)
+    submittedEm: Optional[str] = Field(default=None, max_length=32)
+    encounterType: str = Field(default="office_established", max_length=64)
+    placeOfService: str = Field(default="11", max_length=8)
+    patientAge: int = Field(default=0, ge=0, le=130)
+    patientSex: str = Field(default="unknown", max_length=32)
+
+
+class CompletenessRequest(StrictRequest):
+    note: str = Field(default="", max_length=750_000)
+    placeOfService: str = Field(default="10", max_length=8)
+    encounterType: str = Field(default="telehealth_established", max_length=64)
+    rulepack: Optional[str] = Field(default=None, max_length=128)
     # rule_id -> reason. A blank reason is rejected (422): the reason is the
     # record of why the rule did not apply to this note.
     overrides: Optional[dict[str, str]] = None
 
 
-class ChaseDetectRequest(BaseModel):
-    today: str
+class ChaseDetectRequest(StrictRequest):
+    today: str = Field(min_length=1, max_length=32)
     # Raw CoverageSnapshot fields — the adapter boundary standing in for athenaNet.
-    snapshots: list[dict[str, Any]] = Field(default_factory=list)
+    snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=5_000)
 
 
-class ChaseActionRequest(BaseModel):
-    action: str                      # release|suppress|assign|log_attempt|submitted|verify
-    actor: str = ""                  # the person taking it; required by most actions
-    reason: str = ""
-    channel: Optional[str] = None
-    template_id: Optional[str] = None
-    outcome: Optional[str] = None
-    minutes_spent: float = 0.0
-    note: str = ""
-    athena_write_id: str = ""
-    eligibility_status: str = ""
+class ChaseActionRequest(StrictRequest):
+    action: str = Field(min_length=1, max_length=32)
+    assignee: str = Field(default="", max_length=128)
+    reason: str = Field(default="", max_length=4_000)
+    channel: Optional[str] = Field(default=None, max_length=32)
+    template_id: Optional[str] = Field(default=None, max_length=128)
+    outcome: Optional[str] = Field(default=None, max_length=128)
+    minutes_spent: float = Field(default=0.0, ge=0, le=1_440)
+    note: str = Field(default="", max_length=4_000)
+    athena_write_id: str = Field(default="", max_length=256)
+    eligibility_status: str = Field(default="", max_length=128)
 
 
-class DecisionModel(BaseModel):
-    kind: str
-    engine_code: Optional[str] = None
-    action: str
-    final_code: Optional[str] = None
-    reason_code: Optional[str] = None
-    note: str = ""
+class DecisionModel(StrictRequest):
+    kind: str = Field(min_length=1, max_length=32)
+    engine_code: Optional[str] = Field(default=None, max_length=32)
+    action: str = Field(min_length=1, max_length=32)
+    final_code: Optional[str] = Field(default=None, max_length=32)
+    reason_code: Optional[str] = Field(default=None, max_length=128)
+    note: str = Field(default="", max_length=4_000)
 
 
-class FeedbackModel(BaseModel):
-    encounter_id: str
-    coder_id: str
-    engine_version: str = _ENGINE_VERSION
-    submitted_em: Optional[str] = None
-    engine_em: Optional[str] = None
-    final_em: Optional[str] = None
-    decisions: list[DecisionModel] = Field(default_factory=list)
-    time_spent_seconds: Optional[float] = None
-    overall_note: str = ""
+class FeedbackModel(StrictRequest):
+    encounter_id: str = Field(min_length=1, max_length=128)
+    engine_version: str = Field(default=_ENGINE_VERSION, max_length=256)
+    submitted_em: Optional[str] = Field(default=None, max_length=32)
+    engine_em: Optional[str] = Field(default=None, max_length=32)
+    final_em: Optional[str] = Field(default=None, max_length=32)
+    decisions: list[DecisionModel] = Field(default_factory=list, max_length=500)
+    time_spent_seconds: Optional[float] = Field(default=None, ge=0, le=86_400)
+    overall_note: str = Field(default="", max_length=4_000)
 
 
 # --------------------------------------------------------------------------- #
@@ -315,6 +341,7 @@ def readiness(request: Request):
         return JSONResponse(status_code=503, content={"status": "warming"})
     try:
         chase_context["store"].healthcheck()
+        request.app.state.access_audit_store.healthcheck()
     except Exception:
         return JSONResponse(status_code=503, content={"status": "unavailable"})
     return {
@@ -358,15 +385,19 @@ def get_encounter(encounter_id: str) -> dict[str, Any]:
 
 
 @router.post("/api/encounters/{encounter_id}/billing")
-def bill_stored(request: Request, encounter_id: str,
-                user_id: Optional[str] = None) -> dict[str, Any]:
+def bill_stored(request: Request, encounter_id: str) -> dict[str, Any]:
     bundle = _get_bundle(encounter_id)
-    result = _request_orchestrator(request).process(bundle, user_id=user_id)
+    principal = _request_principal(request)
+    result = _request_orchestrator(request).process(
+        bundle, user_id=principal.user_id
+    )
     return _billing_json(bundle, result)
 
 
 @router.post("/api/billing")
 def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
+    principal = _request_principal(request)
+    request.state.audit_resource_id = req.encounterId
     bundle = VisitBundle(
         encounter_id=req.encounterId, patient_age=req.patientAge,
         patient_sex=req.patientSex, encounter_type=req.encounterType,
@@ -374,20 +405,19 @@ def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
         transcript=req.transcript, signed_note=req.signedNote,
         submitted_em_code=req.submittedEm,
     )
-    result = _request_orchestrator(request).process(bundle, user_id=req.userId)
+    result = _request_orchestrator(request).process(
+        bundle, user_id=principal.user_id
+    )
     return _billing_json(bundle, result)
 
 
 @router.get("/api/encounters/{encounter_id}/coder-view")
-def coder_view(request: Request, encounter_id: str,
-               user_id: Optional[str] = None) -> dict[str, Any]:
+def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
     bundle = _get_bundle(encounter_id)
     orch = _request_orchestrator(request)
-    settings = _request_settings(request)
-    uid = user_id or settings.coder_id
+    uid = _request_principal(request).user_id
     result = orch.process(bundle, user_id=uid)
-    view = _coder_view_json(bundle, result, settings)
-    view["coderId"] = uid
+    view = _coder_view_json(bundle, result, uid)
     # attach learned-history hints so the reviewer sees why a code was
     # refined or held ("you've declined this 3x")
     prefs = orch.preferences.for_user(uid)
@@ -401,12 +431,14 @@ def coder_view(request: Request, encounter_id: str,
 
 
 @router.get("/api/encounters/{encounter_id}/billing-tab")
-def billing_tab(request: Request, encounter_id: str, user_id: Optional[str] = None,
+def billing_tab(request: Request, encounter_id: str,
                 generated_at: str = "") -> dict[str, Any]:
     """The provider billing tab (F1): the same visit reorganised as a billing
     reference. The clinical note is never altered — this is a view over it."""
     bundle = _get_bundle(encounter_id)
-    result = _request_orchestrator(request).process(bundle, user_id=user_id)
+    result = _request_orchestrator(request).process(
+        bundle, user_id=_request_principal(request).user_id
+    )
     return build_billing_tab_view(
         bundle, result, engine_version=_ENGINE_VERSION, generated_at=generated_at)
 
@@ -434,9 +466,11 @@ def completeness(req: CompletenessRequest) -> dict[str, Any]:
 
 @router.post("/api/feedback")
 def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
+    principal = _require_roles(request, "Coder", "Admin")
+    request.state.audit_resource_id = fb.encounter_id
     store = get_feedback_store(_request_settings(request))
     record = EncounterFeedback(
-        encounter_id=fb.encounter_id, coder_id=fb.coder_id,
+        encounter_id=fb.encounter_id, coder_id=principal.user_id,
         engine_version=fb.engine_version, submitted_em=fb.submitted_em,
         engine_em=fb.engine_em, final_em=fb.final_em,
         decisions=[coder_feedback.CodeDecision(**d.model_dump()) for d in fb.decisions],
@@ -529,6 +563,7 @@ def _request_chase_context(request: Request) -> dict[str, Any]:
 def chase_worklist(request: Request, bucket: str = "", assignee: str = "",
                    needs_person: bool = False) -> dict[str, Any]:
     """The master list: one integrated view over missing, expired and eligibility."""
+    _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
     return {
         **ctx["store"].to_dict(bucket=bucket, assignee=assignee,
@@ -546,6 +581,7 @@ def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
     """
     from .chase import CoverageSnapshot, detect_all
 
+    _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
     snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
     found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
@@ -560,6 +596,7 @@ def chase_metrics(request: Request,
                   baseline_claims_held_monthly: Optional[int] = None) -> dict[str, Any]:
     from .chase.metrics import baseline_comparison
 
+    _require_roles(request, "BillingStaff", "Admin")
     return baseline_comparison(
         _request_chase_context(request)["store"].all_items(),
         baseline_minutes_per_card=baseline_minutes_per_card,
@@ -577,26 +614,28 @@ def chase_action(request: Request, chase_id: str,
     """
     from .chase import Channel
 
+    principal = _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
     store, runner, action = ctx["store"], ctx["runner"], req.action
+    actor = principal.user_id
 
     def transition(item):
         if action == "release":
-            runner.release(item, by=req.actor, reason=req.reason)
+            runner.release(item, by=actor, reason=req.reason)
         elif action == "suppress":
-            runner.suppress(item, by=req.actor, reason=req.reason)
+            runner.suppress(item, by=actor, reason=req.reason)
         elif action == "assign":
-            item.assignee = req.actor
+            item.assignee = req.assignee or actor
         elif action == "log_attempt":
             runner.log_staff_attempt(
                 item, channel=Channel(req.channel or "phone"),
-                template_id=req.template_id or "phone.call", actor=req.actor,
+                template_id=req.template_id or "phone.call", actor=actor,
                 outcome=req.outcome or "reached",
                 minutes_spent=req.minutes_spent, note=req.note)
         elif action == "submitted":
             runner.mark_submitted(item, note=req.note)
         elif action == "verify":
-            runner.close_verified(item, verified_by=req.actor,
+            runner.close_verified(item, verified_by=actor,
                                   athena_write_id=req.athena_write_id,
                                   eligibility_status=req.eligibility_status)
         else:
@@ -613,6 +652,7 @@ def chase_action(request: Request, chase_id: str,
 
 @router.get("/api/feedback/summary")
 def feedback_summary(request: Request) -> dict[str, Any]:
+    _require_roles(request, "Admin")
     feedbacks = get_feedback_store(_request_settings(request)).load()
     if not feedbacks:
         return {"encounters": 0, "summary": None, "tuningBacklog": [], "goldRows": 0}
@@ -637,6 +677,7 @@ async def _lifespan(application: FastAPI):
         # Force one database round trip so readiness also proves the durable
         # chase schema exists; a configured-but-unreachable store is not ready.
         application.state.chase_context["store"].healthcheck()
+        application.state.access_audit_store.healthcheck()
         orchestrator = get_orchestrator(settings)
         if not (
             orchestrator.ncci
@@ -664,9 +705,20 @@ def create_app(
     *,
     settings: Settings | None = None,
     frontend_dist: str | os.PathLike[str] | None = None,
+    access_audit_store: AccessAuditStore | None = None,
+    rate_limiter: FixedWindowLimiter | None = None,
+    auth_failure_limiter: FixedWindowLimiter | None = None,
 ) -> FastAPI:
     """Compose one API instance and its same-origin static frontend."""
     config = settings or get_settings()
+    audit_store = access_audit_store or (
+        FileAccessAuditStore(config.access_audit_path)
+        if config.environment in {"staging", "production"}
+        else MemoryAccessAuditStore()
+    )
+    principal_limiter = rate_limiter or FixedWindowLimiter()
+    failed_auth_limiter = auth_failure_limiter or FixedWindowLimiter()
+    denied_auditor = DeniedAccessAuditor(settings=config, store=audit_store)
     application = FastAPI(
         title="CosmaNeura Billing Engine",
         version="0.1.0",
@@ -677,15 +729,44 @@ def create_app(
     application.state.startup_error = None
     application.state.orchestrator = None
     application.state.chase_context = None
+    application.state.access_audit_store = audit_store
+    application.state.rate_limiter = principal_limiter
+    application.state.auth_failure_limiter = failed_auth_limiter
 
-    # P2 replaces this temporary development policy with exact configured
-    # origins and Entra-backed authorization. Compose binds localhost until it
-    # lands, and Azure ingress defaults private.
+    # Starlette's last-added middleware is outermost. Request order is:
+    # exact CORS -> origin -> auth -> audit -> principal rate -> body cap -> API.
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=config.max_request_bytes,
+    )
+    application.add_middleware(
+        PrincipalRateLimitMiddleware,
+        settings=config,
+        limiter=principal_limiter,
+    )
+    application.add_middleware(
+        AccessAuditMiddleware,
+        settings=config,
+        store=audit_store,
+    )
+    application.add_middleware(
+        EntraAuthMiddleware,
+        settings=config,
+        failure_limiter=failed_auth_limiter,
+        denied_auditor=denied_auditor,
+    )
+    application.add_middleware(
+        StrictOriginMiddleware,
+        allowed_origins=config.cors_origins,
+        denied_auditor=denied_auditor,
+    )
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=list(config.cors_origins),
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["Retry-After"],
+        allow_credentials=False,
     )
     application.include_router(router)
 

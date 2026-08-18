@@ -97,6 +97,8 @@ def test_built_frontend_is_same_origin_without_shadowing_api(tmp_path):
 def test_production_refuses_to_start_without_built_frontend(tmp_path):
     settings = Settings(
         environment="production",
+        auth_mode="container_apps",
+        entra_tenant_id="11111111-1111-4111-8111-111111111111",
         chase_store="postgres",
         database_url="postgresql://example.invalid/db",
         practice_id="practice-a",

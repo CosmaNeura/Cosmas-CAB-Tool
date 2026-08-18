@@ -63,7 +63,9 @@ itself is the audit record of *why* the engine behaves differently for a user.
 
 ## Where identity comes from
 
-The API accepts the reviewer identity as `userId` in `POST /api/billing`, or
-`?user_id=` on the stored-encounter and coder-view endpoints; the coder-review
-UI passes the coder id it displays. In production this should come from the
-authenticated session, not the client payload.
+The API derives reviewer identity only from the Microsoft Entra session
+validated by Azure Container Apps built-in authentication. The immutable Entra
+object ID keys feedback and preferences; the allowed tenant and application
+role are validated before the engine runs. `userId`, `coder_id`, `actor`,
+`?user_id=`, and `?coder_id=` are explicitly rejected so an older client cannot
+silently believe that an identity spoof succeeded. See `ACCESS_CONTROL.md`.

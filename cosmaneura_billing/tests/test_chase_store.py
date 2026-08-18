@@ -90,6 +90,9 @@ def test_production_refuses_the_restart_unsafe_memory_store():
     with pytest.raises(RuntimeError, match="forbidden in production"):
         chase_store_from_env({
             "COSMANEURA_ENV": "production",
+            "COSMANEURA_AUTH_MODE": "container_apps",
+            "COSMANEURA_ENTRA_TENANT_ID": "11111111-1111-4111-8111-111111111111",
+            "COSMANEURA_PRACTICE_ID": "practice-test",
             "COSMANEURA_CHASE_STORE": "memory",
         })
 

@@ -19,8 +19,21 @@ param practiceName string = 'your care team'
 @description('Secure card-upload URL used by chase templates.')
 param uploadUrl string = 'https://example.invalid/insurance'
 
-@description('Remain false until P2 authentication is deployed and verified.')
+@description('Remain false until Entra assignment and the acceptance checks are verified.')
 param externalIngress bool = false
+
+@description('Microsoft Entra tenant that owns the single-tenant staff application.')
+param entraTenantId string = tenant().tenantId
+
+@description('Application (client) ID of the staff-facing Entra app registration.')
+param entraClientId string
+
+@secure()
+@description('Entra client secret. Supplied only through a secure untracked parameter and stored in Key Vault.')
+param entraClientSecret string
+
+@description('Key Vault secret name used by Container Apps built-in authentication.')
+param entraClientSecretKeyVaultSecretName string = 'entra-client-secret'
 
 @minValue(1)
 @maxValue(3)
@@ -45,10 +58,14 @@ var keyVaultName = take('${compactPrefix}${suffix}', 24)
 var appName = '${namePrefix}-api-${suffix}'
 var migrationJobName = '${namePrefix}-migrate-${suffix}'
 var image = '${registry.properties.loginServer}/cosmaneura-billing:${imageTag}'
+var entraSecretSettingName = 'microsoft-provider-authentication-secret'
+var entraIssuer = '${az.environment().authentication.loginEndpoint}${entraTenantId}/v2.0'
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
   name: environmentName
 }
+
+var applicationOrigin = 'https://${appName}.${environment.properties.defaultDomain}'
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: identityName
@@ -60,6 +77,15 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
+}
+
+resource entraClientSecretVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: entraClientSecretKeyVaultSecretName
+  properties: {
+    contentType: 'Container Apps Microsoft Entra authentication client secret'
+    value: entraClientSecret
+  }
 }
 
 resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
@@ -166,6 +192,11 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-url'
           identity: identity.id
         }
+        {
+          name: entraSecretSettingName
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${entraClientSecretKeyVaultSecretName}'
+          identity: identity.id
+        }
       ]
     }
     template: {
@@ -185,6 +216,42 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             {
               name: 'COSMANEURA_FRONTEND_DIST'
               value: '/app/static'
+            }
+            {
+              name: 'COSMANEURA_AUTH_MODE'
+              value: 'container_apps'
+            }
+            {
+              name: 'COSMANEURA_ENTRA_TENANT_ID'
+              value: entraTenantId
+            }
+            {
+              name: 'COSMANEURA_ALLOWED_ROLES'
+              value: 'Admin,BillingStaff,Coder,Provider'
+            }
+            {
+              name: 'COSMANEURA_CORS_ORIGINS'
+              value: applicationOrigin
+            }
+            {
+              name: 'COSMANEURA_MAX_REQUEST_BYTES'
+              value: '1048576'
+            }
+            {
+              name: 'COSMANEURA_INFERENCE_REQUESTS_PER_MINUTE'
+              value: '10'
+            }
+            {
+              name: 'COSMANEURA_GENERAL_REQUESTS_PER_MINUTE'
+              value: '60'
+            }
+            {
+              name: 'COSMANEURA_AUTH_FAILURES_PER_MINUTE'
+              value: '30'
+            }
+            {
+              name: 'COSMANEURA_ACCESS_AUDIT_PATH'
+              value: '/tmp/access_audit.jsonl'
             }
             {
               name: 'COSMANEURA_MIGRATIONS_DIR'
@@ -272,8 +339,46 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
       }
     }
   }
+  dependsOn: [
+    entraClientSecretVault
+  ]
+}
+
+resource applicationAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = {
+  parent: application
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'Return401'
+      excludedPaths: [
+        '/'
+        '/index.html'
+        '/favicon.ico'
+        '/assets/*'
+        '/api/live'
+        '/api/ready'
+      ]
+    }
+    httpSettings: {
+      requireHttps: true
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: entraClientId
+          clientSecretSettingName: entraSecretSettingName
+          openIdIssuer: entraIssuer
+        }
+      }
+    }
+  }
 }
 
 output applicationName string = application.name
 output migrationJobName string = migrationJob.name
 output ingressExternal bool = externalIngress
+output applicationFqdn string = application.properties.configuration.ingress.fqdn

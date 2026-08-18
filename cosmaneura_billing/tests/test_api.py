@@ -1,4 +1,7 @@
 """The FastAPI service: every endpoint, against the frontend data contracts."""
+import base64
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -6,6 +9,25 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 import cosmaneura_billing.api as api
+from cosmaneura_billing.settings import Settings
+
+
+TENANT_ID = "11111111-1111-4111-8111-111111111111"
+SMITH_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+JONES_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def _principal_header(user_id: str, *roles: str) -> dict[str, str]:
+    payload = {
+        "auth_typ": "aad",
+        "claims": [
+            {"typ": "oid", "val": user_id},
+            {"typ": "tid", "val": TENANT_ID},
+            *({"typ": "roles", "val": role} for role in roles),
+        ],
+    }
+    encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+    return {"X-MS-CLIENT-PRINCIPAL": encoded}
 
 
 @pytest.fixture()
@@ -104,7 +126,7 @@ def test_coder_view_contract(client):
 
 def test_feedback_roundtrip_and_summary(client):
     payload = {
-        "encounter_id": "ENC-100237", "coder_id": "coder_T",
+        "encounter_id": "ENC-100237",
         "engine_version": "test", "submitted_em": "99213",
         "engine_em": "99214", "final_em": "99214",
         "decisions": [
@@ -147,17 +169,32 @@ def test_payer_denials_endpoint(client):
     assert p["issuers"][0]["denialRate"] >= p["issuers"][-1]["denialRate"]
 
 
-def test_reviewer_rejections_influence_future_runs_for_that_reviewer(client):
+def test_reviewer_rejections_influence_future_runs_for_that_reviewer(tmp_path):
     """The full loop: three rejections of K59.00 by one reviewer -> the engine
     holds it on their next run (with history), while others are unaffected."""
+    settings = Settings(
+        environment="test",
+        auth_mode="container_apps",
+        entra_tenant_id=TENANT_ID,
+        practice_id="practice-test",
+        feedback_path=str(tmp_path / "feedback.jsonl"),
+    )
+    client = TestClient(api.create_app(
+        settings=settings, frontend_dist=tmp_path / "missing-frontend",
+    ))
+    smith = _principal_header(SMITH_ID, "Coder")
+    jones = _principal_header(JONES_ID, "Coder")
     reject = {"kind": "ICD10", "engine_code": "K59.00", "action": "reject",
               "final_code": None, "reason_code": "dx_not_supported_by_doc"}
     for i in range(3):
-        client.post("/api/feedback", json={
-            "encounter_id": f"E{i}", "coder_id": "dr_smith",
-            "engine_em": "99214", "final_em": "99214", "decisions": [reject]})
+        response = client.post("/api/feedback", headers=smith, json={
+            "encounter_id": f"E{i}", "engine_em": "99214",
+            "final_em": "99214", "decisions": [reject]})
+        assert response.status_code == 200
 
-    j = client.post("/api/encounters/ENC-100237/billing?user_id=dr_smith").json()
+    j = client.post(
+        "/api/encounters/ENC-100237/billing", headers=smith,
+    ).json()
     captured = {c["code"] for c in j["captured"]}
     assert "K59.00" not in captured
     held = [c for c in j["declined"] if c["code"] == "K59.00"]
@@ -166,10 +203,15 @@ def test_reviewer_rejections_influence_future_runs_for_that_reviewer(client):
                for a in j["audit"])
 
     # a different reviewer still gets the base behavior
-    j2 = client.post("/api/encounters/ENC-100237/billing?user_id=dr_jones").json()
+    j2 = client.post(
+        "/api/encounters/ENC-100237/billing", headers=jones,
+    ).json()
     assert "K59.00" in {c["code"] for c in j2["captured"]}
 
     # and the coder view surfaces the learned history
-    cv = client.get("/api/encounters/ENC-100237/coder-view?user_id=dr_smith").json()
+    cv = client.get(
+        "/api/encounters/ENC-100237/coder-view", headers=smith,
+    ).json()
+    assert cv["coderId"] == SMITH_ID
     row = next(w for w in cv["withheld"] if w["code"] == "K59.00")
     assert "declined K59.00 3x" in row["history"]

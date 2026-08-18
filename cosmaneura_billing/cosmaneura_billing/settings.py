@@ -12,6 +12,8 @@ import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
+from uuid import UUID
 
 
 class SettingsError(ValueError):
@@ -31,6 +33,9 @@ _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
 _CHASE_STORES = frozenset({"memory", "postgres"})
 _APPROVAL_MODES = frozenset({"per_policy", "per_message"})
+_AUTH_MODES = frozenset({"disabled", "container_apps"})
+_DEFAULT_ALLOWED_ROLES = ("Admin", "BillingStaff", "Coder", "Provider")
+_LOCAL_CORS_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
 
 
 def _parse_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
@@ -65,6 +70,16 @@ def _optional(env: Mapping[str, str], name: str) -> str | None:
     return value if value and value.strip() else None
 
 
+def _parse_csv(
+    env: Mapping[str, str], name: str, default: tuple[str, ...],
+) -> tuple[str, ...]:
+    raw = env.get(name)
+    if raw is None:
+        return default
+    values = tuple(dict.fromkeys(part.strip() for part in raw.split(",") if part.strip()))
+    return values
+
+
 @dataclass(frozen=True, repr=False)
 class AMACredentials:
     """Complete credentials for the AMA CPT Zip API."""
@@ -90,6 +105,18 @@ class Settings:
     log_level: str = "INFO"
     frontend_dist: str | None = None
     migrations_dir: str | None = None
+
+    auth_mode: str = "disabled"
+    entra_tenant_id: str = ""
+    allowed_roles: tuple[str, ...] = _DEFAULT_ALLOWED_ROLES
+    development_user_id: str = "local-developer"
+    development_roles: tuple[str, ...] = ("Admin",)
+    cors_origins: tuple[str, ...] = ()
+    max_request_bytes: int = 1_048_576
+    inference_requests_per_minute: int = 10
+    general_requests_per_minute: int = 60
+    auth_failures_per_minute: int = 30
+    access_audit_path: str = "access_audit.jsonl"
 
     anthropic_api_key: str = field(default="", repr=False, metadata={"secret": True})
     anthropic_model: str = "claude-opus-5"
@@ -131,7 +158,6 @@ class Settings:
     preference_min_count: int = 3
     preference_global_min_users: int = 3
     preferences_enabled: bool = True
-    coder_id: str = "coder_A"
 
     def __post_init__(self) -> None:
         present = {
@@ -162,6 +188,60 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_CHASE_APPROVAL must be per_policy or per_message"
             )
+        if self.auth_mode not in _AUTH_MODES:
+            raise SettingsError(
+                "COSMANEURA_AUTH_MODE must be disabled or container_apps"
+            )
+        if self.environment in {"staging", "production"} and self.auth_mode == "disabled":
+            raise SettingsError(
+                "authentication cannot be disabled in staging or production"
+            )
+        if self.auth_mode == "container_apps":
+            try:
+                UUID(self.entra_tenant_id)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise SettingsError(
+                    "COSMANEURA_ENTRA_TENANT_ID must be a tenant UUID"
+                ) from exc
+            if not self.practice_id.strip():
+                raise SettingsError(
+                    "COSMANEURA_PRACTICE_ID is required for authenticated access"
+                )
+        if not self.allowed_roles or any(not role.strip() for role in self.allowed_roles):
+            raise SettingsError("COSMANEURA_ALLOWED_ROLES must not be empty")
+        if not set(self.allowed_roles).issubset(_DEFAULT_ALLOWED_ROLES):
+            raise SettingsError(
+                "COSMANEURA_ALLOWED_ROLES contains an unknown application role"
+            )
+        if not self.development_user_id.strip() or not self.development_roles:
+            raise SettingsError("development authentication identity must not be empty")
+        if not set(self.development_roles).issubset(_DEFAULT_ALLOWED_ROLES):
+            raise SettingsError("COSMANEURA_DEV_ROLES contains an unknown application role")
+        for origin in self.cors_origins:
+            parsed = urlsplit(origin)
+            if (
+                origin == "*"
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise SettingsError(
+                    "COSMANEURA_CORS_ORIGINS must contain exact HTTP(S) origins"
+                )
+        for name, value in (
+            ("COSMANEURA_MAX_REQUEST_BYTES", self.max_request_bytes),
+            ("COSMANEURA_INFERENCE_REQUESTS_PER_MINUTE", self.inference_requests_per_minute),
+            ("COSMANEURA_GENERAL_REQUESTS_PER_MINUTE", self.general_requests_per_minute),
+            ("COSMANEURA_AUTH_FAILURES_PER_MINUTE", self.auth_failures_per_minute),
+        ):
+            if value < 1:
+                raise SettingsError(f"{name} must be a positive integer")
+        if not self.access_audit_path.strip():
+            raise SettingsError("COSMANEURA_ACCESS_AUDIT_PATH must not be empty")
         if self.preference_min_count < 1:
             raise SettingsError("COSMANEURA_PREF_MIN must be a positive integer")
         if self.preference_global_min_users < 1:
@@ -173,15 +253,47 @@ class Settings:
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
         """Parse and validate settings from ``environ`` (the process by default)."""
         env = os.environ if environ is None else environ
+        environment = (env.get("COSMANEURA_ENV") or "development").strip().lower()
         cache_value = env.get("XDG_CACHE_HOME")
         cache_home = (
             Path(cache_value) if cache_value else Path.home() / ".cache"
         )
         return cls(
-            environment=(env.get("COSMANEURA_ENV") or "development").strip().lower(),
+            environment=environment,
             log_level=(env.get("COSMANEURA_LOG_LEVEL") or "INFO").strip().upper(),
             frontend_dist=_optional(env, "COSMANEURA_FRONTEND_DIST"),
             migrations_dir=_optional(env, "COSMANEURA_MIGRATIONS_DIR"),
+            auth_mode=(env.get("COSMANEURA_AUTH_MODE") or "disabled").strip().lower(),
+            entra_tenant_id=env.get("COSMANEURA_ENTRA_TENANT_ID", "").strip(),
+            allowed_roles=_parse_csv(
+                env, "COSMANEURA_ALLOWED_ROLES", _DEFAULT_ALLOWED_ROLES
+            ),
+            development_user_id=(
+                env.get("COSMANEURA_DEV_USER_ID") or "local-developer"
+            ),
+            development_roles=_parse_csv(
+                env, "COSMANEURA_DEV_ROLES", ("Admin",)
+            ),
+            cors_origins=_parse_csv(
+                env,
+                "COSMANEURA_CORS_ORIGINS",
+                _LOCAL_CORS_ORIGINS if environment in {"development", "test"} else (),
+            ),
+            max_request_bytes=_parse_positive_int(
+                env, "COSMANEURA_MAX_REQUEST_BYTES", 1_048_576
+            ),
+            inference_requests_per_minute=_parse_positive_int(
+                env, "COSMANEURA_INFERENCE_REQUESTS_PER_MINUTE", 10
+            ),
+            general_requests_per_minute=_parse_positive_int(
+                env, "COSMANEURA_GENERAL_REQUESTS_PER_MINUTE", 60
+            ),
+            auth_failures_per_minute=_parse_positive_int(
+                env, "COSMANEURA_AUTH_FAILURES_PER_MINUTE", 30
+            ),
+            access_audit_path=(
+                env.get("COSMANEURA_ACCESS_AUDIT_PATH") or "access_audit.jsonl"
+            ),
             anthropic_api_key=env.get("ANTHROPIC_API_KEY", ""),
             anthropic_model=env.get("ANTHROPIC_MODEL") or "claude-opus-5",
             anthropic_effort=env.get("ANTHROPIC_EFFORT") or "high",
@@ -227,7 +339,6 @@ class Settings:
                 env, "COSMANEURA_PREF_GLOBAL_USERS", 3
             ),
             preferences_enabled=_parse_bool(env, "COSMANEURA_PREFS", True),
-            coder_id=env.get("COSMANEURA_CODER_ID") or "coder_A",
         )
 
     @property

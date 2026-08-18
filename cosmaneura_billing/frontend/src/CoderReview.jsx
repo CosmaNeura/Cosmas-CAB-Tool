@@ -145,7 +145,7 @@ export default function CoderReview({ encounterId, live }) {
   useEffect(() => {
     setEngine(null); setDone(null); setError(null); setAdded([]); setSeconds(0);
     (async () => {
-      let eng = FALLBACK_ENGINE;
+      let eng = live ? null : FALLBACK_ENGINE;
       if (live) {
         try {
           eng = await api(`/api/encounters/${encodeURIComponent(encounterId)}/coder-view`);
@@ -153,6 +153,7 @@ export default function CoderReview({ encounterId, live }) {
           setError(`could not load coder view: ${e.message}`);
         }
       }
+      if (!eng) return;
       const init = {};
       if (eng.em) init.em = { action: "accept", final: eng.em.code, reason: null };
       (eng.dx || []).forEach((r) => { init[r.id] = { action: "accept", final: r.code, reason: null }; });
@@ -165,6 +166,8 @@ export default function CoderReview({ encounterId, live }) {
   useEffect(() => { const t = setInterval(() => setSeconds((s) => s + 1), 1000); return () => clearInterval(t); }, []);
 
   if (!engine) {
+    // UI SEAM (P2): never turn an expired/denied session into a mock claim.
+    if (error) return <p>{error}</p>;
     return (
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
         <RefreshCw size={16} className="animate-spin" /> Pre-coding encounter {encounterId}…
@@ -208,7 +211,7 @@ export default function CoderReview({ encounterId, live }) {
     });
     added.forEach((a) => { if (a.code) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: a.code, reason_code: "dx_missed_by_engine", note: a.note || "" }); });
     const payload = {
-      encounter_id: engine.encounterId, coder_id: engine.coderId, engine_version: engine.engineVersion,
+      encounter_id: engine.encounterId, engine_version: engine.engineVersion,
       submitted_em: engine.submittedEm, engine_em: engine.em?.code || null, final_em: dec.em?.final || null,
       decisions, time_spent_seconds: seconds, overall_note: "",
     };

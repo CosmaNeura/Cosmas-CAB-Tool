@@ -19,6 +19,8 @@ const tab = (active) =>
 export default function App() {
   const [view, setView] = useState("billing");          // billing | coder
   const [health, setHealth] = useState(null);           // null = probing, false = offline
+  const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
+  const [serviceError, setServiceError] = useState(null);
   const [encounters, setEncounters] = useState([]);
   const [selected, setSelected] = useState("ENC-100237");
 
@@ -30,12 +32,38 @@ export default function App() {
         const encs = await api("/api/encounters");
         setEncounters(encs);
         if (encs.length && !encs.some((e) => e.id === selected)) setSelected(encs[0].id);
-      } catch {
-        setHealth(false);
+      } catch (error) {
+        if (error?.status === 401 || error?.status === 403) {
+          setAuthStatus(error.status);
+        } else if (error?.status) {
+          setServiceError(error.status);
+        } else {
+          setHealth(false);
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // UI SEAM (P2): Container Apps owns the Entra session. Keep this state
+  // deliberately minimal so the separate UI work can replace its presentation
+  // without changing the authentication boundary or reintroducing mock claims.
+  if (authStatus) {
+    return (
+      <main>
+        <p>{authStatus === 401 ? "Sign in is required." : "Your account is not assigned access to this pilot."}</p>
+        {authStatus === 401 && <a href="/.auth/login/aad?post_login_redirect_uri=/">Sign in with Microsoft</a>}
+      </main>
+    );
+  }
+
+  if (serviceError) {
+    return (
+      <main>
+        <p>Billing service unavailable (HTTP {serviceError}). No mock claim was loaded.</p>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900"
@@ -93,9 +121,13 @@ export default function App() {
           )}
         </div>
 
-        {view === "billing"
-          ? <BillingReview encounterId={selected} live={!!health} />
-          : <CoderReview encounterId={selected} live={!!health} />}
+        {health === null ? (
+          <p>Connecting to the billing service…</p>
+        ) : view === "billing" ? (
+          <BillingReview encounterId={selected} live={Boolean(health)} />
+        ) : (
+          <CoderReview encounterId={selected} live={Boolean(health)} />
+        )}
 
         <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-400">
           <Info size={12} />

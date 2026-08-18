@@ -7,6 +7,9 @@
     "practiceId": { "value": "synthetic-pilot" },
     "practiceName": { "value": "Your Care Team" },
     "uploadUrl": { "value": "https://example.invalid/insurance" },
+    "entraTenantId": { "value": "REPLACE_WITH_ENTRA_TENANT_UUID" },
+    "entraClientId": { "value": "REPLACE_WITH_ENTRA_APPLICATION_CLIENT_UUID" },
+    "entraClientSecret": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
     "externalIngress": { "value": false }
   }
 }
