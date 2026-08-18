@@ -1,6 +1,7 @@
 """Deployment-store configuration fails closed before serving requests."""
 import pytest
 
+import cosmaneura_billing.settings as settings_module
 from cosmaneura_billing.api import create_app
 from cosmaneura_billing.settings import Settings, SettingsError
 
@@ -30,6 +31,23 @@ def test_deployed_state_and_chase_share_the_runtime_database():
     assert settings.state_store == "postgres"
     assert settings.chase_store == "postgres"
     assert settings.chase_dsn == settings.database_url
+
+
+def test_queryless_database_url_skips_version_sensitive_empty_query_parser(
+    monkeypatch,
+):
+    def reject_empty_query(value, **_kwargs):
+        if not value:
+            raise AssertionError("empty strict queries differ across Python versions")
+        return []
+
+    monkeypatch.setattr(settings_module, "parse_qsl", reject_empty_query)
+
+    settings = _production()
+
+    assert settings.database_url == (
+        "postgresql://cosmaneura_app@primary.invalid/db"
+    )
 
 
 def test_deployed_app_rejects_injected_non_postgres_stores():

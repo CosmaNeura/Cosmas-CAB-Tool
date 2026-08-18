@@ -197,6 +197,8 @@ def test_ci_compiles_both_bicep_templates_without_deploying():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "azure/setup-bicep@v2" in workflow
-    assert "bicep build infra/foundation.bicep --stdout" in workflow
-    assert "bicep build infra/app.bicep --stdout" in workflow
+    assert "az bicep install --version v0.46.1" in workflow
+    assert (
+        "az bicep build --file infra/foundation.bicep --stdout" in workflow
+    )
+    assert "az bicep build --file infra/app.bicep --stdout" in workflow
