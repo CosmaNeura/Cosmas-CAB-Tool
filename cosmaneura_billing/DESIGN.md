@@ -1,8 +1,8 @@
 # CosmaNeura agentic billing layer — design & decisions
 
 This document explains what I built on top of Homen's prototype, how it works,
-the one place I changed the brief, and a security item you should act on this
-week. It is written to be read by you, not just engineers.
+the one place I changed the brief, and the current security boundary. It is
+written to be read by you, not just engineers.
 
 ## What the prototype already is
 
@@ -110,36 +110,58 @@ practice currently under-codes, this build does exactly that and we are aligned.
 If you did mean steering the encounter, that is the one thing I'd push back on,
 and I'd want to talk it through before building it.
 
-## Security item — act on this
+## Security item — historical credential incident
 
-The prototype repo commits live credentials: an OpenAI key file
-(`openaiapikey.txt`), a `.env`, an OpenAI organization id, and a hard-coded
-Pinecone API key inside `feature3`. Anyone with the repo has them. These should be
-rotated now, removed from the git history (not just deleted in a new commit), and
-moved to a secrets manager. For a company handling patient data this is both a
-security and a compliance exposure.
+The 2023 prototype previously exposed an OpenAI key file, a `.env`, an OpenAI
+organization id, and a hard-coded Pinecone API key. The Aug 17 preflight verified
+that those credentials were rotated and no credential remains in this repo's git
+history. Keep `.env`, downloaded data, and credentials outside the repository;
+the deployed billing engine uses managed identities and secret-scoped grants
+rather than tracked credentials.
 
 ## What is real vs. stubbed, and the path to production
 
 Real in this build: the agent architecture and orchestration; the rule-based E/M
 leveling; the ICD-10/CCSR lookup running on the prototype's authentic AHRQ data;
 the guardrail invariant and its proof; the two role views and the typed feedback
-loop. Stubbed for offline running: the clinical fact extraction uses a
-deterministic model so the demo runs with no key — swap in `AnthropicLLM` (already
-written) for real inference by setting `ANTHROPIC_API_KEY`.
+loop. Stubbed for offline running: clinical fact extraction uses a deterministic
+model so the demo runs with no network access. The Azure pilot's only live
+extraction adapter is `AzureOpenAILLM`, targeting a dedicated, private North
+Central US Azure OpenAI account and the pinned `gpt-5.6-sol` 2026-07-09
+deployment. It is managed-identity-only and remains disabled unless the explicit
+enable flag and complete endpoint/deployment/model configuration are present;
+there is no model API key or silent provider fallback.
+
+The adapter selects strict JSON Schema Structured Outputs for locally compatible
+schemas and selects JSON-object mode up front for schemas outside the supported
+strict subset. Both paths are validated again in deterministic Python, and a
+provider 4xx is terminal rather than a trigger for a weaker retry. OpenAI
+documents the API behavior and the difference from JSON mode in its
+[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+Azure hosting, private networking, Entra authorization, model availability,
+quota, and data-zone behavior are Microsoft Azure operational concerns. Live
+catalog and ARM validation passed for the proposed resource shape, but both the
+strict-schema request and JSON-object fallback still require a synthetic live
+data-plane acceptance run before inference can be enabled.
+
+Real chart text remains prohibited until the executed Microsoft agreement/BAA
+is verified to cover the selected Azure OpenAI service and US data zone, its
+data-processing and retention posture is documented, and private-network,
+managed-identity, logging/redaction, and deployment acceptance are green.
 
 Before this is production software you will need: a CPT license from the AMA for
 the official code descriptors (the code numbers are usable, the long descriptors
 are licensed — this code references codes by number with short generic labels on
 purpose); real payer-specific edit rules (NCCI/LCD) behind the denial agent; a
-HIPAA posture (BAAs with every model and infra vendor, PHI handling, audit
+HIPAA posture (applicable service-specific agreements/BAAs, PHI handling, audit
 logging, access controls); and a certified-coder review loop during rollout to
 calibrate the agents against human coders before any claim goes out unattended.
 
 ## Suggested next steps
 
-A clickable provider card and biller worksheet wired to this engine (I can build
-the front end next); connecting the feedback events to the existing intake chatbot
-so the loop actually closes; and a small validation set of de-identified encounters
-scored against a certified coder to measure capture accuracy and the under-coding
-recovery rate, which is the metric that will sell this.
+After approval of the Azure OpenAI cost-plan addendum, provision the private
+resource with application inference still disabled; complete synthetic
+strict-schema, JSON-object, networking, identity, telemetry, and log-scanner
+acceptance; then build a small validation set of de-identified encounters scored
+against a certified coder. Real PHI and model enablement remain separate
+approvals after those technical checks.

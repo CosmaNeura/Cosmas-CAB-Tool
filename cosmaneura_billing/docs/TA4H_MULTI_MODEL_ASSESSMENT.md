@@ -1,6 +1,13 @@
 # Assessment: Adding Azure Text Analytics for Health as a Second Billing-Analysis Model
 
-**Date:** 2026-08-19
+**Date:** 2026-08-19 · **Updated:** 2026-08-19, after merging `main`
+
+> **Two facts in this assessment were superseded while it was being written.** The pipeline no
+> longer calls Anthropic's public API — inference is now private Azure OpenAI over managed
+> identity, disabled by default — and the Azure footprint (Bicep, Entra auth, PostgreSQL,
+> observability) now exists. Both changes make the case for TA4H *stronger*, not weaker: the
+> second engine reuses the same tenant, the same managed identity, and the same token scope.
+> The paragraphs below are corrected; the conclusions are unchanged.
 **Question:** Can we synthesize Azure AI Language "Text Analytics for health" (TA4H) alongside our
 own billing-analysis engine? Is it covered under our Azure subscription, HIPAA-compliant,
 non-disruptive to what we've built, and actually valuable?
@@ -61,11 +68,11 @@ Sources: [TA4H overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azu
   / pricing calculator for our region before budgeting.** Order-of-magnitude: clinical NLP
   APIs in this class price such that a typical multi-page encounter costs cents, not dollars —
   immaterial next to the LLM calls we already make per encounter, but confirm the number.
-- **Caveat that matters more than price**: this repo currently has *no* Azure resources at all
-  (no hosting, no Postgres, nothing provisioned — Azure is the documented intent in
-  `migrations/README.md`, not the current state). "Covered under my subscription" is true the
-  moment a Language resource is created in it; TA4H may be the sensible trigger to stand up
-  the Azure footprint we already planned.
+- **Caveat that matters more than price**: ~~this repo currently has no Azure resources~~ — as
+  of `main` the Azure footprint exists (Bicep templates, Entra auth, PostgreSQL, observability),
+  so "covered under my subscription" is true the moment a Language resource is added to the
+  existing resource group and the API's managed identity is granted read access on it. No new
+  subscription, contract, or secret is involved.
 
 ## 3. HIPAA posture
 
@@ -84,11 +91,12 @@ Sources: [TA4H overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azu
 - **Shared responsibility**: BAA eligibility ≠ compliance. Our obligations (access control,
   encryption, audit logging, minimum necessary) are unchanged and already written down in
   `VALIDATION_PROTOCOL.md` §5.
-- **Comparative note**: today the pipeline sends the *entire* visit bundle to Anthropic's
-  public API (`llm.py`), and our own docs say "de-identified notes only until a BAA is in
-  place." A TA4H call inside our own tenant under the default Microsoft BAA is a *stronger*
-  PHI posture than the status quo, not a weaker one — and it reuses the exact "existing cloud
-  BAA, no new subprocessor" argument we used to justify replacing Pinecone with pgvector.
+- **Comparative note** (corrected): the pipeline no longer calls a public model API. Inference
+  is private Azure OpenAI over managed identity, disabled by default. TA4H therefore adds **no
+  new trust boundary at all** — same tenant, same Microsoft BAA, same managed identity, same
+  `cognitiveservices.azure.com` token scope, no new subprocessor and no new secret. This is a
+  stronger version of the argument used to replace Pinecone with pgvector, not a new exception
+  to it.
 
 ## 4. Will it break what we've built? No — if integrated at the right seam
 
@@ -97,9 +105,9 @@ The architecture is unusually well suited to this:
 - Every stage after `CodingAgent` is a pure `list[CodeSuggestion] → list[CodeSuggestion]`
   transform (evidence verification, documentation integrity, preferences, compliance
   guardrail, denial risk). A second producer of suggestions flows through all of it unchanged.
-- `BillingOrchestrator.__init__` already injects every collaborator **except** the coder.
-  One-line seam to add: a `coding=` (and `secondary_coding=`) constructor parameter
-  (`orchestrator.py:24-25`; the coder is currently hard-instantiated at `:38`).
+- `BillingOrchestrator.__init__` injected every collaborator **except** the coder; the
+  implementation adds `coding=`, `secondary_coding=` and `ta4h=` parameters, alongside the
+  `settings=` parameter `main` introduced.
 - TA4H returns **character offsets** for every entity — evidence quotes built from offsets
   verify at similarity 1.0 against `evidence.py`'s verifier *by construction*. Our
   hallucination firewall becomes a formality for TA4H output instead of a filter.
@@ -161,9 +169,10 @@ VisitBundle ──┬── CodingAgent (Claude: facts + concepts)      ──�
 - **Consensus policy**: union by normalized code; both-engines → eligible for `captured`
   (guardrail still gates); single-engine → `needs_review` with an agreement badge in the coder
   UI; facts merged element-wise-minimum for MDM inputs.
-- **Config**: `AZURE_LANGUAGE_ENDPOINT` / `AZURE_LANGUAGE_KEY` (managed identity once hosted
-  in Azure); absent → engine silently disabled, current behavior byte-identical. `loggingOptOut`
-  always on.
+- **Config**: `COSMANEURA_AZURE_LANGUAGE_ENABLED` + `AZURE_LANGUAGE_ENDPOINT` +
+  `AZURE_CLIENT_ID`. **Managed identity only** — key-based auth is prohibited, matching the
+  Azure OpenAI stance, so no new secret enters the deployment. Not enabled → engine off,
+  current behavior byte-identical. `loggingOptOut` always on, not configurable.
 - **Rollout**: (1) shadow mode — TA4H runs, results logged, nothing surfaced; measure agreement
   and lift against the frozen gold set per `VALIDATION_PROTOCOL.md` §11/§13 on the F0 free
   tier; (2) coder-review surfacing; (3) consensus gating. Ship nothing to `captured` from TA4H

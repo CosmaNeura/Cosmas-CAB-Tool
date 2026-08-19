@@ -22,6 +22,17 @@ them one-directional:
    primary engine proposed it confidently. Rejection is always allowed; that is
    the direction of travel this whole system is built to permit.
 
+Two consequences of those rules that are easy to get wrong, and that
+``consensus_fuzz`` exists to keep honest:
+
+  * the secondary engine's suggestions are filtered to diagnoses before anything
+    downstream sees them. The guardrail's E/M branch deliberately does not
+    consult consensus holds, so an out-of-contract E/M code from a buggy or
+    hostile secondary engine would be promoted on its own evidence;
+  * the secondary engine's evidence is additive only to a code that *already*
+    has a span. Evidence is the guardrail's necessity gate, so letting the second
+    engine supply the first span would convert a held code into a captured one.
+
 The net effect: the ensemble can only ever be more conservative than the primary
 engine alone, while still surfacing everything the second engine noticed.
 """
@@ -76,6 +87,17 @@ def merge_suggestions(
     """Union the two engines' codes, tagging provenance and agreement."""
     audit: list[str] = []
     contradictions = contradictions or {}
+    # The secondary engine's contract is diagnoses only: it has no MDM model and
+    # no procedure rules. Anything else it emits is out of contract and is
+    # dropped here rather than passed downstream — the guardrail's E/M branch
+    # deliberately does not consult consensus holds, so an out-of-contract E/M
+    # code reaching it would be promoted on its own evidence.
+    out_of_contract = [s for s in secondary if s.kind != CodeKind.ICD10]
+    for s in out_of_contract:
+        audit.append(
+            f"CONSENSUS-DROPPED {s.code} ({s.kind.value}) — the secondary extraction "
+            "engine proposes diagnoses only.")
+    secondary = [s for s in secondary if s.kind == CodeKind.ICD10]
     by_secondary = {_norm(s.code): s for s in secondary if s.code and s.code != "(unresolved)"}
     matched: set[str] = set()
     out: list[CodeSuggestion] = []
@@ -125,9 +147,21 @@ def merge_suggestions(
                 s.rationale = (s.rationale + " " if s.rationale else "") + twin.rationale
         # Keep the offset-anchored TA4H evidence alongside the primary quote:
         # two independent pointers into the chart for the same code.
-        for ev in twin.evidence:
-            if all(ev.quote != existing.quote for existing in s.evidence):
-                s.evidence.append(ev)
+        #
+        # Only ever ADDITIVE to a code that already has evidence. If the primary
+        # engine found no span, the secondary engine's span must not supply the
+        # first one: evidence is the guardrail's necessity gate, so that would
+        # turn a held code into a captured one and break the promise that adding
+        # an engine can only be more conservative.
+        if s.evidence:
+            for ev in twin.evidence:
+                if all(ev.quote != existing.quote for existing in s.evidence):
+                    s.evidence.append(ev)
+        elif twin.evidence:
+            s.notes.append("ta4h_evidence_withheld: primary engine found no span")
+            audit.append(
+                f"CONSENSUS {s.code} ({s.label}): second engine found a span the "
+                "primary engine did not; held rather than captured on it.")
         s.notes.extend(n for n in twin.notes if n.startswith("ta4h_"))
         audit.append(f"CONSENSUS {s.code} ({s.label}): both engines agree.")
         out.append(s)

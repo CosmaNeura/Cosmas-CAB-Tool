@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Index a dialogue corpus into pgvector (production ingestion for the leading-
-questions RAG). This is the Pinecone-free path: vectors live in your own
-Postgres, under your existing cloud BAA.
+questions RAG). This is the Pinecone-free storage path: vectors live in your
+own Postgres. The legacy direct-OpenAI embedder is development-only and must
+not be used with real PHI or in staging/production.
 
 One-time DB setup (psql):
     CREATE EXTENSION IF NOT EXISTS vector;
@@ -10,7 +11,8 @@ One-time DB setup (psql):
     CREATE INDEX ON dialog_chunks USING hnsw (embedding vector_cosine_ops);
 
 Run:
-    export OPENAI_API_KEY=...                # ZDR + BAA project for PHI
+    export COSMANEURA_ENV=development
+    export OPENAI_API_KEY=...                # de-identified local experiments only
     export DATABASE_URL=postgresql://user:pass@host:5432/db
     python scripts/index_dialogues.py corpus.jsonl
 
@@ -31,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cosmaneura_billing.corpus import load_icliniq
 from cosmaneura_billing.dialogue_rag import DialogueRAG, MockEmbedder, OpenAIEmbedder
+from cosmaneura_billing.settings import Settings
 from cosmaneura_billing.vectorstore import PgVectorStore
 
 
@@ -46,12 +49,17 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
+    settings = Settings.from_env()
     corpus = load_corpus(sys.argv[1])
 
-    # Embedder: real in prod (BAA + ZDR), mock if no key (lets you dry-run the path).
-    embedder = OpenAIEmbedder() if os.environ.get("OPENAI_API_KEY") else MockEmbedder(dim=1536)
+    # Legacy direct embeddings are permitted only for de-identified development;
+    # deployed Settings reject OPENAI_API_KEY. No key keeps this path offline.
+    embedder = (
+        OpenAIEmbedder(settings=settings)
+        if settings.openai_api_key else MockEmbedder(dim=1536)
+    )
 
-    dsn = os.environ.get("DATABASE_URL")
+    dsn = settings.database_url
     if not dsn:
         print("Set DATABASE_URL to upsert into pgvector. Aborting (no DB configured).")
         return 1

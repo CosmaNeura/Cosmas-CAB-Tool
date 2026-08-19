@@ -1,5 +1,12 @@
 """ICD-10/CCSR knowledge base: bundled data loads and lookups resolve."""
-from cosmaneura_billing.knowledge.icd10_ccsr import ICD10CCSR, _format_icd10
+import pytest
+
+from cosmaneura_billing.knowledge.icd10_ccsr import (
+    ICD10CCSR,
+    _format_icd10,
+    embed_search,
+)
+from cosmaneura_billing.settings import Settings, SettingsError
 
 
 def test_bundled_code_set_loads():
@@ -23,3 +30,23 @@ def test_find_by_description():
 def test_format_inserts_decimal():
     assert _format_icd10("K5900") == "K59.00"
     assert _format_icd10("I10") == "I10"
+
+
+def test_legacy_semantic_search_is_rejected_in_deployed_environments():
+    settings = Settings(
+        environment="production",
+        auth_mode="container_apps",
+        entra_tenant_id="11111111-1111-4111-8111-111111111111",
+        state_store="postgres",
+        chase_store="postgres",
+        database_url="postgresql://cosmaneura_app@example.invalid/db",
+        database_runtime_role="cosmaneura_app",
+        practice_id="practice-a",
+    )
+    with pytest.raises(SettingsError, match="disabled in deployed environments"):
+        embed_search(
+            "synthetic query",
+            "not-read.feather",
+            api_key="synthetic-key",
+            settings=settings,
+        )

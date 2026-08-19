@@ -49,6 +49,7 @@ from pathlib import Path
 
 from .coder_feedback import Action, FeedbackStore, Reason
 from .schemas import CodeKind, CodeSuggestion
+from .settings import Settings
 
 _SUPPRESS_REASONS = {Reason.DX_NOT_SUPPORTED, Reason.DX_CONTRADICTED}
 
@@ -105,36 +106,52 @@ class Preferences:
 
 
 class PreferenceStore:
-    """Derives Preferences from the coder-feedback log. Cached on file mtime,
-    so a freshly submitted review is reflected on the next pipeline run."""
+    """Derive conservative preferences from durable coder feedback.
+
+    Local callers cache on file metadata. PostgreSQL callers inject a feedback
+    source whose monotonic revision is shared by every API replica.
+    """
 
     def __init__(self, path: str | os.PathLike | None = None,
-                 min_count: int | None = None, global_min_users: int | None = None):
+                 min_count: int | None = None, global_min_users: int | None = None,
+                 settings: Settings | None = None, feedback_store=None):
         self._path_arg = path
         self._min_count_arg = min_count
         self._global_min_users_arg = global_min_users
+        self._settings = settings
+        self._feedback_store = feedback_store
         self._cache_key: tuple | None = None
         self._derived: dict | None = None
 
-    # env is resolved lazily so a long-lived orchestrator (or test) picks up
-    # the current feedback path and thresholds on every run
+    def _config(self) -> Settings:
+        # Injected deployment settings stay fixed. CLI/test callers without an
+        # injection retain lazy environment resolution.
+        return self._settings or Settings.from_env()
+
     @property
     def path(self) -> Path:
-        return Path(self._path_arg
-                    or os.environ.get("COSMANEURA_FEEDBACK_PATH", "coder_feedback.jsonl"))
+        return Path(self._path_arg or self._config().feedback_path)
 
     @property
     def min_count(self) -> int:
         return self._min_count_arg if self._min_count_arg is not None else \
-            int(os.environ.get("COSMANEURA_PREF_MIN", "3"))
+            self._config().preference_min_count
 
     @property
     def global_min_users(self) -> int:
         return self._global_min_users_arg if self._global_min_users_arg is not None else \
-            int(os.environ.get("COSMANEURA_PREF_GLOBAL_USERS", "3"))
+            self._config().preference_global_min_users
 
     # ---- derivation ------------------------------------------------------ #
     def _load(self) -> dict:
+        if self._feedback_store is not None:
+            key = ("feedback-store", self._feedback_store.revision())
+            if self._derived is not None and key == self._cache_key:
+                return self._derived
+            feedbacks = self._feedback_store.load()
+            self._cache_key = key
+            self._derived = self._derive(feedbacks)
+            return self._derived
         p = self.path
         key = (str(p), p.stat().st_mtime if p.exists() else -1.0)
         if self._derived is not None and key == self._cache_key:
@@ -179,7 +196,7 @@ class PreferenceStore:
 
     # ---- resolution ------------------------------------------------------ #
     def for_user(self, user_id: str | None) -> Preferences:
-        if os.environ.get("COSMANEURA_PREFS", "1") == "0":
+        if not self._config().preferences_enabled:
             return Preferences()
         d = self._load()
         prefs = Preferences()

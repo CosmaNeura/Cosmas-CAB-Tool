@@ -7,10 +7,28 @@ from cosmaneura_billing.agents.ta4h_coding import TA4HCodingAgent
 from cosmaneura_billing.evidence import verify_suggestion_evidence
 from cosmaneura_billing.knowledge.icd10_ccsr import ICD10CCSR
 from cosmaneura_billing.schemas import CodeKind, Disposition
+from cosmaneura_billing.settings import Settings, SettingsError
 from cosmaneura_billing.ta4h import (
-    AzureTA4H, MockTA4H, get_default_ta4h_client, parse_entities,
+    AzureLanguageTA4H, MockTA4H, describe_ta4h_client, get_default_ta4h_client,
+    parse_entities,
 )
 from demo_visit import SAMPLE_VISIT
+
+_ENDPOINT = "https://cosmaneura-language.cognitiveservices.azure.com"
+_CLIENT_ID = "6f9619ff-8b86-d011-b42d-00cf4fc964ff"
+
+
+def _enabled_settings(**over) -> Settings:
+    base = dict(azure_language_enabled=True, azure_language_endpoint=_ENDPOINT,
+                azure_client_id=_CLIENT_ID)
+    base.update(over)
+    return Settings(**base)
+
+
+def _client(**over) -> AzureLanguageTA4H:
+    """A client with a stub token provider, so no cloud identity is needed."""
+    return AzureLanguageTA4H(_enabled_settings(**over),
+                             token_provider=lambda: ("stub-token", 2**40))
 
 
 # --------------------------------------------------------------------------- #
@@ -68,14 +86,14 @@ def test_first_link_per_vocabulary_wins():
 # Request construction / PHI posture
 # --------------------------------------------------------------------------- #
 def test_submit_body_opts_out_of_input_logging(monkeypatch):
-    """The PHI-relevant default: loggingOptOut must be sent as true."""
-    client = AzureTA4H(endpoint="https://example.cognitiveservices.azure.com",
-                       api_key="k")
+    """The PHI-relevant guarantee: loggingOptOut is always sent as true."""
+    client = _client()
     seen: dict = {}
 
     def fake_request(url, *, data=None, method="GET"):
         if method == "POST":
             seen["body"] = json.loads(data)
+            seen["url"] = url
             return {}, {"operation-location": "https://example/jobs/1"}
         return {"status": "succeeded", "tasks": {"items": [
             {"results": {"documents": [{"id": "signed_note", "entities": []}]}}]}}, {}
@@ -86,24 +104,131 @@ def test_submit_body_opts_out_of_input_logging(monkeypatch):
     task = seen["body"]["tasks"][0]
     assert task["kind"] == "Healthcare"
     assert task["parameters"]["loggingOptOut"] is True
+    assert seen["url"].startswith(_ENDPOINT + "/language/analyze-text/jobs")
+
+
+def test_requests_carry_a_managed_identity_bearer_token(monkeypatch):
+    client = _client()
+    captured: dict = {}
+
+    class FakeResponse:
+        headers = {"operation-location": "https://example/jobs/1"}
+
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["auth"] = req.headers.get("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client._request("https://example/x", data=b"{}", method="POST")
+    assert captured["auth"] == "Bearer stub-token"
+
+
+def test_bearer_token_is_cached_until_it_nears_expiry():
+    calls = {"n": 0}
+
+    def provider():
+        calls["n"] += 1
+        return f"token-{calls['n']}", 2**40
+
+    client = AzureLanguageTA4H(_enabled_settings(), token_provider=provider)
+    assert client._bearer() == "token-1"
+    assert client._bearer() == "token-1"
+    assert calls["n"] == 1
+
+
+def test_expired_token_is_refreshed():
+    calls = {"n": 0}
+
+    def provider():
+        calls["n"] += 1
+        # already expired, so every call must re-fetch
+        return f"token-{calls['n']}", 0.0
+
+    client = AzureLanguageTA4H(_enabled_settings(), token_provider=provider)
+    assert client._bearer() == "token-1"
+    assert client._bearer() == "token-2"
+
+
+def test_api_key_in_the_environment_is_refused(monkeypatch):
+    """Managed identity only: a key is a misconfiguration, not a fallback."""
+    monkeypatch.setenv("AZURE_LANGUAGE_KEY", "should-not-be-used")
+    with pytest.raises(SettingsError, match="prohibited"):
+        AzureLanguageTA4H._build_token_provider(_CLIENT_ID)
+
+
+def test_settings_reject_a_key_when_the_engine_is_enabled():
+    with pytest.raises(SettingsError, match="prohibited"):
+        Settings.from_env({
+            "COSMANEURA_AZURE_LANGUAGE_ENABLED": "1",
+            "AZURE_LANGUAGE_ENDPOINT": _ENDPOINT,
+            "AZURE_CLIENT_ID": _CLIENT_ID,
+            "AZURE_LANGUAGE_KEY": "nope",
+        })
+
+
+def test_settings_reject_a_non_azure_endpoint():
+    with pytest.raises(SettingsError, match="AZURE_LANGUAGE_ENDPOINT"):
+        _enabled_settings(azure_language_endpoint="https://evil.example.com")
+
+
+def test_settings_require_an_endpoint_when_enabled():
+    with pytest.raises(SettingsError, match="AZURE_LANGUAGE_ENDPOINT"):
+        Settings(azure_language_enabled=True, azure_client_id=_CLIENT_ID)
+
+
+def test_settings_require_the_managed_identity_when_enabled():
+    with pytest.raises(SettingsError, match="AZURE_CLIENT_ID"):
+        Settings(azure_language_enabled=True, azure_language_endpoint=_ENDPOINT)
+
+
+def test_mock_is_refused_in_deployed_environments():
+    with pytest.raises(SettingsError, match="development-only"):
+        Settings(azure_language_mock=True, environment="production")
+
+
+def test_mock_and_live_are_mutually_exclusive():
+    with pytest.raises(SettingsError, match="cannot be combined"):
+        _enabled_settings(azure_language_mock=True)
+
+
+def test_client_refuses_a_non_azure_endpoint_before_sending_a_token(monkeypatch):
+    """A caller must not be able to point the engine at another host and have a
+    managed-identity bearer token sent to it. The client re-validates its own
+    effective values, so this fails at construction, before any request."""
+    monkeypatch.delenv("AZURE_LANGUAGE_KEY", raising=False)
+    hostile = Settings.__new__(Settings)
+    object.__setattr__(hostile, "azure_language_endpoint", "https://attacker.example.com")
+    object.__setattr__(hostile, "azure_language_api_version", "2023-04-01")
+    object.__setattr__(hostile, "azure_client_id", _CLIENT_ID)
+    with pytest.raises(SettingsError, match="AZURE_LANGUAGE_ENDPOINT"):
+        AzureLanguageTA4H(hostile)
 
 
 def test_analyze_skips_empty_documents_without_calling_out(monkeypatch):
-    client = AzureTA4H(endpoint="https://example", api_key="k")
+    client = _client()
     monkeypatch.setattr(client, "_request",
                         lambda *a, **k: pytest.fail("should not call the service"))
     assert client.analyze({"signed_note": "", "transcript": "   "}) == {}
 
 
 def test_missing_operation_location_raises(monkeypatch):
-    client = AzureTA4H(endpoint="https://example", api_key="k")
+    client = _client()
     monkeypatch.setattr(client, "_request", lambda *a, **k: ({}, {}))
     with pytest.raises(RuntimeError, match="operation-location"):
         client.analyze({"signed_note": "text"})
 
 
 def test_failed_job_raises(monkeypatch):
-    client = AzureTA4H(endpoint="https://example", api_key="k")
+    client = _client()
 
     def fake_request(url, *, data=None, method="GET"):
         if method == "POST":
@@ -115,37 +240,23 @@ def test_failed_job_raises(monkeypatch):
         client.analyze({"signed_note": "text"})
 
 
-def test_analyze_requires_configuration():
-    with pytest.raises(RuntimeError, match="AZURE_LANGUAGE_ENDPOINT"):
-        AzureTA4H(endpoint="", api_key="").analyze({"signed_note": "text"})
-
-
 # --------------------------------------------------------------------------- #
-# Default client selection — off unless explicitly configured
+# Default client selection — off unless explicitly enabled
 # --------------------------------------------------------------------------- #
-def test_disabled_by_default(monkeypatch):
-    for var in ("AZURE_LANGUAGE_ENDPOINT", "AZURE_LANGUAGE_KEY", "COSMANEURA_TA4H"):
-        monkeypatch.delenv(var, raising=False)
-    assert get_default_ta4h_client() is None
+def test_disabled_by_default():
+    assert get_default_ta4h_client(Settings()) is None
 
 
-def test_mock_selected_by_env(monkeypatch):
-    monkeypatch.setenv("COSMANEURA_TA4H", "mock")
-    assert isinstance(get_default_ta4h_client(), MockTA4H)
+def test_mock_selected_by_settings():
+    assert isinstance(get_default_ta4h_client(Settings(azure_language_mock=True)),
+                      MockTA4H)
 
 
-def test_explicit_off_beats_configuration(monkeypatch):
-    monkeypatch.setenv("AZURE_LANGUAGE_ENDPOINT", "https://example")
-    monkeypatch.setenv("AZURE_LANGUAGE_KEY", "k")
-    monkeypatch.setenv("COSMANEURA_TA4H", "off")
-    assert get_default_ta4h_client() is None
-
-
-def test_azure_client_selected_when_configured(monkeypatch):
-    monkeypatch.delenv("COSMANEURA_TA4H", raising=False)
-    monkeypatch.setenv("AZURE_LANGUAGE_ENDPOINT", "https://example")
-    monkeypatch.setenv("AZURE_LANGUAGE_KEY", "k")
-    assert isinstance(get_default_ta4h_client(), AzureTA4H)
+def test_describe_reports_the_engine_count():
+    assert describe_ta4h_client(None) == {
+        "extractionEngines": 1, "secondaryExtractionMode": None}
+    assert describe_ta4h_client(MockTA4H()) == {
+        "extractionEngines": 2, "secondaryExtractionMode": "mock"}
 
 
 # --------------------------------------------------------------------------- #

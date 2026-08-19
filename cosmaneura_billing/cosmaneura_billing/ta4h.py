@@ -9,31 +9,41 @@ See ``docs/TA4H_MULTI_MODEL_ASSESSMENT.md`` for why it is integrated here and
 not as a competing coder.
 
 Two implementations, mirroring ``llm.py``:
-  * ``MockTA4H``  -- deterministic, offline. Returns the clinically-correct
-                     entity set for the demo encounter, with offsets resolved
-                     against the actual text at call time (so the spans are
-                     real, not hand-copied). This keeps CI hermetic.
-  * ``AzureTA4H`` -- production adapter. Calls the async ``analyze-text/jobs``
-                     endpoint and polls the returned ``operation-location``.
+  * ``MockTA4H``          -- deterministic, offline. Returns the clinically
+                             correct entity set for the demo encounter, with
+                             offsets resolved against the actual text at call
+                             time (so the spans are real, not hand-copied).
+                             Keeps CI hermetic and needs no cloud identity.
+  * ``AzureLanguageTA4H`` -- production adapter. Calls the async
+                             ``analyze-text/jobs`` endpoint and polls the
+                             returned ``operation-location``, authenticated only
+                             with the API's managed identity.
 
-Kept dependency-free (urllib) on purpose — same stance as ``AnthropicLLM``, so
-the core engine keeps its stdlib-only guarantee and no ``azure-*`` package is
-required to run or test the pipeline.
+Both clients report ``mode`` so a caller can tell which extraction path
+produced a claim — see ``describe_ta4h_client``.
+
+Credentials
+-----------
+Managed identity only, exactly as with Azure OpenAI inference: there is no
+API-key path, and a key present in the environment is treated as a
+misconfiguration rather than silently honoured. Azure AI Language shares the
+``https://cognitiveservices.azure.com/.default`` token scope with Azure OpenAI,
+so the API's existing user-assigned identity needs only a *Cognitive Services
+Language Reader* (or User) role assignment on the Language resource — no new
+secret enters the deployment.
+
+The transport is stdlib ``urllib`` on purpose, so enabling a second engine adds
+no HTTP/SDK dependency to the core engine; only ``azure-identity`` (already
+required for inference) is needed, and only when the engine is enabled.
 
 PHI note
 --------
-``logging_opt_out`` defaults to **True** and is sent on every request. Azure AI
-Language otherwise retains input text for up to 48 hours for troubleshooting;
-with PHI in the payload that retention is a HIPAA consideration, so the opt-out
-is the default and turning it off is a deliberate, documented act. Azure AI
-Language is HIPAA-eligible under the Microsoft BAA (included by default via the
-Product Terms / DPA); processing is stateless and inputs are not used to train
-models.
-
-Configuration (absent -> the engine is simply disabled, pipeline unchanged):
-  AZURE_LANGUAGE_ENDPOINT   e.g. https://<resource>.cognitiveservices.azure.com
-  AZURE_LANGUAGE_KEY        resource key (prefer a managed identity in Azure)
-  AZURE_LANGUAGE_API_VERSION  optional; defaults to the GA version below
+``loggingOptOut`` is sent as true on every request. Azure AI Language otherwise
+retains input text for up to 48 hours for troubleshooting; with chart text in
+the payload that retention is a HIPAA consideration, so the opt-out is not
+configurable here. Azure AI Language is HIPAA-eligible under the Microsoft BAA
+(included via the Product Terms / DPA); processing is stateless and inputs are
+not used to train models.
 """
 from __future__ import annotations
 
@@ -46,8 +56,19 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-# GA api-version for the async analyze-text/jobs endpoint.
-DEFAULT_API_VERSION = "2023-04-01"
+from .settings import Settings, SettingsError
+
+# Azure AI Language shares the Cognitive Services token scope with Azure OpenAI.
+_AZURE_LANGUAGE_SCOPE = "https://cognitiveservices.azure.com/.default"
+# Mirrors the Azure OpenAI stance: no key-based auth path exists, and a key in
+# the environment is a misconfiguration we refuse rather than quietly ignore.
+_PROHIBITED_AZURE_LANGUAGE_CREDENTIAL_ENV = (
+    "AZURE_LANGUAGE_KEY",
+    "AZURE_LANGUAGE_AD_TOKEN",
+    "AZURE_AI_LANGUAGE_KEY",
+)
+# Refresh a bearer token this many seconds before it actually expires.
+_TOKEN_SKEW_SECONDS = 300
 
 # Assertion values that mean "this finding is not affirmed for this patient".
 # TA4H only returns assertions that differ from the default (positive /
@@ -108,6 +129,8 @@ class HealthEntity:
 
 
 class TA4HClient(Protocol):
+    mode: str
+
     def analyze(self, documents: dict[str, str]) -> dict[str, list[HealthEntity]]:
         """Map ``{document_id: text}`` -> ``{document_id: entities}``.
 
@@ -131,6 +154,8 @@ def parse_entities(doc: dict[str, Any], source: str) -> list[HealthEntity]:
             continue
         if not isinstance(offset, int) or not isinstance(length, int):
             continue
+        if isinstance(offset, bool) or isinstance(length, bool):
+            continue
         assertion = e.get("assertion") if isinstance(e.get("assertion"), dict) else {}
         links: dict[str, str] = {}
         for link in e.get("links") or []:
@@ -153,41 +178,80 @@ def parse_entities(doc: dict[str, Any], source: str) -> list[HealthEntity]:
 # --------------------------------------------------------------------------- #
 # Production adapter
 # --------------------------------------------------------------------------- #
-class AzureTA4H:
+class AzureLanguageTA4H:
     """Async ``analyze-text/jobs`` adapter with ``operation-location`` polling.
 
     One POST submits every document in the bundle (TA4H accepts a batch), then
     the job is polled until it succeeds. Failures are raised, never swallowed:
     the orchestrator decides whether a secondary-engine outage degrades to
-    single-engine operation (it does — see ``orchestrator.process``).
+    single-engine operation (it does — see ``BillingOrchestrator._extract``).
     """
 
+    mode = "azure_language"
     RETRYABLE = {408, 429, 500, 502, 503, 504}
 
-    def __init__(self, endpoint: str | None = None, api_key: str | None = None,
-                 *, api_version: str | None = None, language: str = "en",
-                 logging_opt_out: bool = True, max_retries: int = 3,
-                 timeout: int = 60, poll_interval: float = 1.0,
-                 max_poll_seconds: float = 120.0):
-        self.endpoint = (endpoint or os.environ.get("AZURE_LANGUAGE_ENDPOINT", "")).rstrip("/")
-        self.api_key = api_key or os.environ.get("AZURE_LANGUAGE_KEY", "")
-        self.api_version = api_version or os.environ.get(
-            "AZURE_LANGUAGE_API_VERSION", DEFAULT_API_VERSION)
+    def __init__(self, settings: Settings | None = None, *,
+                 token_provider=None, language: str = "en",
+                 max_retries: int = 3, timeout: int = 60,
+                 poll_interval: float = 1.0, max_poll_seconds: float = 120.0):
+        config = settings or Settings.from_env()
+        self.endpoint = config.azure_language_endpoint.rstrip("/")
+        self.api_version = config.azure_language_api_version
         self.language = language
-        # See the PHI note in the module docstring before setting this False.
-        self.logging_opt_out = logging_opt_out
         self.max_retries = max_retries
         self.timeout = timeout
         self.poll_interval = poll_interval
         self.max_poll_seconds = max_poll_seconds
+        self._token: tuple[str, float] | None = None
+
+        if token_provider is None:
+            # Validate the effective values, so a caller cannot swap a reviewed
+            # Language endpoint for another host and send it a bearer token.
+            Settings(
+                azure_language_enabled=True,
+                azure_language_endpoint=self.endpoint,
+                azure_language_api_version=self.api_version,
+                azure_client_id=config.azure_client_id,
+            )
+            token_provider = self._build_token_provider(config.azure_client_id)
+        self._token_provider = token_provider
+
+    @staticmethod
+    def _build_token_provider(managed_identity_client_id: str):
+        if any(os.environ.get(name)
+               for name in _PROHIBITED_AZURE_LANGUAGE_CREDENTIAL_ENV):
+            raise SettingsError(
+                "direct Azure AI Language credentials are prohibited; managed "
+                "identity is required"
+            )
+        try:
+            from azure.identity import ManagedIdentityCredential
+        except ImportError as exc:
+            raise RuntimeError(
+                "Azure AI Language dependencies are not installed"
+            ) from exc
+        credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
+
+        def provider() -> tuple[str, float]:
+            token = credential.get_token(_AZURE_LANGUAGE_SCOPE)
+            return token.token, float(token.expires_on)
+
+        return provider
+
+    def _bearer(self) -> str:
+        now = time.time()
+        if self._token is not None and self._token[1] - _TOKEN_SKEW_SECONDS > now:
+            return self._token[0]
+        token, expires_on = self._token_provider()
+        self._token = (token, expires_on)
+        return token
 
     # -- HTTP --------------------------------------------------------------- #
-    def _headers(self) -> dict[str, str]:
-        return {"content-type": "application/json", "Ocp-Apim-Subscription-Key": self.api_key}
-
     def _request(self, url: str, *, data: bytes | None = None,
                  method: str = "GET") -> tuple[dict[str, Any], dict[str, str]]:
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
+        headers = {"content-type": "application/json",
+                   "Authorization": f"Bearer {self._bearer()}"}
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
         last_err: Exception | None = None
         for attempt in range(self.max_retries + 1):
             if attempt:
@@ -195,9 +259,9 @@ class AzureTA4H:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     raw = resp.read()
-                    headers = {k.lower(): v for k, v in resp.headers.items()}
+                    resp_headers = {k.lower(): v for k, v in resp.headers.items()}
                     body = json.loads(raw) if raw else {}
-                    return (body if isinstance(body, dict) else {}), headers
+                    return (body if isinstance(body, dict) else {}), resp_headers
             except urllib.error.HTTPError as e:
                 if e.code not in self.RETRYABLE:
                     raise
@@ -205,22 +269,25 @@ class AzureTA4H:
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
                 last_err = e
         raise RuntimeError(
-            f"AzureTA4H: {method} failed after {self.max_retries + 1} attempts") from last_err
+            f"AzureLanguageTA4H: {method} failed after {self.max_retries + 1} attempts"
+        ) from last_err
 
     def analyze(self, documents: dict[str, str]) -> dict[str, list[HealthEntity]]:
         docs = [{"id": doc_id, "language": self.language, "text": text}
                 for doc_id, text in documents.items() if text and text.strip()]
         if not docs:
             return {}
-        if not self.endpoint or not self.api_key:
-            raise RuntimeError("AzureTA4H: AZURE_LANGUAGE_ENDPOINT / AZURE_LANGUAGE_KEY not set")
+        if not self.endpoint:
+            raise SettingsError("AZURE_LANGUAGE_ENDPOINT is not configured")
 
         body = {
             "analysisInput": {"documents": docs},
             "tasks": [{
                 "kind": "Healthcare",
                 "taskName": "cosmaneura-ta4h",
-                "parameters": {"loggingOptOut": self.logging_opt_out},
+                # Not configurable: chart text must not enter the provider's
+                # 48-hour troubleshooting log. See the PHI note above.
+                "parameters": {"loggingOptOut": True},
             }],
         }
         submit_url = (f"{self.endpoint}/language/analyze-text/jobs"
@@ -229,7 +296,8 @@ class AzureTA4H:
             submit_url, data=json.dumps(body).encode(), method="POST")
         job_url = headers.get("operation-location")
         if not job_url:
-            raise RuntimeError("AzureTA4H: submit returned no operation-location header")
+            raise RuntimeError(
+                "AzureLanguageTA4H: submit returned no operation-location header")
 
         deadline = time.monotonic() + self.max_poll_seconds
         while True:
@@ -238,10 +306,12 @@ class AzureTA4H:
             if status == "succeeded":
                 return self._collect(payload, documents)
             if status in ("failed", "cancelled", "rejected"):
-                raise RuntimeError(f"AzureTA4H: job {status}: {payload.get('errors')}")
+                raise RuntimeError(
+                    f"AzureLanguageTA4H: job {status}: {payload.get('errors')}")
             if time.monotonic() >= deadline:
                 raise TimeoutError(
-                    f"AzureTA4H: job still '{status}' after {self.max_poll_seconds:.0f}s")
+                    f"AzureLanguageTA4H: job still '{status}' after "
+                    f"{self.max_poll_seconds:.0f}s")
             time.sleep(self.poll_interval)
 
     @staticmethod
@@ -268,6 +338,8 @@ class MockTA4H:
     in a document are skipped, so this mock stays silent (returns nothing) on
     any encounter other than the demo one rather than inventing findings.
     """
+
+    mode = "mock"
 
     # (phrase, category, ICD-10-CM link, assertion overrides)
     _DEMO: tuple[tuple[str, str, str, dict[str, str]], ...] = (
@@ -312,23 +384,29 @@ class MockTA4H:
         return out
 
 
-def ta4h_configured() -> bool:
-    return bool(os.environ.get("AZURE_LANGUAGE_ENDPOINT")
-                and os.environ.get("AZURE_LANGUAGE_KEY"))
+def get_default_ta4h_client(settings: Settings | None = None) -> TA4HClient | None:
+    """``AzureLanguageTA4H`` when enabled, ``MockTA4H`` when explicitly asked
+    for, otherwise ``None``.
 
-
-def get_default_ta4h_client() -> TA4HClient | None:
-    """``AzureTA4H`` when configured, ``MockTA4H`` when explicitly asked for,
-    otherwise ``None`` — and ``None`` means the second engine is off and the
-    pipeline behaves exactly as it did before this module existed.
-
-    Set ``COSMANEURA_TA4H=mock`` to exercise the ensemble path offline.
+    ``None`` means the second extraction engine is off and the pipeline behaves
+    exactly as it did before this module existed. Off is the default, matching
+    Azure OpenAI inference: a deployment opts in, it never drifts on.
     """
-    mode = os.environ.get("COSMANEURA_TA4H", "").strip().lower()
-    if mode in ("0", "off", "false", "disabled"):
-        return None
-    if mode == "mock":
+    config = settings or Settings.from_env()
+    if config.azure_language_mock:
         return MockTA4H()
-    if ta4h_configured():
-        return AzureTA4H()
+    if config.azure_language_enabled:
+        return AzureLanguageTA4H(settings=config)
     return None
+
+
+def describe_ta4h_client(client: TA4HClient | None) -> dict[str, Any]:
+    """Which extraction path is live, for /api/health and pipeline responses.
+
+    A stored claim has to be able to say what produced it: a single-engine run
+    and a two-engine consensus run are not the same evidence.
+    """
+    return {
+        "extractionEngines": 1 if client is None else 2,
+        "secondaryExtractionMode": getattr(client, "mode", None) if client else None,
+    }

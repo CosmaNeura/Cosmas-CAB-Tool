@@ -38,7 +38,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REQUIRED = ["AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET"]
+# allow running as `python scripts/fetch_cpt_zip.py` from the project root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from cosmaneura_billing.settings import (
+    AMA_CREDENTIAL_ENV_VARS, Settings, SettingsError,
+)
+
+REQUIRED = list(AMA_CREDENTIAL_ENV_VARS)
 
 # The AMA gateway's WAF rejects Python-urllib's default User-Agent with 403.
 _UA = "cosmaneura-billing/0.1"
@@ -82,7 +89,7 @@ def get_token(token_url: str, key: str, secret: str) -> str:
         raise SystemExit(f"token request failed: HTTP {e.code}")
     tok = payload.get("access_token")
     if not tok:
-        raise SystemExit(f"no access_token in token response: {payload}")
+        raise SystemExit("token response did not include access_token")
     print(f"got access token (expires in {payload.get('expires_in', '?')}s)", file=sys.stderr)
     return tok
 
@@ -113,8 +120,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="cpt_standard_data_file.zip", help="where to save the ZIP")
     ap.add_argument("--release", help="release id to download (default: newest from Releases)")
-    ap.add_argument("--releases-path", default="/cpt-zip/1.0.0/releases")
-    ap.add_argument("--file-path", default="/cpt-zip/1.0.0/files?release={release}",
+    ap.add_argument("--releases-path")
+    ap.add_argument("--file-path",
                     help="template for the Files endpoint; {release} is substituted "
                          "(?release= verified against the production gateway)")
     ap.add_argument("--check", action="store_true",
@@ -122,17 +129,26 @@ def main() -> int:
                          "(2 API calls — safe under the 10-call/day production cap)")
     args = ap.parse_args()
 
-    missing = [v for v in REQUIRED if not os.environ.get(v)]
-    if missing:
+    try:
+        settings = Settings.from_env()
+    except SettingsError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
+    credentials = settings.ama_credentials
+    if credentials is None:
         print(__doc__)
-        print(f"Set these environment variables first: {', '.join(missing)}", file=sys.stderr)
+        print(f"Set these environment variables first: {', '.join(REQUIRED)}", file=sys.stderr)
         return 2
 
-    base = os.environ["AMA_BASE_URL"].rstrip("/")
-    token = get_token(os.environ["AMA_TOKEN_URL"],
-                      os.environ["AMA_CONSUMER_KEY"], os.environ["AMA_CONSUMER_SECRET"])
+    base = credentials.base_url.rstrip("/")
+    token = get_token(
+        credentials.token_url, credentials.consumer_key,
+        credentials.consumer_secret,
+    )
 
-    releases = _get(base + args.releases_path, token)
+    releases_path = args.releases_path or settings.ama_releases_path
+    file_path = args.file_path or settings.ama_file_path
+    releases = _get(base + releases_path, token)
     print("Releases endpoint OK. Available releases:", file=sys.stderr)
     print(json.dumps(releases, indent=2)[:1000], file=sys.stderr)
 
@@ -155,7 +171,10 @@ def main() -> int:
     if not release:
         raise SystemExit("Could not determine a release id; pass --release after inspecting the Releases output.")
 
-    blob = _get(base + args.file_path.format(release=urllib.parse.quote(str(release))), token, binary=True)
+    blob = _get(
+        base + file_path.format(release=urllib.parse.quote(str(release))),
+        token, binary=True,
+    )
     with open(args.out, "wb") as fh:
         fh.write(blob)
     print(f"downloaded release '{release}' -> {args.out} ({len(blob):,} bytes)", file=sys.stderr)

@@ -14,12 +14,14 @@ from .knowledge.denial_stats import DenialPriors
 from .knowledge.icd10_ccsr import ICD10CCSR
 from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
+from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
-from .llm import LLMClient, get_default_client
+from .llm import LLMClient, describe_client, get_default_client
 from .schemas import (
-    BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Disposition,
-    FeedbackKind, ProviderCard, VisitBundle,
+    BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
+    Disposition, FeedbackKind, ProviderCard, VisitBundle,
 )
+from .settings import Settings
 from .ta4h import TA4HClient, get_default_ta4h_client
 
 
@@ -33,23 +35,29 @@ class BillingOrchestrator:
 
     def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None,
                  ncci=None, coverage=None, pos=None, cpt=None, preferences=None,
+                 settings: Settings | None = None,
                  coding=None, secondary_coding=None, ta4h: TA4HClient | None = None):
-        self.llm = llm or get_default_client()
-        self.icd10 = icd10 or ICD10CCSR()
+        config = settings or Settings.from_env()
+        self.settings = config
+        self.llm = llm or get_default_client(config)
+        self.icd10 = icd10 or ICD10CCSR(settings=config)
         # NCCI / MCD coverage: explicit instance wins; otherwise auto-load from
         # data/ncci/ and data/mcd/ if the practice has dropped the CMS files there.
         self.ncci = ncci if ncci is not None else NCCIEdits.from_bundled()
         self.coverage = coverage if coverage is not None else CoverageDB.from_bundled()
         self.pos = pos or PlaceOfService()       # bundled CMS POS codes
-        self.cpt = cpt or CPTDescriptors()       # loads only from licensed data (CPT_DATA_DIR)
+        self.cpt = cpt or CPTDescriptors(settings=config)  # licensed data only
         # learned reviewer preferences (hold/refine only, never inflate)
-        self.preferences = preferences or PreferenceStore()
+        self.preferences = preferences or PreferenceStore(settings=config)
         # national per-code denial priors (CMS PSPS, bundled)
         self.denial_priors = DenialPriors()
+        # deterministic procedure / add-on candidates (99058 and friends)
+        self.procedures = ProcedureRules()
         self.coding = coding or CodingAgent(self.llm, self.icd10)
         # Optional second extraction engine (Azure Text Analytics for health).
-        # Disabled unless AZURE_LANGUAGE_* is configured or a client is injected.
-        self.ta4h = ta4h if ta4h is not None else get_default_ta4h_client()
+        # Disabled unless the azure_language settings are enabled, exactly like
+        # Azure OpenAI inference, or a client is injected for tests.
+        self.ta4h = ta4h if ta4h is not None else get_default_ta4h_client(config)
         if secondary_coding is not None:
             self.secondary_coding = secondary_coding
         elif self.ta4h is not None:
@@ -98,6 +106,14 @@ class BillingOrchestrator:
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions, consensus_audit = self._extract(bundle, new_patient)
+        # Procedure / add-on candidates come from documented language rather than
+        # clinical inference, so they are proposed deterministically here — and
+        # then go through exactly the same evidence, integrity, guardrail and
+        # denial gates as everything else. They are not part of the consensus
+        # merge: TA4H proposes no CPT, so there is nothing to reconcile.
+        proc, proc_audit = self.procedures.propose(
+            bundle, has_em=any(s.kind == CodeKind.EM for s in suggestions))
+        suggestions += proc
         # Authenticate every evidence quote against the actual documentation
         # BEFORE any agent may rely on it; a code whose quotes don't verify
         # loses them and cannot pass the guardrail's evidence gate.
@@ -109,7 +125,7 @@ class BillingOrchestrator:
         pref_audit = apply_preferences(
             suggestions, self.preferences.for_user(user_id), icd10=self.icd10)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
-        audit = consensus_audit + ver_audit + pref_audit + audit
+        audit = consensus_audit + proc_audit + ver_audit + pref_audit + audit
         suggestions, denial_flags = self.denial.run(
             suggestions, ncci=self.ncci, coverage=self.coverage,
             icd10=self.icd10, pos=self.pos, denial_priors=self.denial_priors,
@@ -167,4 +183,26 @@ class BillingOrchestrator:
         return BillingResult(
             provider_card=card, biller_worksheet=worksheet,
             feedback_events=events, revenue_integrity_note=integrity_note,
+            inference=describe_client(self.llm),
+            degraded=self._degradation(facts),
+        )
+
+    def _degradation(self, facts: dict) -> Degradation | None:
+        """Say when a run wasn't a real coding attempt.
+
+        The offline model only covers the demo encounter, so on anything else it
+        extracts nothing and the pipeline correctly captures nothing. That is the
+        right output for the wrong reason, and without this a reviewer sees an
+        empty claim with no explanation.
+        """
+        if getattr(self.llm, "mode", None) != "mock":
+            return None
+        if facts.get("problems"):
+            return None
+        return Degradation(
+            reason="offline_model_unsupported_encounter",
+            detail=("Running on the offline demo model, which only codes the bundled "
+                    "demo encounter. No codes were proposed for this documentation — "
+                    "configure the Azure OpenAI managed-identity inference settings "
+                    "for real extraction."),
         )

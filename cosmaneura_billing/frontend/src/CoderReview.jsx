@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Check, X, Pencil, Plus, Clock, ChevronDown, Info, Send, RefreshCw } from "lucide-react";
 import { api } from "./api.js";
 
 /*
   Coder review & feedback, wired to the live engine:
     GET  /api/encounters/{id}/coder-view  -> the pre-coded claim with evidence
-    POST /api/feedback                    -> the coder's decisions (JSONL store)
+    POST /api/feedback                    -> the coder's durable decisions
   Offline (`live` false) it falls back to the demo claim so the flow stays
   walkable.
 */
@@ -167,12 +167,19 @@ export default function CoderReview({ encounterId, live }) {
   const [seconds, setSeconds] = useState(0);
   const [done, setDone] = useState(null);
   const [error, setError] = useState(null);
+  const reviewId = useRef(null);
+  const pendingPayload = useRef(null);
 
   // load the pre-coded claim for this encounter
   useEffect(() => {
     setEngine(null); setDone(null); setError(null); setAdded([]); setSeconds(0);
+    // P3 DATA SEAM: one stable retry key per loaded review draft. Keep it until
+    // the server acknowledges the submission so response loss cannot double
+    // count a preference signal.
+    reviewId.current = globalThis.crypto.randomUUID();
+    pendingPayload.current = null;
     (async () => {
-      let eng = FALLBACK_ENGINE;
+      let eng = live ? null : FALLBACK_ENGINE;
       if (live) {
         try {
           eng = await api(`/api/encounters/${encodeURIComponent(encounterId)}/coder-view`);
@@ -180,6 +187,7 @@ export default function CoderReview({ encounterId, live }) {
           setError(`could not load coder view: ${e.message}`);
         }
       }
+      if (!eng) return;
       const init = {};
       if (eng.em) init.em = { action: "accept", final: eng.em.code, reason: null };
       (eng.dx || []).forEach((r) => { init[r.id] = { action: "accept", final: r.code, reason: null }; });
@@ -192,9 +200,29 @@ export default function CoderReview({ encounterId, live }) {
   useEffect(() => { const t = setInterval(() => setSeconds((s) => s + 1), 1000); return () => clearInterval(t); }, []);
 
   if (!engine) {
+    // UI SEAM (P2): never turn an expired/denied session into a mock claim.
+    if (error) return <p>{error}</p>;
     return (
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
         <RefreshCw size={16} className="animate-spin" /> Pre-coding encounter {encounterId}…
+      </div>
+    );
+  }
+
+  // UI SEAM (2026-08-17): the engine reports `degraded` when a run wasn't a real
+  // coding attempt — today that means the offline demo model doesn't cover this
+  // encounter. Without this the reviewer sees an empty claim and concludes the
+  // engine is broken. Deliberately unstyled beyond the minimum; restyle freely,
+  // but keep the reason visible whenever `engine.degraded` is set.
+  if (engine.degraded) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+        <p className="text-sm font-medium text-amber-900">No codes proposed for this encounter</p>
+        <p className="mt-1 text-sm leading-relaxed text-amber-800">{engine.degraded.detail}</p>
+        <p className="mt-2 text-xs text-amber-700">
+          Encounter {engine.encounterId} · {engine.inferenceMode} mode
+          {engine.inferenceModel ? ` (${engine.inferenceModel})` : ""}
+        </p>
       </div>
     );
   }
@@ -207,24 +235,38 @@ export default function CoderReview({ encounterId, live }) {
   const agreed = captured.filter(({ id }) => dec[id]?.action === "accept").length;
 
   const submit = async () => {
+    if (pendingPayload.current) {
+      try {
+        const r = await api("/api/feedback", { method: "POST", body: pendingPayload.current });
+        setDone({ ...pendingPayload.current, _replayed: r.replayed });
+      } catch (e) {
+        setError(`feedback submit failed: ${e.message}`);
+      }
+      return;
+    }
     const decisions = [];
     if (engine.em) decisions.push({ kind: "EM", engine_code: engine.em.code, action: dec.em.action, final_code: dec.em.final, reason_code: dec.em.reason, note: "" });
     (engine.dx || []).forEach((r) => { const d = dec[r.id]; decisions.push({ kind: "ICD10", engine_code: r.code, action: d.action, final_code: d.final, reason_code: d.reason, note: "" }); });
     (engine.withheld || []).forEach((w) => {
       const s = withheld[w.id];
-      if (s?.bill) decisions.push({ kind: "ICD10", engine_code: w.code, action: "add", final_code: w.code, reason_code: s.reason || "dx_missed_by_engine", note: `coder billed engine-${w.status} code` });
-      else decisions.push({ kind: "ICD10", engine_code: w.code, action: "accept", final_code: null, reason_code: null, note: `confirmed not billed (engine ${w.status})` });
+      if (s?.bill) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: w.code, reason_code: s.reason || "dx_missed_by_engine", note: `coder billed engine-${w.status} code` });
+      else decisions.push({ kind: "ICD10", engine_code: w.code, action: "reject", final_code: null, reason_code: "other", note: `confirmed not billed (engine ${w.status})` });
     });
     added.forEach((a) => { if (a.code) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: a.code, reason_code: "dx_missed_by_engine", note: a.note || "" }); });
     const payload = {
-      encounter_id: engine.encounterId, coder_id: engine.coderId, engine_version: engine.engineVersion,
+      review_id: reviewId.current, encounter_id: engine.encounterId,
+      review_context: engine.reviewContext,
+      encounter_version: engine.encounterVersion || 1,
       submitted_em: engine.submittedEm, engine_em: engine.em?.code || null, final_em: dec.em?.final || null,
       decisions, time_spent_seconds: seconds, overall_note: "",
     };
     if (live) {
+      // Freeze the exact first payload. A response-lost retry must reuse both
+      // the UUID and timer value or the server correctly treats it as a conflict.
+      pendingPayload.current = payload;
       try {
         const r = await api("/api/feedback", { method: "POST", body: payload });
-        setDone({ ...payload, _stored: r.stored });
+        setDone({ ...payload, _replayed: r.replayed });
       } catch (e) {
         setError(`feedback submit failed: ${e.message}`);
       }

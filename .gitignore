@@ -1,6 +1,9 @@
 # Secrets — never commit credentials. Use environment variables or a secrets manager.
 .env
 .env.*
+!.env.example
+infra/*.parameters.json
+!infra/*.parameters.example.json
 *api*key*.txt
 openaiapikey.txt
 

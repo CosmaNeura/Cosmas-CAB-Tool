@@ -8,47 +8,160 @@ Endpoints (shapes match the documented contracts in frontend/*.jsx):
   POST /api/encounters/{id}/billing       run the pipeline on a stored encounter
   POST /api/billing                       run the pipeline on posted documentation
   GET  /api/encounters/{id}/coder-view    pre-coded claim for the coder review UI
-  POST /api/feedback                      persist a coder's review (JSONL store)
+  POST /api/feedback                      persist a coder's reviewed decisions
   GET  /api/feedback/summary              accuracy metrics + tuning backlog
 
 Run:  uvicorn cosmaneura_billing.api:app --reload
-The orchestrator (and its knowledge bases, including the ~18s NCCI load) is
-initialized once, on first use.
+The orchestrator and its regulatory knowledge bases are warmed during process
+startup. Readiness remains unavailable until that warmup and every configured
+durable persistence boundary succeed.
 """
 from __future__ import annotations
 
+import base64
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import hashlib
+import hmac
+import json
 import os
 import re
 from functools import lru_cache
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import coder_feedback
-from .coder_feedback import EncounterFeedback, FeedbackStore
+from .access_audit import (
+    AccessAuditMiddleware, AccessAuditStore, MemoryAccessAuditStore,
+    DeniedAccessAuditor, build_access_event, classify_access,
+)
+from .auth import AuthPrincipal, EntraAuthMiddleware
+from .billing_tab import build_billing_tab_view
+from .chase.worklist import ChaseActionConflict
+from .chase.store import PostgresChaseStore
+from .coder_feedback import EncounterFeedback, FeedbackConflict, FeedbackStore
+from .completeness import OverrideRequiresReason, applicable_rulepack, check_note
 from .corpus.acibench import load_acibench
 from .corpus.demo import SAMPLE_VISIT
+from .llm import describe_client
 from .orchestrator import BillingOrchestrator
-from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
-
-app = FastAPI(title="CosmaNeura Billing Engine", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+from .persistence import (
+    MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
+    PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
+    UnknownEncounter, postgres_services,
 )
+from .preferences import PreferenceStore
+from .runtime import PHISafeHTTPMiddleware, configure_json_logging
+from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
+from .security import (
+    FixedWindowLimiter, PrincipalRateLimitMiddleware,
+    RequestBodyLimitMiddleware, StrictOriginMiddleware,
+)
+from .settings import Settings, get_settings
+from .ta4h import describe_ta4h_client
+
+router = APIRouter()
 
 _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
          CodeKind.PROCEDURE: "PROCEDURE", CodeKind.MODIFIER: "MODIFIER"}
 _ENGINE_VERSION = "cpt2026u4;icd10-FY2026;ncci-2026Q3-v32.2;mcd-NGS-2026-07-20"
 
 
+def _review_context_binding(
+    encoded_payload: str,
+    principal: AuthPrincipal,
+    encounter_version: int,
+) -> bytes:
+    return json.dumps(
+        [
+            encoded_payload,
+            principal.practice_id,
+            principal.tenant_id,
+            principal.user_id,
+            encounter_version,
+        ],
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _issue_review_context(
+    stored,
+    principal: AuthPrincipal,
+    *,
+    engine_version: str = _ENGINE_VERSION,
+) -> str:
+    """Bind a coder view to its server-owned engine and encounter version.
+
+    The random internal encounter UUID is never returned. It acts as a
+    per-encounter MAC key, so a browser can echo this context across replicas
+    but cannot mint a different engine version or actor binding.
+    """
+    payload = json.dumps(
+        {"v": 1, "engineVersion": engine_version},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    signature = hmac.new(
+        UUID(stored.resource_id).bytes,
+        _review_context_binding(encoded, principal, stored.version),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _verify_review_context(
+    token: str,
+    stored,
+    principal: AuthPrincipal,
+    encounter_version: int,
+) -> str:
+    """Return the issued engine version or reject a forged/stale binding."""
+    if not isinstance(token, str) or len(token) > 1_024:
+        raise ValueError("invalid review context")
+    try:
+        encoded, supplied = token.split(".", 1)
+        if not encoded or len(supplied) != 64:
+            raise ValueError("invalid review context")
+        expected = hmac.new(
+            UUID(stored.resource_id).bytes,
+            _review_context_binding(encoded, principal, encounter_version),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(supplied, expected):
+            raise ValueError("invalid review context")
+        padded = encoded + "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        if set(payload) != {"v", "engineVersion"} or payload["v"] != 1:
+            raise ValueError("invalid review context")
+        engine_version = payload["engineVersion"]
+        if not isinstance(engine_version, str) or not 1 <= len(engine_version) <= 256:
+            raise ValueError("invalid review context")
+        return engine_version
+    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid review context") from exc
+
+
 # --------------------------------------------------------------------------- #
 # Engine + encounter store (lazy singletons)
 # --------------------------------------------------------------------------- #
-@lru_cache(maxsize=1)
-def get_orchestrator() -> BillingOrchestrator:
-    return BillingOrchestrator()
+def get_orchestrator(
+    settings: Settings | None = None, *, feedback_store=None,
+) -> BillingOrchestrator:
+    """Build an engine using one resolved application configuration."""
+    config = settings or get_settings()
+    preferences = (
+        PreferenceStore(settings=config, feedback_store=feedback_store)
+        if feedback_store is not None else None
+    )
+    return BillingOrchestrator(settings=config, preferences=preferences)
 
 
 @lru_cache(maxsize=1)
@@ -62,8 +175,66 @@ def get_encounters() -> dict[str, VisitBundle]:
     return store
 
 
-def get_feedback_store() -> FeedbackStore:
-    return FeedbackStore(os.environ.get("COSMANEURA_FEEDBACK_PATH", "coder_feedback.jsonl"))
+def get_feedback_store(settings: Settings | None = None):
+    config = settings or get_settings()
+    if config.state_store == "postgres":
+        return postgres_services(config).feedback
+    return FeedbackStore(config.feedback_path)
+
+
+def _request_settings(request: Request) -> Settings:
+    return getattr(request.app.state, "settings", None) or get_settings()
+
+
+def _request_orchestrator(request: Request) -> BillingOrchestrator:
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    if orchestrator is None:
+        # TestClient calls outside a lifespan still use stable, app-local state.
+        orchestrator = get_orchestrator(
+            _request_settings(request),
+            feedback_store=request.app.state.feedback_store,
+        )
+        request.app.state.orchestrator = orchestrator
+    return orchestrator
+
+
+def _request_principal(request: Request) -> AuthPrincipal:
+    principal = getattr(request.state, "principal", None)
+    if not isinstance(principal, AuthPrincipal):
+        raise HTTPException(status_code=401, detail="authentication required")
+    return principal
+
+
+def _request_feedback_store(request: Request):
+    return request.app.state.feedback_store
+
+
+def _request_encounter_store(request: Request):
+    return request.app.state.encounter_store
+
+
+def _set_audit_resource(request: Request, resource_id: str) -> None:
+    # The store generated and tenant-validated this opaque ID. Raw request IDs
+    # and EHR/MRN values must never enter the access-audit stream.
+    request.state.audit_resource_id = resource_id
+
+
+def _completion_event(request: Request, *, status: int = 200, outcome: str = "allowed"):
+    classified = classify_access(request.method, request.url.path)
+    event_id = getattr(request.state, "audit_event_id", "")
+    if classified is None or not event_id:
+        raise RuntimeError("access audit reservation is unavailable")
+    return build_access_event(
+        settings=_request_settings(request), scope=request.scope,
+        classified=classified, event_id=event_id, status=status, outcome=outcome,
+    )
+
+
+def _require_roles(request: Request, *roles: str) -> AuthPrincipal:
+    principal = _request_principal(request)
+    if not principal.has_any_role(roles):
+        raise HTTPException(status_code=403, detail="access is not permitted")
+    return principal
 
 
 # --------------------------------------------------------------------------- #
@@ -140,10 +311,20 @@ def _billing_json(bundle: VisitBundle, result: BillingResult) -> dict[str, Any]:
                       "tone": e.tone, "patientBenefit": e.patient_benefit}
                      for e in result.feedback_events],
         "revenueIntegrityNote": result.revenue_integrity_note,
+        **result.inference,
+        "degraded": _degraded_json(result),
     }
 
 
-def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, Any]:
+def _degraded_json(result: BillingResult) -> Optional[dict[str, str]]:
+    d = result.degraded
+    return {"reason": d.reason, "detail": d.detail} if d else None
+
+
+def _coder_view_json(
+    bundle: VisitBundle, result: BillingResult, coder_id: str,
+    *, multi_engine: bool = False,
+) -> dict[str, Any]:
     card = result.provider_card
 
     def row(s: CodeSuggestion) -> dict[str, Any]:
@@ -166,62 +347,144 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, An
         "encounterId": bundle.encounter_id,
         "engineVersion": _ENGINE_VERSION,
         "submittedEm": bundle.submitted_em_code,
-        "coderId": os.environ.get("COSMANEURA_CODER_ID", "coder_A"),
-        "multiEngine": get_orchestrator().multi_engine,
+        "coderId": coder_id,
+        "multiEngine": multi_engine,
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
+        **result.inference,
+        "degraded": _degraded_json(result),
     }
 
 
 # --------------------------------------------------------------------------- #
 # Request models
 # --------------------------------------------------------------------------- #
-class ProcessRequest(BaseModel):
-    encounterId: str = "ADHOC-1"
-    intake: str = ""
-    transcript: str = ""
-    signedNote: str = ""
-    submittedEm: Optional[str] = None
-    encounterType: str = "office_established"
-    placeOfService: str = "11"
-    patientAge: int = 0
-    patientSex: str = "unknown"
-    userId: Optional[str] = None      # reviewer identity for learned preferences
+class StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-class DecisionModel(BaseModel):
-    kind: str
-    engine_code: Optional[str] = None
-    action: str
-    final_code: Optional[str] = None
-    reason_code: Optional[str] = None
-    note: str = ""
+class ProcessRequest(StrictRequest):
+    encounterId: str = Field(default="ADHOC-1", min_length=1, max_length=128)
+    intake: str = Field(default="", max_length=250_000)
+    transcript: str = Field(default="", max_length=500_000)
+    signedNote: str = Field(default="", max_length=250_000)
+    submittedEm: Optional[str] = Field(default=None, max_length=32)
+    encounterType: str = Field(default="office_established", max_length=64)
+    placeOfService: str = Field(default="11", max_length=8)
+    patientAge: int = Field(default=0, ge=0, le=130)
+    patientSex: str = Field(default="unknown", max_length=32)
 
 
-class FeedbackModel(BaseModel):
-    encounter_id: str
-    coder_id: str
-    engine_version: str = _ENGINE_VERSION
-    submitted_em: Optional[str] = None
-    engine_em: Optional[str] = None
-    final_em: Optional[str] = None
-    decisions: list[DecisionModel] = Field(default_factory=list)
-    time_spent_seconds: Optional[float] = None
-    overall_note: str = ""
+class CompletenessRequest(StrictRequest):
+    note: str = Field(default="", max_length=750_000)
+    placeOfService: str = Field(default="10", max_length=8)
+    encounterType: str = Field(default="telehealth_established", max_length=64)
+    rulepack: Optional[str] = Field(default=None, max_length=128)
+    # rule_id -> reason. A blank reason is rejected (422): the reason is the
+    # record of why the rule did not apply to this note.
+    overrides: Optional[dict[str, str]] = None
+
+
+class ChaseDetectRequest(StrictRequest):
+    today: str = Field(min_length=1, max_length=32)
+    # Raw CoverageSnapshot fields — the adapter boundary standing in for athenaNet.
+    snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=5_000)
+
+
+class ChaseActionRequest(StrictRequest):
+    action_id: UUID
+    action: str = Field(min_length=1, max_length=32)
+    assignee: str = Field(default="", max_length=128)
+    reason: str = Field(default="", max_length=4_000)
+    channel: Optional[str] = Field(default=None, max_length=32)
+    template_id: Optional[str] = Field(default=None, max_length=128)
+    outcome: Optional[str] = Field(default=None, max_length=128)
+    minutes_spent: float = Field(default=0.0, ge=0, le=1_440)
+    note: str = Field(default="", max_length=4_000)
+    athena_write_id: str = Field(default="", max_length=256)
+    eligibility_status: str = Field(default="", max_length=128)
+
+
+class ChasePolicyCreateRequest(StrictRequest):
+    policy_revision_id: UUID
+
+
+class ChasePolicyApprovalRequest(StrictRequest):
+    approval_event_id: UUID
+    policy_revision_id: UUID
+    reason: str = Field(default="", max_length=2_000)
+
+
+class ChasePolicyActivationRequest(StrictRequest):
+    approval_event_id: UUID
+    policy_revision_id: UUID
+
+
+class ChasePolicyRevocationRequest(StrictRequest):
+    approval_event_id: UUID
+    policy_revision_id: UUID
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class ChaseMessageReleaseRequest(StrictRequest):
+    release_id: UUID
+    reason: str = Field(default="", max_length=2_000)
+
+
+class DecisionModel(StrictRequest):
+    kind: Literal["EM", "ICD10", "PROCEDURE", "MODIFIER"]
+    engine_code: Optional[str] = Field(default=None, max_length=32)
+    action: Literal["accept", "modify", "reject", "add"]
+    final_code: Optional[str] = Field(default=None, max_length=32)
+    reason_code: Optional[Literal[
+        "em_doc_supports_higher_level", "em_doc_supports_lower_level",
+        "em_mdm_element_disagreement", "em_time_based_leveling",
+        "dx_not_supported_by_doc", "dx_contradicted_by_doc",
+        "dx_needs_more_specific_code", "dx_primary_secondary_swap",
+        "dx_missed_by_engine", "modifier_required",
+        "procedure_bundling_ncci", "medical_necessity_coverage", "other",
+    ]] = None
+    note: str = Field(default="", max_length=4_000)
+
+    @model_validator(mode="after")
+    def validate_action_shape(self):
+        valid = (
+            self.action == "add" and self.engine_code is None and self.final_code
+        ) or (
+            self.action == "reject" and self.engine_code and self.final_code is None
+        ) or (
+            self.action in {"accept", "modify"}
+            and self.engine_code and self.final_code
+        )
+        if not valid:
+            raise ValueError("decision fields do not match the selected action")
+        return self
+
+
+class FeedbackModel(StrictRequest):
+    review_id: UUID
+    review_context: str = Field(min_length=1, max_length=1_024)
+    encounter_id: str = Field(min_length=1, max_length=128)
+    encounter_version: int = Field(ge=1)
+    submitted_em: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    engine_em: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    final_em: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    decisions: list[DecisionModel] = Field(default_factory=list, max_length=500)
+    time_spent_seconds: Optional[float] = Field(default=None, ge=0, le=86_400)
+    overall_note: str = Field(default="", max_length=4_000)
 
 
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
-def _cpt_status(cpt) -> str:
+def _cpt_status(cpt, settings: Settings | None = None) -> str:
     """One human-readable line the UI can show for the CPT pill tooltip."""
     if cpt.loaded:
         return f"{cpt.size} official descriptors loaded from {cpt.source}"
     if cpt.fetch_error:
         return f"auto-fetch failed: {cpt.fetch_error}"
-    if all(os.environ.get(v) for v in
-           ("AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET")):
+    if (settings or get_settings()).ama_configured:
         return "AMA credentials present but no descriptors resolved"
     return ("no CPT license configured — set the four AMA_* variables "
             "(auto-fetch) or CPT_DATA_DIR (local Standard Data File); "
@@ -229,73 +492,128 @@ def _cpt_status(cpt) -> str:
 
 
 def _ta4h_status(orch) -> str:
-    """One human-readable line for the second-engine pill tooltip."""
+    """One human-readable line for the second-engine pill tooltip.
+
+    Deliberately names no endpoint: which resource is configured is deployment
+    detail, not something a browser response needs to carry.
+    """
     if orch.ta4h is None:
-        return ("second extraction engine off — set AZURE_LANGUAGE_ENDPOINT and "
-                "AZURE_LANGUAGE_KEY (or COSMANEURA_TA4H=mock to try it offline); "
-                "single-engine coding in use")
-    name = type(orch.ta4h).__name__
-    if name == "MockTA4H":
-        return "Azure Text Analytics for health: offline mock (demo encounter only)"
-    return (f"Azure Text Analytics for health live at "
-            f"{os.environ.get('AZURE_LANGUAGE_ENDPOINT', '(injected client)')} — "
+        return ("second extraction engine off — enable "
+                "COSMANEURA_AZURE_LANGUAGE_ENABLED with a Language endpoint and the "
+                "API managed identity; single-engine coding in use")
+    if getattr(orch.ta4h, "mode", None) == "mock":
+        return ("Azure Text Analytics for health: offline mock, demo encounter only "
+                "— not engine output")
+    return ("Azure Text Analytics for health: live via managed identity, "
             "input logging opted out")
 
 
-@app.get("/api/health")
-def health() -> dict[str, Any]:
-    orch = get_orchestrator()
+@router.get("/api/health")
+def health(request: Request) -> dict[str, Any]:
+    orch = _request_orchestrator(request)
+    settings = _request_settings(request)
     return {
         "status": "ok",
         "engineVersion": _ENGINE_VERSION,
+        **describe_client(orch.llm),
         "icd10Codes": orch.icd10.size,
         "currentFyLoaded": orch.icd10.has_current_fy,
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),
         "coverageLoaded": bool(orch.coverage and orch.coverage.loaded),
         "cptDescriptors": orch.cpt.size if orch.cpt.loaded else 0,
-        "cptStatus": _cpt_status(orch.cpt),
+        "cptStatus": _cpt_status(orch.cpt, settings),
         "denialPriors": orch.denial_priors.size,
-        "encounters": len(get_encounters()),
+        "encounters": len(_request_encounter_store(request).all()),
+        **describe_ta4h_client(orch.ta4h),
         "multiEngine": orch.multi_engine,
         "ta4hStatus": _ta4h_status(orch),
     }
 
 
-@app.get("/api/encounters")
-def list_encounters() -> list[dict[str, Any]]:
+@router.get("/api/ready")
+def readiness(request: Request):
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    chase_context = getattr(request.app.state, "chase_context", None)
+    datasets_loaded = bool(
+        orchestrator
+        and orchestrator.ncci
+        and orchestrator.ncci.loaded
+        and orchestrator.coverage
+        and orchestrator.coverage.loaded
+    )
+    if (
+        not getattr(request.app.state, "ready", False)
+        or chase_context is None
+        or not datasets_loaded
+    ):
+        return JSONResponse(status_code=503, content={"status": "warming"})
+    try:
+        chase_context["store"].healthcheck()
+        scheduler = chase_context.get("scheduler")
+        if scheduler is not None:
+            scheduler.healthcheck()
+        request.app.state.access_audit_store.healthcheck()
+        request.app.state.encounter_store.healthcheck()
+        request.app.state.feedback_store.healthcheck()
+        membership_store = request.app.state.membership_store
+        if membership_store is not None:
+            membership_store.healthcheck()
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {
+        "status": "ready",
+        "ncciLoaded": True,
+        "coverageLoaded": True,
+    }
+
+
+@router.get("/api/live")
+def liveness() -> dict[str, str]:
+    """Shallow process liveness; it intentionally initializes no engine state."""
+    return {"status": "alive"}
+
+
+@router.get("/api/encounters")
+def list_encounters(request: Request) -> list[dict[str, Any]]:
+    _request_orchestrator(request)
     return [{
         "id": b.encounter_id,
         "encounterType": b.encounter_type,
         "submittedEm": b.submitted_em_code,
         "preview": (b.signed_note or b.transcript)[:110],
-    } for b in get_encounters().values()]
+    } for row in _request_encounter_store(request).all() for b in [row.bundle]]
 
 
-def _get_bundle(encounter_id: str) -> VisitBundle:
-    bundle = get_encounters().get(encounter_id)
-    if bundle is None:
+def _get_stored_encounter(request: Request, encounter_id: str):
+    stored = _request_encounter_store(request).get(encounter_id)
+    if stored is None:
         raise HTTPException(status_code=404, detail=f"unknown encounter '{encounter_id}'")
-    return bundle
+    _set_audit_resource(request, stored.resource_id)
+    return stored
 
 
-@app.get("/api/encounters/{encounter_id}")
-def get_encounter(encounter_id: str) -> dict[str, Any]:
-    b = _get_bundle(encounter_id)
+@router.get("/api/encounters/{encounter_id}")
+def get_encounter(request: Request, encounter_id: str) -> dict[str, Any]:
+    b = _get_stored_encounter(request, encounter_id).bundle
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,
             "transcript": b.transcript, "signedNote": b.signed_note,
             "placeOfService": b.place_of_service}
 
 
-@app.post("/api/encounters/{encounter_id}/billing")
-def bill_stored(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
-    bundle = _get_bundle(encounter_id)
-    result = get_orchestrator().process(bundle, user_id=user_id)
+@router.post("/api/encounters/{encounter_id}/billing")
+def bill_stored(request: Request, encounter_id: str) -> dict[str, Any]:
+    bundle = _get_stored_encounter(request, encounter_id).bundle
+    principal = _request_principal(request)
+    result = _request_orchestrator(request).process(
+        bundle, user_id=principal.user_id
+    )
     return _billing_json(bundle, result)
 
 
-@app.post("/api/billing")
-def bill_adhoc(req: ProcessRequest) -> dict[str, Any]:
+@router.post("/api/billing")
+def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
+    principal = _request_principal(request)
     bundle = VisitBundle(
         encounter_id=req.encounterId, patient_age=req.patientAge,
         patient_sex=req.patientSex, encounter_type=req.encounterType,
@@ -303,18 +621,25 @@ def bill_adhoc(req: ProcessRequest) -> dict[str, Any]:
         transcript=req.transcript, signed_note=req.signedNote,
         submitted_em_code=req.submittedEm,
     )
-    result = get_orchestrator().process(bundle, user_id=req.userId)
+    result = _request_orchestrator(request).process(
+        bundle, user_id=principal.user_id
+    )
     return _billing_json(bundle, result)
 
 
-@app.get("/api/encounters/{encounter_id}/coder-view")
-def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, Any]:
-    bundle = _get_bundle(encounter_id)
-    orch = get_orchestrator()
-    uid = user_id or os.environ.get("COSMANEURA_CODER_ID", "coder_A")
+@router.get("/api/encounters/{encounter_id}/coder-view")
+def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
+    stored = _get_stored_encounter(request, encounter_id)
+    bundle = stored.bundle
+    orch = _request_orchestrator(request)
+    uid = _request_principal(request).user_id
     result = orch.process(bundle, user_id=uid)
-    view = _coder_view_json(bundle, result)
-    view["coderId"] = uid
+    view = _coder_view_json(bundle, result, uid,
+                            multi_engine=orch.multi_engine)
+    view["encounterVersion"] = stored.version
+    view["reviewContext"] = _issue_review_context(
+        stored, _request_principal(request),
+    )
     # attach learned-history hints so the reviewer sees why a code was
     # refined or held ("you've declined this 3x")
     prefs = orch.preferences.for_user(uid)
@@ -327,21 +652,92 @@ def coder_view(encounter_id: str, user_id: Optional[str] = None) -> dict[str, An
     return view
 
 
-@app.post("/api/feedback")
-def submit_feedback(fb: FeedbackModel) -> dict[str, Any]:
-    store = get_feedback_store()
+@router.get("/api/encounters/{encounter_id}/billing-tab")
+def billing_tab(request: Request, encounter_id: str,
+                generated_at: str = "") -> dict[str, Any]:
+    """The provider billing tab (F1): the same visit reorganised as a billing
+    reference. The clinical note is never altered — this is a view over it."""
+    bundle = _get_stored_encounter(request, encounter_id).bundle
+    result = _request_orchestrator(request).process(
+        bundle, user_id=_request_principal(request).user_id
+    )
+    return build_billing_tab_view(
+        bundle, result, engine_version=_ENGINE_VERSION, generated_at=generated_at)
+
+
+@router.post("/api/completeness")
+def completeness(req: CompletenessRequest) -> dict[str, Any]:
+    """Run a note-completeness rule pack before the claim reaches a coder.
+
+    This is the pre-submission check: fixing a gap here means it never becomes a
+    denial, and never costs a coder a review minute.
+    """
+    pack = req.rulepack or applicable_rulepack(req.placeOfService, req.encounterType)
+    if pack is None:
+        return {"rulepack": None, "complete": None, "results": [],
+                "attestationBlock": None,
+                "detail": "No rule pack covers this encounter type yet."}
+    try:
+        report = check_note(req.note, rulepack=pack, overrides=req.overrides or None)
+    except OverrideRequiresReason as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=f"unknown rule pack '{pack}'") from e
+    return report.to_dict(pos=req.placeOfService)
+
+
+@router.post("/api/feedback")
+def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
+    principal = _require_roles(request, "Coder", "Admin")
+    stored = _get_stored_encounter(request, fb.encounter_id)
+    try:
+        engine_version = _verify_review_context(
+            fb.review_context, stored, principal, fb.encounter_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409, detail="review context is invalid; reload the review",
+        ) from exc
+    store = _request_feedback_store(request)
     record = EncounterFeedback(
-        encounter_id=fb.encounter_id, coder_id=fb.coder_id,
-        engine_version=fb.engine_version, submitted_em=fb.submitted_em,
+        encounter_id=fb.encounter_id, coder_id=principal.user_id,
+        coder_tenant_id=principal.tenant_id, review_id=str(fb.review_id),
+        encounter_version=fb.encounter_version,
+        engine_version=engine_version, submitted_em=fb.submitted_em,
         engine_em=fb.engine_em, final_em=fb.final_em,
         decisions=[coder_feedback.CodeDecision(**d.model_dump()) for d in fb.decisions],
         time_spent_seconds=fb.time_spent_seconds, overall_note=fb.overall_note,
     )
-    store.append(record)
-    return {"ok": True, "stored": len(store.load())}
+    try:
+        if (
+            isinstance(store, PostgresFeedbackStore)
+            and request.app.state.atomic_feedback_audit
+        ):
+            created = store.append_with_audit(record, _completion_event(request))
+            request.state.audit_completion_committed = True
+        else:
+            if store.exact_replay(record):
+                created = False
+            else:
+                if stored.version != fb.encounter_version:
+                    raise StaleEncounter(fb.encounter_id)
+                created = store.append(record)
+    except FeedbackConflict as exc:
+        raise HTTPException(
+            status_code=409, detail="review ID conflicts with an existing review",
+        ) from exc
+    except UnknownEncounter as exc:
+        raise HTTPException(status_code=404, detail="unknown encounter") from exc
+    except StaleEncounter as exc:
+        raise HTTPException(
+            status_code=409, detail="encounter changed; reload the review",
+        ) from exc
+    except ReviewerNotAuthorized as exc:
+        raise HTTPException(status_code=403, detail="access is not permitted") from exc
+    return {"ok": True, "reviewId": str(fb.review_id), "replayed": not created}
 
 
-@app.get("/api/benchmarks/em")
+@router.get("/api/benchmarks/em")
 def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[str, Any]:
     """State + national E/M mix and allowed amounts — population benchmarks for
     opportunity-sizing only, never an input to coding an encounter."""
@@ -362,7 +758,7 @@ def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[st
     }
 
 
-@app.get("/api/benchmarks/payer-denials")
+@router.get("/api/benchmarks/payer-denials")
 def payer_denials(state: str = "NH") -> dict[str, Any]:
     """Issuer-level Marketplace denial rates (CMS TC-PUF PY2026) — the
     'how tough is this payer' prior."""
@@ -377,9 +773,574 @@ def payer_denials(state: str = "NH") -> dict[str, Any]:
             } for r in rows]}
 
 
-@app.get("/api/feedback/summary")
-def feedback_summary() -> dict[str, Any]:
-    feedbacks = get_feedback_store().load()
+# --------------------------------------------------------------------------- #
+# Insurance-data chase (F9). The state machine remains in-process, but every row
+# mutation goes through a configured store. Production rejects the in-memory
+# store, preventing replica divergence and restart data loss before messaging is
+# enabled. The default transport remains inert until P1-P4 and the BAA land.
+# --------------------------------------------------------------------------- #
+@lru_cache(maxsize=1)
+def get_chase_context() -> dict[str, Any]:
+    """Legacy no-argument context used by CLI callers and older tests."""
+    return _build_chase_context(get_settings())
+
+
+def _build_chase_context(settings: Settings) -> dict[str, Any]:
+    from .chase import (
+        ApprovalMode, ChasePolicy, SequenceRunner, chase_store_from_settings,
+    )
+    from .direct_contract import DirectContractList
+
+    policy = ChasePolicy(
+        practice_name=settings.practice_name,
+        upload_url=settings.upload_url,
+        approval_mode=ApprovalMode(settings.chase_approval),
+    )
+    context = {
+        # This object is safe to cache: PostgresChaseStore carries only immutable
+        # connection configuration. Chase rows themselves live in PostgreSQL.
+        "store": chase_store_from_settings(settings),
+        "policy": policy,
+        # The default transport records without contacting anyone; real messaging
+        # is gated on the deployment layer and the BAA.
+        "runner": SequenceRunner(policy=policy),
+        "roster": DirectContractList(settings=settings),
+    }
+    # The P4 repository is a second, deliberately narrower authority over the
+    # shared chase schema. Construct it only for the fully durable application
+    # topology so local/demo callers retain the legacy in-memory behavior.
+    if settings.state_store == "postgres" and settings.chase_store == "postgres":
+        from .chase.policy_fingerprint import (
+            DeliveryConfiguration, policy_fingerprint,
+        )
+        from .chase.scheduler_store import PostgresChaseSchedulerRepository
+
+        delivery = DeliveryConfiguration.from_settings(settings)
+        context.update({
+            "scheduler": PostgresChaseSchedulerRepository(
+                settings.chase_dsn, practice_id=settings.practice_id,
+            ),
+            "delivery": delivery,
+            "practice_timezone": settings.practice_timezone,
+            "policy_fingerprint": policy_fingerprint(
+                policy,
+                practice_timezone=settings.practice_timezone,
+                delivery=delivery,
+            ),
+        })
+    return context
+
+
+def _request_chase_context(request: Request) -> dict[str, Any]:
+    context = getattr(request.app.state, "chase_context", None)
+    if context is None:
+        context = _build_chase_context(_request_settings(request))
+        request.app.state.chase_context = context
+    return context
+
+
+def _scheduler_context(request: Request) -> tuple[dict[str, Any], Any]:
+    context = _request_chase_context(request)
+    scheduler = context.get("scheduler")
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503, detail="durable chase scheduling is unavailable",
+        )
+    return context, scheduler
+
+
+def _scheduler_audit_event(request: Request):
+    # P4 mutations and their allowed access completion are one PostgreSQL
+    # transaction. Never silently fall back to a later best-effort append.
+    if not request.app.state.atomic_chase_audit:
+        raise HTTPException(
+            status_code=503, detail="durable chase audit is unavailable",
+        )
+    return _completion_event(request)
+
+
+def _raise_scheduler_http(exc: Exception) -> None:
+    from .chase.scheduler_store import (
+        SchedulerAuthorizationError, SchedulerConflict, SchedulerNotFound,
+    )
+
+    if isinstance(exc, SchedulerAuthorizationError):
+        raise HTTPException(status_code=403, detail="access is not permitted") from exc
+    if isinstance(exc, SchedulerNotFound):
+        raise HTTPException(
+            status_code=404, detail="scheduler resource was not found",
+        ) from exc
+    if isinstance(exc, SchedulerConflict):
+        raise HTTPException(
+            status_code=409,
+            detail="scheduler action conflicts with the current state",
+        ) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise exc
+
+
+def _policy_record_json(record) -> dict[str, Any]:
+    return {
+        "policyRevisionId": record.policy_revision_id,
+        "policyName": record.policy_name,
+        "revisionNo": record.revision_no,
+        "policyFingerprint": record.policy_fingerprint,
+        "approvalMode": record.approval_mode,
+    }
+
+
+def _approval_record_json(record) -> dict[str, Any]:
+    return {
+        "approvalEventId": record.approval_event_id,
+        "policyRevisionId": record.policy_revision_id,
+        "policyFingerprint": record.policy_fingerprint,
+        "eventType": record.event_type,
+        "occurredAt": record.occurred_at.isoformat(),
+    }
+
+
+@router.get("/api/chase/worklist")
+def chase_worklist(request: Request, bucket: str = "", assignee: str = "",
+                   needs_person: bool = False) -> dict[str, Any]:
+    """The master list: one integrated view over missing, expired and eligibility."""
+    _require_roles(request, "BillingStaff", "Admin")
+    ctx = _request_chase_context(request)
+    policy_view = ctx["policy"].to_dict()
+    scheduler = ctx.get("scheduler")
+    if scheduler is not None:
+        try:
+            durable = scheduler.policy_status(
+                expected_policy_fingerprint=ctx["policy_fingerprint"],
+            )
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+        # Minimal backend seam for the existing UI contract: durable approval
+        # replaces the legacy process-local flag, while the PHI-free lifecycle
+        # object remains available to future UI work without redesign here.
+        policy_view.update({
+            "approved": bool(durable.get("active")),
+            "approved_by": None,
+            "approved_at": durable.get("activatedAt") or None,
+            "durable_status": durable,
+        })
+    return {
+        **ctx["store"].to_dict(bucket=bucket, assignee=assignee,
+                               needs_person=needs_person),
+        "policy": policy_view,
+    }
+
+
+@router.get("/api/chase/policy/status")
+def chase_policy_status(request: Request) -> dict[str, Any]:
+    """Return only the configured policy's PHI-free lifecycle metadata."""
+    _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        return scheduler.policy_status(
+            expected_policy_fingerprint=context["policy_fingerprint"],
+        )
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/create")
+def chase_policy_create(
+    request: Request, req: ChasePolicyCreateRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        record = scheduler.create_policy(
+            context["policy"], context["delivery"],
+            practice_timezone=context["practice_timezone"],
+            policy_revision_id=str(req.policy_revision_id),
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return _policy_record_json(record)
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/approve")
+def chase_policy_approve(
+    request: Request, req: ChasePolicyApprovalRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        record = scheduler.approve_policy(
+            context["policy"], context["delivery"],
+            practice_timezone=context["practice_timezone"],
+            approval_event_id=str(req.approval_event_id),
+            policy_revision_id=str(req.policy_revision_id),
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return _approval_record_json(record)
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/activate")
+def chase_policy_activate(
+    request: Request, req: ChasePolicyActivationRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        scheduler.activate_policy(
+            context["policy"], context["delivery"],
+            practice_timezone=context["practice_timezone"],
+            policy_revision_id=str(req.policy_revision_id),
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            approval_event_id=str(req.approval_event_id),
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return {"status": "active"}
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/policy/revoke")
+def chase_policy_revoke(
+    request: Request, req: ChasePolicyRevocationRequest,
+) -> dict[str, Any]:
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    try:
+        record = scheduler.revoke_policy(
+            approval_event_id=str(req.approval_event_id),
+            policy_revision_id=str(req.policy_revision_id),
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return _approval_record_json(record)
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/detect")
+def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
+    """Run detection over posted coverage snapshots and merge into the worklist.
+
+    Re-running is safe: an open row for the same patient and trigger is refreshed
+    rather than duplicated, so daily detection does not inflate the backlog.
+    """
+    from .chase import Channel, CoverageSnapshot, detect, detect_all
+
+    _require_roles(request, "BillingStaff", "Admin")
+    ctx = _request_chase_context(request)
+    if (
+        ctx.get("scheduler") is not None
+        and any(snapshot.get("sms_consent") is True for snapshot in req.snapshots)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "posted detection cannot grant SMS consent; consent must come "
+                "from the trusted opt-in feed"
+            ),
+        )
+    snapshots = [CoverageSnapshot(**s) for s in req.snapshots]
+    store = ctx["store"]
+    scheduler = ctx.get("scheduler")
+    if scheduler is not None:
+        from .chase.scheduler_store import (
+            ContactRouteInput, ContactSnapshotInput,
+        )
+
+        principal = _request_principal(request)
+        detected_at = datetime.now(timezone.utc)
+        entries = []
+        for snapshot in snapshots:
+            item = detect(
+                snapshot,
+                today=req.today,
+                now=lambda: detected_at.isoformat(),
+                roster=ctx["roster"],
+            )
+            if item is None:
+                continue
+            routes = []
+            if snapshot.email:
+                routes.append(ContactRouteInput(
+                    Channel.EMAIL, snapshot.email, "not_required",
+                ))
+            if snapshot.portal_enrolled:
+                routes.append(ContactRouteInput(
+                    Channel.PORTAL, snapshot.patient_ref, "not_required",
+                ))
+            if snapshot.phone:
+                # A posted coverage snapshot is not an opt-in authority. Keep
+                # SMS fail-closed while preserving the manual staff-call route.
+                routes.extend((
+                    ContactRouteInput(Channel.SMS, snapshot.phone, "unknown"),
+                    ContactRouteInput(
+                        Channel.PHONE, snapshot.phone, "not_required",
+                    ),
+                ))
+            contact = ContactSnapshotInput(
+                contact_snapshot_id=str(uuid4()),
+                source_system="api.coverage_snapshot",
+                source_version=req.today,
+                observed_at=detected_at,
+                verified_at=detected_at,
+                verification_method="staff",
+                routes=tuple(routes),
+                verified_by_tenant_id=principal.tenant_id,
+                verified_by_user_id=principal.user_id,
+            )
+            entries.append((item, contact))
+        entries.sort(key=lambda entry: (-entry[0].priority, entry[0].patient_ref))
+        try:
+            results = scheduler.persist_detection_batch(
+                entries, audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+        return {"checked": len(snapshots), "detected": len(results)}
+
+    found = detect_all(snapshots, today=req.today, roster=ctx["roster"])
+    if request.app.state.atomic_chase_audit:
+        worklist = store.extend_and_snapshot(
+            found, audit_event=_completion_event(request),
+        )
+        request.state.audit_completion_committed = True
+    else:
+        store.extend(found)
+        worklist = store.to_dict()
+    return {"checked": len(snapshots), "detected": len(found), **worklist}
+
+
+@router.get("/api/chase/metrics")
+def chase_metrics(request: Request,
+                  baseline_minutes_per_card: Optional[float] = None,
+                  baseline_claims_held_monthly: Optional[int] = None) -> dict[str, Any]:
+    from .chase.metrics import baseline_comparison
+
+    _require_roles(request, "BillingStaff", "Admin")
+    return baseline_comparison(
+        _request_chase_context(request)["store"].all_items(),
+        baseline_minutes_per_card=baseline_minutes_per_card,
+        baseline_claims_held_monthly=baseline_claims_held_monthly)
+
+
+@router.post("/api/chase/{chase_id}/release-message")
+def chase_release_message(
+    request: Request,
+    chase_id: str,
+    req: ChaseMessageReleaseRequest,
+) -> dict[str, Any]:
+    """Admin release of the current exact per-message cadence rung."""
+    principal = _require_roles(request, "Admin")
+    context, scheduler = _scheduler_context(request)
+    store = context["store"]
+    if store.get(chase_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    if hasattr(store, "audit_resource_id"):
+        _set_audit_resource(request, store.audit_resource_id(chase_id))
+    try:
+        target = scheduler.message_release_target(
+            release_id=str(req.release_id),
+            chase_id=chase_id,
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+        )
+        record = scheduler.release_message(
+            release_id=str(req.release_id),
+            chase_id=chase_id,
+            policy_revision_id=target["policy_revision_id"],
+            expected_policy_fingerprint=context["policy_fingerprint"],
+            step_ordinal=target["step_ordinal"],
+            contact_snapshot_id=target["contact_snapshot_id"],
+            actor_tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            reason=req.reason,
+            audit_event=_scheduler_audit_event(request),
+        )
+        request.state.audit_completion_committed = True
+        return {"status": "released", "releaseId": record.release_id}
+    except Exception as exc:
+        _raise_scheduler_http(exc)
+
+
+@router.post("/api/chase/{chase_id}/action")
+def chase_action(request: Request, chase_id: str,
+                 req: ChaseActionRequest) -> dict[str, Any]:
+    """Staff actions on one row.
+
+    `release` and `suppress` are the human decisions; `log_attempt` is how a
+    phone call enters the contact history; `submitted` and `verify` are the
+    completion loop, and only `verify` closes a row.
+    """
+    from .chase import Channel
+
+    principal = _require_roles(request, "BillingStaff", "Admin")
+    ctx = _request_chase_context(request)
+    store, runner, action = ctx["store"], ctx["runner"], req.action
+    actor = principal.user_id
+    existing = store.get(chase_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    if hasattr(store, "audit_resource_id"):
+        _set_audit_resource(request, store.audit_resource_id(chase_id))
+    scheduler = ctx.get("scheduler")
+    if scheduler is not None and action == "release":
+        principal = _require_roles(request, "Admin")
+        gate_fingerprint = str(
+            (existing.direct_contract or {}).get("gate_fingerprint") or ""
+        )
+        try:
+            record = scheduler.release_direct_contract(
+                review_release_id=str(req.action_id),
+                chase_id=chase_id,
+                gate_fingerprint=gate_fingerprint,
+                actor_tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                reason=req.reason,
+                audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+            return {
+                "chaseId": chase_id,
+                "status": "released",
+                "releaseId": record.release_id,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+    if scheduler is not None and action == "log_attempt":
+        if req.channel not in {None, "phone"}:
+            raise HTTPException(
+                status_code=422,
+                detail="scheduler staff tasks can only log a manual phone call",
+            )
+        try:
+            result = scheduler.complete_staff_task(
+                ctx["policy"], ctx["delivery"],
+                practice_timezone=ctx["practice_timezone"],
+                chase_id=chase_id,
+                action_id=str(req.action_id),
+                actor_tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                outcome=req.outcome or "reached",
+                minutes_spent=req.minutes_spent,
+                note=req.note,
+                audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+            return {
+                "chaseId": result.chase_id,
+                "status": "completed",
+                "attemptRecorded": result.attempt_recorded,
+                "cadenceAdvanced": result.cadence_advanced,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+    assignee = req.assignee or actor
+    membership_store = request.app.state.membership_store
+    atomic_assignee_check = bool(
+        action == "assign"
+        and isinstance(store, PostgresChaseStore)
+        and isinstance(membership_store, PostgresMembershipStore)
+    )
+
+    def transition(item):
+        if action == "release":
+            runner.release(item, by=actor, reason=req.reason)
+        elif action == "suppress":
+            runner.suppress(item, by=actor, reason=req.reason)
+        elif action == "assign":
+            selected_assignee = assignee
+            if membership_store is not None and not atomic_assignee_check:
+                selected_assignee = membership_store.validate_assignee(assignee)
+            item.assignee = selected_assignee
+        elif action == "log_attempt":
+            runner.log_staff_attempt(
+                item, channel=Channel(req.channel or "phone"),
+                template_id=req.template_id or "phone.call", actor=actor,
+                outcome=req.outcome or "reached",
+                minutes_spent=req.minutes_spent, note=req.note)
+        elif action == "submitted":
+            runner.mark_submitted(item, note=req.note)
+        elif action == "verify":
+            runner.close_verified(item, verified_by=actor,
+                                  athena_write_id=req.athena_write_id,
+                                  eligibility_status=req.eligibility_status)
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
+
+    action_payload = {
+        "actorTenantId": principal.tenant_id,
+        "actorUserId": principal.user_id,
+        "chaseId": chase_id,
+        "request": req.model_dump(mode="json", exclude={"action_id"}),
+    }
+    action_hash = hashlib.sha256(json.dumps(
+        action_payload, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+
+    def validate_assignment_in_transaction(conn) -> None:
+        if atomic_assignee_check:
+            membership_store.validate_assignee(assignee, connection=conn)
+
+    try:
+        if request.app.state.atomic_chase_audit:
+            item = store.mutate(
+                chase_id, transition, audit_event=_completion_event(request),
+                action_id=str(req.action_id), payload_hash=action_hash,
+                transaction_check=(
+                    validate_assignment_in_transaction
+                    if atomic_assignee_check else None
+                ),
+            )
+            if item is not None:
+                request.state.audit_completion_committed = True
+        else:
+            item = store.mutate(
+                chase_id, transition, action_id=str(req.action_id),
+                payload_hash=action_hash,
+                transaction_check=(
+                    validate_assignment_in_transaction
+                    if atomic_assignee_check else None
+                ),
+            )
+    except ChaseActionConflict as exc:
+        raise HTTPException(
+            status_code=409, detail="action ID conflicts with an existing action",
+        ) from exc
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    return item.to_dict()
+
+
+@router.get("/api/feedback/summary")
+def feedback_summary(request: Request) -> dict[str, Any]:
+    _require_roles(request, "Admin")
+    feedbacks = _request_feedback_store(request).load()
     if not feedbacks:
         return {"encounters": 0, "summary": None, "tuningBacklog": [], "goldRows": 0}
     return {
@@ -388,3 +1349,203 @@ def feedback_summary() -> dict[str, Any]:
         "tuningBacklog": coder_feedback.tuning_signals(feedbacks),
         "goldRows": len(coder_feedback.export_gold(feedbacks)),
     }
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Warm heavyweight data before the replica can report ready."""
+    application.state.ready = False
+    application.state.startup_error = None
+    try:
+        settings = application.state.settings
+        # Build the durable worklist boundary at startup as well. In production
+        # this is where a missing Postgres configuration fails closed.
+        application.state.chase_context = _build_chase_context(settings)
+        # Force one database round trip so readiness also proves the durable
+        # chase schema exists; a configured-but-unreachable store is not ready.
+        application.state.chase_context["store"].healthcheck()
+        scheduler = application.state.chase_context.get("scheduler")
+        if scheduler is not None:
+            scheduler.healthcheck()
+        application.state.access_audit_store.healthcheck()
+        application.state.encounter_store.healthcheck()
+        application.state.feedback_store.healthcheck()
+        if application.state.membership_store is not None:
+            application.state.membership_store.healthcheck()
+        orchestrator = get_orchestrator(
+            settings, feedback_store=application.state.feedback_store,
+        )
+        if not (
+            orchestrator.ncci
+            and orchestrator.ncci.loaded
+            and orchestrator.coverage
+            and orchestrator.coverage.loaded
+        ):
+            raise RuntimeError("required regulatory datasets are unavailable")
+        application.state.orchestrator = orchestrator
+    except Exception as exc:
+        # Record only the class; configuration values and data never enter state
+        # that a generic health surface might later expose.
+        application.state.startup_error = type(exc).__name__
+        raise
+    application.state.ready = True
+    try:
+        yield
+    finally:
+        application.state.ready = False
+        llm = getattr(application.state.orchestrator, "llm", None)
+        shutdown_metrics = getattr(llm, "shutdown_metrics", None)
+        if callable(shutdown_metrics):
+            try:
+                shutdown_metrics()
+            except Exception:
+                # Metric flushing is outside claim processing and shutdown must
+                # never expose an SDK exception or deployment credential.
+                pass
+        application.state.orchestrator = None
+        application.state.chase_context = None
+
+
+def create_app(
+    *,
+    settings: Settings | None = None,
+    frontend_dist: str | os.PathLike[str] | None = None,
+    access_audit_store: AccessAuditStore | None = None,
+    feedback_store=None,
+    encounter_store=None,
+    membership_store=None,
+    rate_limiter: FixedWindowLimiter | None = None,
+    auth_failure_limiter: FixedWindowLimiter | None = None,
+) -> FastAPI:
+    """Compose one API instance and its same-origin static frontend."""
+    config = settings or get_settings()
+    http_logger = configure_json_logging(config.log_level)
+    if config.environment in {"staging", "production"} and any(
+        override is not None for override in (
+            access_audit_store, feedback_store, encounter_store, membership_store,
+        )
+    ):
+        raise ValueError(
+            "deployed applications cannot override required Postgres stores"
+        )
+    postgres = postgres_services(config) if config.state_store == "postgres" else None
+    default_encounters = (
+        postgres.encounters if postgres else MemoryEncounterStore(
+            get_encounters().values(), practice_id=config.practice_id or "local",
+        )
+    )
+    default_feedback = (
+        postgres.feedback if postgres else FeedbackStore(config.feedback_path)
+    )
+    default_audit = postgres.audit if postgres else MemoryAccessAuditStore()
+    default_memberships = postgres.memberships if postgres else None
+    selected_encounters = encounter_store or default_encounters
+    selected_feedback = feedback_store or default_feedback
+    audit_store = access_audit_store or default_audit
+    selected_memberships = (
+        membership_store if membership_store is not None else default_memberships
+    )
+    principal_limiter = rate_limiter or FixedWindowLimiter()
+    failed_auth_limiter = auth_failure_limiter or FixedWindowLimiter()
+    denied_auditor = DeniedAccessAuditor(settings=config, store=audit_store)
+    application = FastAPI(
+        title="CosmaNeura Billing Engine",
+        version="0.1.0",
+        lifespan=_lifespan,
+    )
+    application.state.settings = config
+    application.state.ready = False
+    application.state.startup_error = None
+    application.state.orchestrator = None
+    application.state.chase_context = None
+    application.state.access_audit_store = audit_store
+    application.state.encounter_store = selected_encounters
+    application.state.feedback_store = selected_feedback
+    application.state.membership_store = selected_memberships
+    application.state.atomic_feedback_audit = bool(
+        postgres
+        and selected_feedback is postgres.feedback
+        and audit_store is postgres.audit
+    )
+    application.state.atomic_chase_audit = bool(
+        postgres
+        and audit_store is postgres.audit
+        and config.chase_store == "postgres"
+        and config.chase_dsn == config.database_url
+    )
+    application.state.rate_limiter = principal_limiter
+    application.state.auth_failure_limiter = failed_auth_limiter
+
+    # Starlette's last-added middleware is outermost. Request order is:
+    # PHI-safe runtime -> exact CORS -> origin -> auth -> audit -> principal
+    # rate -> body cap -> API.
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=config.max_request_bytes,
+    )
+    application.add_middleware(
+        PrincipalRateLimitMiddleware,
+        settings=config,
+        limiter=principal_limiter,
+    )
+    application.add_middleware(
+        AccessAuditMiddleware,
+        settings=config,
+        store=audit_store,
+    )
+    application.add_middleware(
+        EntraAuthMiddleware,
+        settings=config,
+        failure_limiter=failed_auth_limiter,
+        denied_auditor=denied_auditor,
+        principal_authorizer=(
+            selected_memberships.authorize if selected_memberships is not None else None
+        ),
+    )
+    application.add_middleware(
+        StrictOriginMiddleware,
+        allowed_origins=config.cors_origins,
+        denied_auditor=denied_auditor,
+    )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(config.cors_origins),
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["Retry-After", "X-Request-ID"],
+        allow_credentials=False,
+    )
+    application.add_middleware(PHISafeHTTPMiddleware, logger=http_logger)
+    application.include_router(router)
+
+    async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):
+        return JSONResponse(
+            status_code=503, content={"detail": "persistent storage is unavailable"},
+        )
+
+    application.add_exception_handler(
+        PersistenceUnavailable, persistence_unavailable,
+    )
+
+    configured_dist = (
+        frontend_dist if frontend_dist is not None else config.frontend_dist
+    )
+    dist = (
+        Path(configured_dist)
+        if configured_dist is not None
+        else Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    )
+    if (dist / "index.html").is_file():
+        # Mounted last so frontend routes cannot shadow /api/*.
+        application.mount(
+            "/", StaticFiles(directory=dist, html=True), name="frontend"
+        )
+    elif config.environment == "production":
+        raise RuntimeError(
+            "production requires a built same-origin frontend; configure "
+            "COSMANEURA_FRONTEND_DIST"
+        )
+    return application
+
+
+app = create_app()

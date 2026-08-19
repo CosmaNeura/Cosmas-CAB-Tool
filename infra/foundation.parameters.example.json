@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "cosmaneura-pilot" },
+    "postgresAdminLogin": { "value": "cosmaneura_admin" },
+    "postgresAdminPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "postgresAppLogin": { "value": "cosmaneura_app" },
+    "postgresAppPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "postgresChaseWorkerLogin": { "value": "cosmaneura_chase_worker" },
+    "postgresChaseWorkerPassword": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE" },
+    "chaseGateHmacKey": { "value": "REPLACE_IN_UNTRACKED_PARAMETERS_FILE_32_BYTES_MINIMUM" },
+    "acsEmailConnectionString": { "value": "" },
+    "provisionAzureOpenAI": { "value": false },
+    "azureOpenAIDeploymentName": { "value": "gpt-5-6-sol-2026-07-09" },
+    "azureOpenAIModelName": { "value": "gpt-5.6-sol" },
+    "azureOpenAIModelVersion": { "value": "2026-07-09" },
+    "azureOpenAIDeploymentSku": { "value": "DataZoneStandard" },
+    "azureOpenAIDeploymentCapacity": { "value": 200 },
+    "databaseName": { "value": "cosmaneura" },
+    "registryPublicNetworkAccess": { "value": "Disabled" }
+  }
+}

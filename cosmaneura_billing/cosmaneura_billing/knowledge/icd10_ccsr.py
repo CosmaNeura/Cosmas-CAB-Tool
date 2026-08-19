@@ -17,9 +17,9 @@ Two on-disk schemas are accepted automatically:
   * the raw 18-column AHRQ DXCCSR layout.
 ``.gz`` files are read transparently.
 
-The semantic-search helper (``embed_search``) is ported from the prototype's
-feature2 and is only used when an OpenAI embeddings key is configured; the demo
-path resolves concepts to codes by description match instead.
+The legacy semantic-search helper (``embed_search``) is development-only and
+not part of the Azure pilot runtime; the demo resolves concepts to codes by
+description match instead.
 """
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from ..settings import Settings, SettingsError
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _FULL_CSV = _DATA_DIR / "icd10cm_ccsr_full.csv.gz"
@@ -64,8 +66,10 @@ def _format_icd10(raw: str) -> str:
 
 class ICD10CCSR:
     def __init__(self, csv_path: str | os.PathLike | None = None,
-                 current_csv: str | os.PathLike | None = None):
-        path = Path(csv_path or os.environ.get("ICD10_CCSR_CSV") or _default_csv())
+                 current_csv: str | os.PathLike | None = None,
+                 settings: Settings | None = None):
+        config = settings or Settings.from_env()
+        path = Path(csv_path or config.icd10_ccsr_csv or _default_csv())
         self._by_raw: dict[str, ICD10Code] = {}
         self._rows: list[ICD10Code] = []
         self._load(path)
@@ -153,15 +157,26 @@ class ICD10CCSR:
 
 
 # --------------------------------------------------------------------------- #
-# Optional: semantic search (ported from prototype feature2). Requires an
-# OpenAI embeddings key + the reference-file embeddings; unused in the demo.
+# Optional legacy semantic search (ported from prototype feature2). It is
+# development-only and not part of the Azure pilot runtime.
 # --------------------------------------------------------------------------- #
-def embed_search(text: str, reference_feather: str, count: int = 5):  # pragma: no cover
+def embed_search(text: str, reference_feather: str, count: int = 5,
+                 api_key: str | None = None,
+                 settings: Settings | None = None):  # pragma: no cover
+    config = settings or Settings.from_env()
+    if config.environment in {"staging", "production"}:
+        raise SettingsError(
+            "direct OpenAI embeddings are disabled in deployed environments"
+        )
+
     import numpy as np
     import openai
     import pandas as pd
 
-    openai.api_key = os.environ["OPENAI_API_KEY"]
+    resolved_api_key = api_key or config.openai_api_key
+    if not resolved_api_key:
+        raise SettingsError("OPENAI_API_KEY is required for ICD-10 semantic search")
+    openai.api_key = resolved_api_key
     ref = pd.read_feather(reference_feather)
 
     def emb(content: str):

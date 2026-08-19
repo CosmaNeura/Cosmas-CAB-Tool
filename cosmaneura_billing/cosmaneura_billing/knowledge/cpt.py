@@ -42,17 +42,16 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from ..settings import Settings, SettingsError
+
 # preferred filenames inside a Standard Data File distribution, best first
 _CANDIDATES = ("SHORTU.txt", "SHORTU.TXT", "shortu.txt",
                "MEDU.txt", "MEDU.TXT", "LONGULT.txt", "LONGUF.txt")
 _CODE_RE = re.compile(r"^\s*([0-9]{4}[0-9A-Z])\s+(.+?)\s*$")
 
-_AMA_VARS = ("AMA_TOKEN_URL", "AMA_BASE_URL", "AMA_CONSUMER_KEY", "AMA_CONSUMER_SECRET")
 # The AMA gateway's WAF rejects requests without an explicit User-Agent
 # (Python-urllib's default gets 403), so every request sends one.
 _UA = "cosmaneura-billing/0.1"
-_DEFAULT_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) \
-    / "cosmaneura" / "cpt"
 
 
 def _find_descriptor_file(d: Path) -> Path | None:
@@ -79,11 +78,13 @@ def _urlopen(req: urllib.request.Request, timeout: int):
 
 class CPTDescriptors:
     def __init__(self, path: str | os.PathLike | None = None,
-                 cache_dir: str | os.PathLike | None = None):
+                 cache_dir: str | os.PathLike | None = None,
+                 settings: Settings | None = None):
+        self._settings = settings or Settings.from_env()
         self._desc: dict[str, str] = {}
         self._source: str | None = None
         self.fetch_error: str | None = None
-        self._cache = Path(cache_dir or _DEFAULT_CACHE)
+        self._cache = Path(cache_dir or self._settings.cpt_cache_dir)
         resolved = self._resolve(path)
         if resolved is not None:
             self._load(resolved)
@@ -91,17 +92,16 @@ class CPTDescriptors:
     def _resolve(self, path: str | os.PathLike | None) -> Path | None:
         if path:
             return Path(path)
-        env_dir = os.environ.get("CPT_DATA_DIR")
-        if env_dir and Path(env_dir).is_dir():
-            found = _find_descriptor_file(Path(env_dir))
+        data_dir = self._settings.cpt_data_dir
+        if data_dir and Path(data_dir).is_dir():
+            found = _find_descriptor_file(Path(data_dir))
             if found:
                 return found
         if self._cache.is_dir():
             found = _find_descriptor_file(self._cache)
             if found:
                 return found
-        if os.environ.get("CPT_AUTO_FETCH", "1") != "0" \
-                and all(os.environ.get(v) for v in _AMA_VARS):
+        if self._settings.cpt_auto_fetch and self._settings.ama_configured:
             return self._auto_fetch()
         return None
 
@@ -109,14 +109,17 @@ class CPTDescriptors:
     def _auto_fetch(self) -> Path | None:
         try:
             token = self._token()
-            base = os.environ["AMA_BASE_URL"].rstrip("/")
-            releases_path = os.environ.get("AMA_RELEASES_PATH", "/cpt-zip/1.0.0/releases")
+            credentials = self._settings.ama_credentials
+            if credentials is None:
+                raise SettingsError("AMA CPT credentials are not configured")
+            base = credentials.base_url.rstrip("/")
+            releases_path = self._settings.ama_releases_path
             releases = self._get_json(base + releases_path, token)
             release = self._pick_release(releases)
             if not release:
-                self.fetch_error = f"could not determine a release id from {str(releases)[:200]}"
+                self.fetch_error = "could not determine a release id from the AMA response"
                 return None
-            file_path = os.environ.get("AMA_FILE_PATH", "/cpt-zip/1.0.0/files?release={release}")
+            file_path = self._settings.ama_file_path
             blob = self._get_bytes(
                 base + file_path.format(release=urllib.parse.quote(str(release))), token)
             self._cache.mkdir(parents=True, exist_ok=True)
@@ -130,13 +133,15 @@ class CPTDescriptors:
             self.fetch_error = f"{type(e).__name__}: {e}"
             return None
 
-    @staticmethod
-    def _token() -> str:
+    def _token(self) -> str:
+        credentials = self._settings.ama_credentials
+        if credentials is None:
+            raise SettingsError("AMA CPT credentials are not configured")
         basic = base64.b64encode(
-            f"{os.environ['AMA_CONSUMER_KEY']}:{os.environ['AMA_CONSUMER_SECRET']}".encode()
+            f"{credentials.consumer_key}:{credentials.consumer_secret}".encode()
         ).decode()
         req = urllib.request.Request(
-            os.environ["AMA_TOKEN_URL"],
+            credentials.token_url,
             data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
             method="POST",
             headers={"Authorization": f"Basic {basic}",
@@ -146,7 +151,7 @@ class CPTDescriptors:
             payload = json.loads(r.read())
         tok = payload.get("access_token")
         if not tok:
-            raise ValueError(f"no access_token in token response: {str(payload)[:200]}")
+            raise ValueError("AMA token response did not include access_token")
         return tok
 
     @staticmethod

@@ -1,4 +1,8 @@
 """The FastAPI service: every endpoint, against the frontend data contracts."""
+import base64
+import json
+from dataclasses import replace
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -6,12 +10,42 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 import cosmaneura_billing.api as api
+from cosmaneura_billing.auth import AuthPrincipal
+from cosmaneura_billing.settings import Settings
+
+
+TENANT_ID = "11111111-1111-4111-8111-111111111111"
+SMITH_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+JONES_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def _principal_header(user_id: str, *roles: str) -> dict[str, str]:
+    payload = {
+        "auth_typ": "aad",
+        "claims": [
+            {"typ": "oid", "val": user_id},
+            {"typ": "tid", "val": TENANT_ID},
+            *({"typ": "roles", "val": role} for role in roles),
+        ],
+    }
+    encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+    return {"X-MS-CLIENT-PRINCIPAL": encoded}
+
+
+def _review_context(client, headers: dict[str, str] | None = None) -> str:
+    response = client.get(
+        "/api/encounters/ENC-100237/coder-view", headers=headers or {},
+    )
+    assert response.status_code == 200
+    return response.json()["reviewContext"]
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("COSMANEURA_FEEDBACK_PATH", str(tmp_path / "fb.jsonl"))
-    return TestClient(api.app)
+    return TestClient(api.create_app(
+        settings=api.get_settings(), frontend_dist=tmp_path / "missing-frontend",
+    ))
 
 
 def test_health_reports_knowledge_bases(client):
@@ -91,6 +125,8 @@ def test_adhoc_billing_runs_posted_documentation(client):
 
 def test_coder_view_contract(client):
     cv = client.get("/api/encounters/ENC-100237/coder-view").json()
+    assert cv["encounterVersion"] == 1
+    assert cv["reviewContext"]
     assert cv["submittedEm"] == "99213"
     assert cv["em"]["code"] == "99214" and cv["em"]["why"]
     assert [d["code"] for d in cv["dx"]] == ["K62.5", "K59.00", "R19.7"]
@@ -102,8 +138,11 @@ def test_coder_view_contract(client):
 
 def test_feedback_roundtrip_and_summary(client):
     payload = {
-        "encounter_id": "ENC-100237", "coder_id": "coder_T",
-        "engine_version": "test", "submitted_em": "99213",
+        "encounter_id": "ENC-100237",
+        "review_id": "10000000-0000-4000-8000-000000000001",
+        "review_context": _review_context(client),
+        "encounter_version": 1,
+        "submitted_em": "99213",
         "engine_em": "99214", "final_em": "99214",
         "decisions": [
             {"kind": "EM", "engine_code": "99214", "action": "accept", "final_code": "99214"},
@@ -113,12 +152,95 @@ def test_feedback_roundtrip_and_summary(client):
         "time_spent_seconds": 45,
     }
     r = client.post("/api/feedback", json=payload)
-    assert r.json() == {"ok": True, "stored": 1}
+    assert r.json() == {
+        "ok": True,
+        "reviewId": "10000000-0000-4000-8000-000000000001",
+        "replayed": False,
+    }
+    replay = client.post("/api/feedback", json=payload)
+    assert replay.json()["replayed"] is True
+    stored = client.app.state.encounter_store.get("ENC-100237")
+    client.app.state.encounter_store.upsert(replace(
+        stored.bundle,
+        signed_note=stored.bundle.signed_note + "\nSynthetic amendment.",
+    ))
+    replay_after_update = client.post("/api/feedback", json=payload)
+    assert replay_after_update.json()["replayed"] is True
+    conflict = client.post(
+        "/api/feedback", json={**payload, "time_spent_seconds": 46},
+    )
+    assert conflict.status_code == 409
     s = client.get("/api/feedback/summary").json()
     assert s["encounters"] == 1
     assert s["summary"]["em_exact_agreement"] == 1.0
     assert s["tuningBacklog"][0]["reason"] == "dx_missed_by_engine"
     assert s["goldRows"] == 1
+
+
+def test_feedback_rejects_a_stale_encounter_version(client):
+    stored = client.app.state.encounter_store.get("ENC-100237")
+    review_context = _review_context(client)
+    unchanged = client.app.state.encounter_store.upsert(stored.bundle)
+    assert unchanged.version == stored.version
+    client.app.state.encounter_store.upsert(replace(
+        stored.bundle,
+        signed_note=stored.bundle.signed_note + "\nSynthetic amendment.",
+    ))
+
+    response = client.post("/api/feedback", json={
+        "review_id": "10000000-0000-4000-8000-000000000099",
+        "review_context": review_context,
+        "encounter_id": "ENC-100237",
+        "encounter_version": stored.version,
+        "engine_em": "99214",
+        "final_em": "99214",
+        "decisions": [],
+    })
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "encounter changed; reload the review"
+
+
+def test_feedback_rejects_empty_optional_em_code(client):
+    response = client.post("/api/feedback", json={
+        "review_id": "10000000-0000-4000-8000-000000000098",
+        "review_context": _review_context(client),
+        "encounter_id": "ENC-100237",
+        "encounter_version": 1,
+        "engine_em": "",
+        "decisions": [],
+    })
+
+    assert response.status_code == 422
+
+
+def test_feedback_keeps_the_engine_version_that_issued_the_review(client):
+    stored = client.app.state.encounter_store.get("ENC-100237")
+    principal = AuthPrincipal(
+        user_id="local-developer",
+        tenant_id="development",
+        practice_id="development",
+        roles=frozenset({"Admin"}),
+    )
+    issuing_version = "synthetic-previous-revision"
+    payload = {
+        "review_id": "10000000-0000-4000-8000-000000000097",
+        "review_context": api._issue_review_context(
+            stored, principal, engine_version=issuing_version,
+        ),
+        "encounter_id": "ENC-100237",
+        "encounter_version": stored.version,
+        "engine_em": "99214",
+        "final_em": "99214",
+        "decisions": [],
+    }
+
+    first = client.post("/api/feedback", json=payload)
+    retry = client.post("/api/feedback", json=payload)
+
+    assert first.status_code == retry.status_code == 200
+    assert retry.json()["replayed"] is True
+    assert client.app.state.feedback_store.load()[0].engine_version == issuing_version
 
 
 def test_feedback_summary_empty(client):
@@ -145,17 +267,36 @@ def test_payer_denials_endpoint(client):
     assert p["issuers"][0]["denialRate"] >= p["issuers"][-1]["denialRate"]
 
 
-def test_reviewer_rejections_influence_future_runs_for_that_reviewer(client):
+def test_reviewer_rejections_influence_future_runs_for_that_reviewer(tmp_path):
     """The full loop: three rejections of K59.00 by one reviewer -> the engine
     holds it on their next run (with history), while others are unaffected."""
+    settings = Settings(
+        environment="test",
+        auth_mode="container_apps",
+        entra_tenant_id=TENANT_ID,
+        practice_id="practice-test",
+        feedback_path=str(tmp_path / "feedback.jsonl"),
+    )
+    client = TestClient(api.create_app(
+        settings=settings, frontend_dist=tmp_path / "missing-frontend",
+    ))
+    smith = _principal_header(SMITH_ID, "Coder")
+    jones = _principal_header(JONES_ID, "Coder")
+    smith_review_context = _review_context(client, smith)
     reject = {"kind": "ICD10", "engine_code": "K59.00", "action": "reject",
               "final_code": None, "reason_code": "dx_not_supported_by_doc"}
     for i in range(3):
-        client.post("/api/feedback", json={
-            "encounter_id": f"E{i}", "coder_id": "dr_smith",
-            "engine_em": "99214", "final_em": "99214", "decisions": [reject]})
+        response = client.post("/api/feedback", headers=smith, json={
+            "review_id": f"10000000-0000-4000-8000-{i:012d}",
+            "review_context": smith_review_context,
+            "encounter_id": "ENC-100237", "encounter_version": 1,
+            "engine_em": "99214",
+            "final_em": "99214", "decisions": [reject]})
+        assert response.status_code == 200
 
-    j = client.post("/api/encounters/ENC-100237/billing?user_id=dr_smith").json()
+    j = client.post(
+        "/api/encounters/ENC-100237/billing", headers=smith,
+    ).json()
     captured = {c["code"] for c in j["captured"]}
     assert "K59.00" not in captured
     held = [c for c in j["declined"] if c["code"] == "K59.00"]
@@ -164,10 +305,15 @@ def test_reviewer_rejections_influence_future_runs_for_that_reviewer(client):
                for a in j["audit"])
 
     # a different reviewer still gets the base behavior
-    j2 = client.post("/api/encounters/ENC-100237/billing?user_id=dr_jones").json()
+    j2 = client.post(
+        "/api/encounters/ENC-100237/billing", headers=jones,
+    ).json()
     assert "K59.00" in {c["code"] for c in j2["captured"]}
 
     # and the coder view surfaces the learned history
-    cv = client.get("/api/encounters/ENC-100237/coder-view?user_id=dr_smith").json()
+    cv = client.get(
+        "/api/encounters/ENC-100237/coder-view", headers=smith,
+    ).json()
+    assert cv["coderId"] == SMITH_ID
     row = next(w for w in cv["withheld"] if w["code"] == "K59.00")
     assert "declined K59.00 3x" in row["history"]

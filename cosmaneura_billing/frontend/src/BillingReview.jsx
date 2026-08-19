@@ -261,16 +261,19 @@ function Field({ label, value, onChange, rows = 3 }) {
 }
 
 export default function BillingReview({ encounterId, live }) {
-  const [enc, setEnc] = useState(DEMO_ENCOUNTER);
+  const [enc, setEnc] = useState(live ? null : DEMO_ENCOUNTER);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
 
   // load the selected encounter's documentation into the editor
   useEffect(() => {
     setResult(null);
     setError(null);
+    setLoadError(null);
     if (!live) { setEnc(DEMO_ENCOUNTER); return; }
+    setEnc(null);
     (async () => {
       try {
         const e = await api(`/api/encounters/${encodeURIComponent(encounterId)}`);
@@ -278,11 +281,16 @@ export default function BillingReview({ encounterId, live }) {
           encounterId: e.id, submittedEm: e.submittedEm || "",
           intake: e.intake || "", transcript: e.transcript || "", signedNote: e.signedNote || "",
         });
-      } catch {
-        setEnc(DEMO_ENCOUNTER);
+      } catch (loadFailure) {
+        setLoadError(loadFailure.message || "could not load encounter");
       }
     })();
   }, [encounterId, live]);
+
+  // UI SEAM (P2): a live API failure must never substitute a canned claim.
+  if (live && !enc) {
+    return <p>{loadError ? `Could not load encounter: ${loadError}` : "Loading encounter…"}</p>;
+  }
 
   const run = async () => {
     setLoading(true);

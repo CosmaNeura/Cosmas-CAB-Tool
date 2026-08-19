@@ -1,7 +1,7 @@
 """Run the full pipeline on the demo encounter and print both end-user views.
 
     python run_demo.py            # offline, deterministic (MockLLM)
-    ANTHROPIC_API_KEY=... python run_demo.py   # uses Claude for extraction
+    COSMANEURA_AZURE_OPENAI_ENABLED=true ... python run_demo.py  # Azure inference
     ICD10_CCSR_CSV=/path/DXCCSR_v2023-1.csv python run_demo.py  # full code set
 """
 from cosmaneura_billing import BillingOrchestrator
