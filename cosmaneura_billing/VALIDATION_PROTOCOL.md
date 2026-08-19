@@ -138,6 +138,11 @@ Use **de-identified** pilot encounters. You already hold a BAA with the pilot gr
 a validation/QA study of a product you provide them generally fits the BAA's permitted
 "health care operations / quality" uses, but confirm the specific language with counsel
 and add a short data-use provision scoping this study, retention, and destruction.
+That practice agreement governs receipt and study use; it does not by itself
+authorize disclosure to a cloud or model service. Run model validation only on
+properly de-identified encounters until the Microsoft agreement/BAA is verified
+to cover the selected Azure OpenAI service and US data zone and the private
+deployment, retention, identity, and logging acceptance gates are complete.
 
 - De-identify by **Safe Harbor** (remove the 18 HIPAA identifiers) unless your counsel
   prefers **expert determination**; the documentation text must be scrubbed of names,
@@ -189,7 +194,10 @@ exists to steer development until Phase 1.
 4. Run **dual coding → adjudication** to build the gold standard (Section 6).
 5. Run the **engine** on the same de-identified documentation; capture its output and
    its audit trail. Pin the versions in play: CPT edition, ICD-10 fiscal year, NCCI
-   quarter, LCD/article versions, and the model/prompt build.
+   quarter, LCD/article versions, and the model deployment/version, API version,
+   prompt build, and structured-output mode. Record whether the strict-schema or
+   JSON-object fallback path ran; never treat fallback as equivalent without
+   separate acceptance results.
 6. Compute all metrics in Section 3 with confidence intervals; break out by stratum.
 7. Review every case where the engine and gold disagree, and every (expected-zero)
    over-coding case, with a coder; categorize the cause (extraction miss, rule gap,

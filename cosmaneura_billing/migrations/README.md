@@ -78,16 +78,22 @@ Connection string for the indexer (note `sslmode=require`, which Azure enforces)
 
     export DATABASE_URL="postgresql://<user>:<pass>@<server>.postgres.database.azure.com:5432/<db>?sslmode=require"
 
-Other managed Postgres (AWS RDS/Aurora, Google Cloud SQL) enable `pgvector`
-similarly via their extension-allowlist setting; the migration itself is identical.
-Whichever you use runs inside your own cloud account under your existing cloud BAA,
-so there's no separate vector-DB vendor or BAA (this is the Pinecone we removed).
+Other managed Postgres services enable `pgvector` similarly through their
+extension allowlists; the migration itself is identical. Do not infer compliance
+coverage from cloud ownership alone. The selected database service, region,
+configuration, and every service that receives source text must each be covered
+by the applicable executed agreement/BAA and approved data-handling posture.
+Keeping vectors in the platform database removes a separate vector-database
+vendor, but does not authorize an embedding-model disclosure.
 
 ## Embedding dimension
 
-`vector(1536)` matches OpenAI `text-embedding-3-small` (and the prototype's
-`ada-002`). If you ever move to `text-embedding-3-large`, change `1536` to `3072`
-in the up-migration, re-embed the corpus, and recreate the index.
+`vector(1536)` matches the historical development embedding seam. The current
+`OpenAIEmbedder` calls direct `api.openai.com`; it is not part of the Azure pilot
+runtime and is prohibited in staging and production. A future Azure OpenAI
+embedding migration must pin an Azure model deployment, confirm its output
+dimension, update this migration if needed, re-embed the corpus, and recreate
+the index. The live clinical-extraction deployment is not an embedding model.
 
 ## Running it
 
@@ -180,11 +186,13 @@ before `001` when the chase store is needed before the dialogue index. Direct
 `psql` does not provision the API/worker runtime roles or bootstrap
 administrator, so it is not a substitute for the deployment runner.
 
-Then load the corpus (see scripts/index_dialogues.py):
-
-    export DATABASE_URL=postgresql://user:pass@host:5432/db
-    export OPENAI_API_KEY=...        # ZDR + BAA project for PHI
-    python scripts/index_dialogues.py iCliniq.feather
+The corpus indexer (`scripts/index_dialogues.py`) is a dormant development seam,
+not a pilot deployment step. Its direct `api.openai.com` mode must not be enabled
+in staging or production and must never receive real patient text. Keep
+`OPENAI_API_KEY` unset in deployed environments. Before this path can become a
+pilot feature it must be separately migrated to private Azure OpenAI,
+managed-identity authenticated, included in the cost and subprocessor inventory,
+and accepted under the same PHI controls as clinical extraction.
 
 If you adopt a migration tool, drop these in as the first version:
 
@@ -198,5 +206,6 @@ If you adopt a migration tool, drop these in as the first version:
 
 If patient utterances that reach `dialog_chunks` can contain PHI, this database is
 in scope for HIPAA: encrypt at rest and in transit, restrict access, enable audit
-logging, and include it in your subprocessor/BAA inventory. Minimizing PHI in the
-indexed text (de-identify where feasible) keeps that surface small.
+logging, and include it in the service/subprocessor/BAA inventory. The current
+pilot does not authorize PHI in this table or any external embedding call.
+Minimizing and properly de-identifying indexed text keeps that surface small.

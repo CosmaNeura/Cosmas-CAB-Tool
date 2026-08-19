@@ -147,5 +147,6 @@ class BillingOrchestrator:
             reason="offline_model_unsupported_encounter",
             detail=("Running on the offline demo model, which only codes the bundled "
                     "demo encounter. No codes were proposed for this documentation — "
-                    "set ANTHROPIC_API_KEY for real extraction."),
+                    "configure the Azure OpenAI managed-identity inference settings "
+                    "for real extraction."),
         )

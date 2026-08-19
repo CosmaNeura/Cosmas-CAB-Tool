@@ -7,12 +7,14 @@ claim came out empty — but the pipeline had been handed invented findings, and
 reviewer saw a blank claim with no explanation. Ten of the eleven bundled
 encounters behaved that way.
 """
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from cosmaneura_billing.api import app
 from cosmaneura_billing.corpus.demo import SAMPLE_VISIT
 from cosmaneura_billing.llm import (
-    DEFAULT_MODEL, AnthropicLLM, MockLLM, TerminalLLMError, describe_client,
+    AzureOpenAILLM, MockLLM, TerminalLLMError, describe_client,
 )
 from cosmaneura_billing.orchestrator import BillingOrchestrator
 
@@ -66,7 +68,7 @@ def test_unsupported_encounter_is_marked_degraded_with_a_reason():
     assert result.degraded is not None, (
         "an empty result from the offline model must carry its reason")
     assert result.degraded.reason == "offline_model_unsupported_encounter"
-    assert "ANTHROPIC_API_KEY" in result.degraded.detail
+    assert "Azure OpenAI managed-identity" in result.degraded.detail
 
 
 # --------------------------------------------------------------------------- #
@@ -98,31 +100,52 @@ def test_coder_view_carries_inference_mode_and_degraded():
 # --------------------------------------------------------------------------- #
 # The production adapter's terminal stop reasons
 # --------------------------------------------------------------------------- #
-def test_default_model_is_current():
-    assert AnthropicLLM(api_key="x").model == DEFAULT_MODEL
-    assert describe_client(AnthropicLLM(api_key="x"))["inferenceMode"] == "anthropic"
+def test_production_adapter_reports_configured_azure_model():
+    client = AzureOpenAILLM(
+        endpoint="https://cab-openai.openai.azure.com",
+        deployment="cab-gpt",
+        model="gpt-4.1-mini",
+        client=SimpleNamespace(),
+    )
+    assert describe_client(client) == {
+        "inferenceMode": "azure_openai",
+        "inferenceModel": "gpt-4.1-mini",
+    }
 
 
 def test_refusal_is_terminal_not_retried():
     """A refusal returns HTTP 200 with unusable content. Retrying it five times
     and reporting 'no valid response' hides the actual reason."""
-    payload = {"stop_reason": "refusal",
-               "stop_details": {"category": "bio"}, "content": []}
+    payload = {
+        "status": "completed",
+        "output_text": "",
+        "output": [{
+            "type": "message",
+            "content": [{
+                "type": "refusal",
+                "refusal": "private provider refusal text",
+            }],
+        }],
+    }
     try:
-        AnthropicLLM._extract(payload, {"type": "object"})
+        AzureOpenAILLM._extract(payload, {"type": "object"})
     except TerminalLLMError as e:
-        assert "refusal" in str(e) and "bio" in str(e)
+        assert "declined" in str(e)
+        assert "private provider refusal text" not in str(e)
     else:
         raise AssertionError("a refusal must raise TerminalLLMError")
 
 
 def test_truncation_is_diagnosed_as_truncation():
-    """Thinking and output share max_tokens; running out looks like a missing
-    tool_use block unless stop_reason is checked first."""
-    payload = {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "{"}]}
+    """An output-limit response is terminal rather than malformed JSON."""
+    payload = {
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "output_text": "{",
+    }
     try:
-        AnthropicLLM._extract(payload, {"type": "object"})
+        AzureOpenAILLM._extract(payload, {"type": "object"})
     except TerminalLLMError as e:
-        assert "max_tokens" in str(e)
+        assert "max_output_tokens" in str(e)
     else:
         raise AssertionError("truncation must raise TerminalLLMError")

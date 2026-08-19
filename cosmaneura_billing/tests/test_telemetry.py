@@ -32,8 +32,8 @@ CONNECTION_STRING = (
 def _event(**overrides: Any) -> dict[str, Any]:
     event: dict[str, Any] = {
         "event": "llm_request",
-        "provider": "anthropic",
-        "model": "claude-opus-5-20260801",
+        "provider": "azure_openai",
+        "model": "gpt-4.1-mini-2025-04-14",
         "status": "success",
         "attempt": 2,
         "latency_ms": 125,
@@ -89,8 +89,8 @@ def test_sink_exports_only_numeric_metrics_with_four_bounded_dimensions():
     sink(_event())
 
     attributes = {
-        "provider": "anthropic",
-        "model": "claude-opus-5-20260801",
+        "provider": "azure_openai",
+        "model": "gpt-4.1-mini-2025-04-14",
         "status": "success",
         "attempt": 2,
     }
@@ -143,7 +143,7 @@ def test_missing_provider_usage_emits_attempt_count_without_inventing_values():
     "unsafe_event",
     [
         _event(prompt="Jane Patient MRN 123"),
-        _event(model="claude-opus-5-jane-patient"),
+        _event(model="gpt-4.1-mini-jane-patient"),
         _event(status="Jane Patient failed"),
         _event(attempt=0),
         _event(input_tokens=-1),

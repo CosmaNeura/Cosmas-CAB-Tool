@@ -9,8 +9,9 @@ from ..schemas import CodeKind, CodeSuggestion, Disposition, Evidence, VisitBund
 
 
 # --------------------------------------------------------------------------- #
-# Structured-output schemas for the two LLM calls. With AnthropicLLM these are
-# enforced via forced tool use and re-validated locally; MockLLM ignores them.
+# Structured-output schemas for the two LLM calls. AzureOpenAILLM uses strict
+# Structured Outputs when the schema is compatible and always re-validates
+# locally; MockLLM ignores them.
 # --------------------------------------------------------------------------- #
 FACTS_SCHEMA = {
     "type": "object",

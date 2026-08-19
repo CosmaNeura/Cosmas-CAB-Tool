@@ -38,9 +38,28 @@ param chaseGateHmacKey string
 @description('Optional Azure Communication Services email connection string. It is stored for the chase worker only; leave empty until BAA, P5, and messaging activation review are complete.')
 param acsEmailConnectionString string = ''
 
-@secure()
-@description('Optional Anthropic API credential for the API only. Before an Anthropic BAA/retention approval it may be used only for synthetic or de-identified acceptance.')
-param anthropicApiKey string = ''
+@description('Provision the dedicated private Azure OpenAI account and model deployment. This does not enable application inference.')
+param provisionAzureOpenAI bool = false
+
+@description('Immutable Azure OpenAI deployment name referenced by the API.')
+param azureOpenAIDeploymentName string = 'gpt-5-6-sol-2026-07-09'
+
+@description('Underlying Azure OpenAI model name. Model behavior still requires synthetic and corpus acceptance.')
+param azureOpenAIModelName string = 'gpt-5.6-sol'
+
+@description('Pinned Azure OpenAI model version. Upgrades require a reviewed deployment change.')
+param azureOpenAIModelVersion string = '2026-07-09'
+
+@allowed([
+  'DataZoneStandard'
+])
+@description('US data-zone deployment SKU. GlobalStandard quota is intentionally not used by this pilot.')
+param azureOpenAIDeploymentSku string = 'DataZoneStandard'
+
+@minValue(1)
+@maxValue(3333)
+@description('Azure OpenAI deployment capacity units. This is a quota allocation, not provisioned-throughput billing.')
+param azureOpenAIDeploymentCapacity int = 200
 
 @description('Application database created on the Flexible Server.')
 param databaseName string = 'cosmaneura'
@@ -80,6 +99,7 @@ var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
 var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
+var azureOpenAIName = take('${compactPrefix}oai${suffix}', 64)
 var postgresName = take('${namePrefix}-pg-${suffix}', 63)
 var postgresHost = '${postgresName}.postgres.database.azure.com'
 var encodedAdminPassword = uriComponent(postgresAdminPassword)
@@ -89,7 +109,6 @@ var migrationDatabaseUrl = 'postgresql://${postgresAdminLogin}:${encodedAdminPas
 var runtimeDatabaseUrl = 'postgresql://${validatedPostgresAppLogin}:${encodedAppPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var chaseWorkerDatabaseUrl = 'postgresql://${validatedPostgresChaseWorkerLogin}:${encodedChaseWorkerPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var acsEmailConfigured = !empty(acsEmailConnectionString)
-var anthropicConfigured = !empty(anthropicApiKey)
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -117,6 +136,41 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
     WorkspaceResourceId: logAnalytics.id
     DisableLocalAuth: true
     SamplingPercentage: 100
+  }
+}
+
+resource azureOpenAI 'Microsoft.CognitiveServices/accounts@2024-10-01' = if (provisionAzureOpenAI) {
+  name: azureOpenAIName
+  location: location
+  tags: tags
+  kind: 'OpenAI'
+  sku: {
+    name: 'S0'
+  }
+  properties: {
+    customSubDomainName: azureOpenAIName
+    disableLocalAuth: true
+    networkAcls: {
+      defaultAction: 'Deny'
+    }
+    publicNetworkAccess: 'Disabled'
+  }
+}
+
+resource azureOpenAIDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = if (provisionAzureOpenAI) {
+  parent: azureOpenAI
+  name: azureOpenAIDeploymentName
+  sku: {
+    name: azureOpenAIDeploymentSku
+    capacity: azureOpenAIDeploymentCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: azureOpenAIModelName
+      version: azureOpenAIModelVersion
+    }
+    versionUpgradeOption: 'NoAutoUpgrade'
   }
 }
 
@@ -198,6 +252,19 @@ resource chaseWorkerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2
   name: chaseWorkerIdentityName
   location: location
   tags: tags
+}
+
+resource apiAzureOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionAzureOpenAI) {
+  scope: azureOpenAI
+  name: guid(azureOpenAI.id, workloadIdentity.id, 'cognitive-services-openai-user')
+  properties: {
+    principalId: workloadIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+    )
+  }
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -407,6 +474,66 @@ resource keyVaultPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZ
   }
 }
 
+resource azureOpenAIPrivateDns 'Microsoft.Network/privateDnsZones@2024-06-01' = if (provisionAzureOpenAI) {
+  name: 'privatelink.openai.azure.com'
+  location: 'global'
+  tags: tags
+}
+
+resource azureOpenAIDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (provisionAzureOpenAI) {
+  parent: azureOpenAIPrivateDns
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource azureOpenAIPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (provisionAzureOpenAI) {
+  name: '${namePrefix}-oai-pe-${suffix}'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointsSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'account'
+        properties: {
+          privateLinkServiceId: azureOpenAI.id
+          groupIds: [
+            'account'
+          ]
+        }
+      }
+    ]
+  }
+  // Private endpoint NIC provisioning mutates the shared subnet. Keep it
+  // ordered after ACR and Key Vault so repeat deployments remain deterministic.
+  dependsOn: [
+    keyVaultPrivateEndpoint
+  ]
+}
+
+resource azureOpenAIPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (provisionAzureOpenAI) {
+  parent: azureOpenAIPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'azure-openai'
+        properties: {
+          privateDnsZoneId: azureOpenAIPrivateDns.id
+        }
+      }
+    ]
+  }
+}
+
 resource postgresPrivateDns 'Microsoft.Network/privateDnsZones@2024-06-01' = {
   name: 'private.postgres.database.azure.com'
   location: 'global'
@@ -555,15 +682,6 @@ resource acsEmailConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-
   }
 }
 
-resource anthropicApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (anthropicConfigured) {
-  parent: keyVault
-  name: 'anthropic-api-key'
-  properties: {
-    contentType: 'External model credential for the API only; real PHI requires an Anthropic BAA'
-    value: anthropicApiKey
-  }
-}
-
 resource runtimeDatabaseSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: databaseUrlSecret
   name: guid(databaseUrlSecret.id, workloadIdentity.id, 'key-vault-secrets-user')
@@ -668,19 +786,6 @@ resource chaseWorkerAcsEmailSecretReader 'Microsoft.Authorization/roleAssignment
   }
 }
 
-resource apiAnthropicSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (anthropicConfigured) {
-  scope: anthropicApiKeySecret
-  name: guid(anthropicApiKeySecret.id, workloadIdentity.id, 'key-vault-secrets-user')
-  properties: {
-    principalId: workloadIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      '4633458b-17de-408a-b874-0445c86b69e6'
-    )
-  }
-}
-
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2026-01-01' = {
   name: environmentName
   location: location
@@ -710,3 +815,6 @@ output chaseWorkerIdentityName string = chaseWorkerIdentity.name
 output keyVaultName string = keyVault.name
 output postgresServerName string = postgres.name
 output applicationInsightsName string = appInsights.name
+output azureOpenAIAccountName string = provisionAzureOpenAI ? azureOpenAI!.name : ''
+output azureOpenAIEndpoint string = provisionAzureOpenAI ? azureOpenAI!.properties.endpoint : ''
+output azureOpenAIDeploymentName string = provisionAzureOpenAI ? azureOpenAIDeployment!.name : ''

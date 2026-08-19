@@ -3,8 +3,14 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from cosmaneura_billing.dialogue_rag import DialogueRAG, MockEmbedder, _DEMO_CORPUS
+from cosmaneura_billing.dialogue_rag import (
+    DialogueRAG,
+    MockEmbedder,
+    OpenAIEmbedder,
+    _DEMO_CORPUS,
+)
 from cosmaneura_billing.llm import MockLLM
+from cosmaneura_billing.settings import Settings, SettingsError
 from cosmaneura_billing.vectorstore import LocalVectorStore
 
 
@@ -32,3 +38,21 @@ def test_dialogue_rag_end_to_end():
 
     out = rag.suggest_questions(query, llm=MockLLM(), top_k=3)
     assert out.get("questions")
+
+
+def test_direct_openai_embeddings_are_rejected_in_deployed_environments():
+    settings = Settings(
+        environment="production",
+        auth_mode="container_apps",
+        entra_tenant_id="11111111-1111-4111-8111-111111111111",
+        state_store="postgres",
+        chase_store="postgres",
+        database_url="postgresql://cosmaneura_app@example.invalid/db",
+        database_runtime_role="cosmaneura_app",
+        practice_id="practice-a",
+    )
+    with pytest.raises(SettingsError, match="disabled in deployed environments"):
+        OpenAIEmbedder(
+            api_key="synthetic-key",
+            settings=settings,
+        )

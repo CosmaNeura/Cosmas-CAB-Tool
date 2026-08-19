@@ -56,9 +56,12 @@ pass and the customer asked for it.
    promise made to customers — *"if it suggests the code, you can be pretty sure
    you've met all the criteria and you're not over billing"* (Maura, 7/24) — is
    only true because the deterministic pipeline checked it.
-6. **PHI boundary.** No real patient data touches the system until the BAA and
-   the deployment layer (auth, encryption at rest, access controls) exist. Until
-   then: synthetic and de-identified data only.
+6. **PHI boundary.** No real patient data touches the system until the
+   deployment layer (auth, encryption at rest, access controls) exists and every
+   service receiving PHI is covered by the applicable executed agreement/BAA
+   and approved data-handling configuration. A practice BAA does not by itself
+   authorize disclosure to a cloud or model service. Until every applicable
+   gate is complete: synthetic and properly de-identified data only.
 7. **No patient steering, no revenue-motivated documentation prompts.** UI copy
    and prompts say *"capture documented, medically necessary care"* — never
    "increase revenue" or any up-billing framing.

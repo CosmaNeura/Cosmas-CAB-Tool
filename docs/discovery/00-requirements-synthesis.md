@@ -18,6 +18,14 @@ form.
 > ordering was written for the Aug 13 meeting and has been overtaken by events.
 > §1–§4 and §7 remain current and load-bearing.
 
+> **Platform clarification (Aug 18):** references below to "the BAA" mean every
+> applicable agreement and service-specific data-handling gate. A BAA with the
+> pilot practice does not by itself authorize disclosure to a cloud or model
+> service. The Azure pilot's live extraction target is now a private Azure
+> OpenAI deployment, but real chart text remains blocked until the Microsoft
+> agreement/BAA is verified to cover that service and US data zone and the
+> deployment, logging, retention, and access-control acceptance checks pass.
+
 ## Preflight reality check (Aug 17)
 
 §0 below asserts three things. Verified state:
@@ -58,9 +66,11 @@ form.
   told at least two customers (Maura 7/24, Sherin 8/10) the suggestions are
   safe/conservative — only the deterministic pipeline makes that sentence true.
 - **PHI boundary:** no real patient data (notes, transcripts, cards, labs)
-  touches the system until the BAA and deployment layer (auth, encryption at
-  rest, access controls) exist. Until then: **synthetic and de-identified data
-  only.** LLM calls fail closed on schema/parse errors.
+  touches the system until the deployment layer (auth, encryption at rest,
+  access controls) exists and every receiving service is covered by its
+  applicable executed agreement/BAA and approved configuration. Until then:
+  **synthetic and de-identified data only.** LLM calls fail closed on
+  schema/parse errors.
 - **No patient steering; no revenue-motivated documentation prompts.** UI copy
   uses "capture documented, medically necessary care" — never "increase revenue"
   / up-billing framing.
@@ -268,7 +278,7 @@ sandbox access exists. All protocol code in `athena_client.py`.
 **Demand:** Christa (8/6) — replaces shadow spreadsheets; fertility segment
 (*"their whole thing is labs"*). **Rails:** every extracted value requires
 provider confirmation before entering a persisted series. Real labs blocked on
-BAA + deployment layer + Athena read scope.
+the applicable BAAs/service approvals + deployment layer + Athena read scope.
 
 ### F9. Insurance-Data Chase Agent — *the billers' #1 stated pain*
 

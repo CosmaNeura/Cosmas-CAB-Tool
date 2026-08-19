@@ -87,9 +87,39 @@ mutations do the same when the chase and state stores use the required shared
 `DATABASE_URL`; a rollback therefore cannot leave a successful mutation with a
 missing completion. JSONL audit is a local development/test seam only.
 
-Real PHI remains blocked until P5 logging/redaction, the BAA, and deployment
-acceptance are all complete. These controls are not a claim of HIPAA
-completeness.
+Real PHI remains blocked until P5 logging/redaction, deployment acceptance, and
+every applicable service-specific agreement/BAA and approved data-handling
+configuration are complete. A practice BAA does not by itself authorize a
+cloud or model disclosure. These controls are not a claim of HIPAA completeness.
+
+## Azure OpenAI inference boundary
+
+The pilot's only permitted live extraction target is a dedicated Azure OpenAI
+account in North Central US. The account has local authentication and public
+network access disabled and is reached through its private endpoint. Only the
+API user-assigned managed identity receives the account-scoped inference role;
+the migration and chase-worker identities receive neither model configuration
+nor authorization. The API receives a non-secret endpoint, deployment name,
+model label, and API version. It receives no model API key, static bearer token,
+or Key Vault model credential.
+
+Application inference is separately fail-closed behind
+`COSMANEURA_AZURE_OPENAI_ENABLED`, which defaults false. Enabling it requires the
+complete reviewed local Azure configuration; invalid or credential-based
+configuration fails startup instead of falling back to another live provider.
+Startup does not prove token issuance, private DNS, RBAC, the model deployment,
+or a data-plane response—those require the controlled synthetic acceptance run.
+Responses report `inferenceMode=azure_openai` and an allowlisted model label
+without exposing the endpoint, provider request IDs, or chart content.
+
+Catalog and ARM validation prove only that the proposed `gpt-5.6-sol`
+2026-07-09 `DataZoneStandard` deployment shape is accepted by Azure. Before
+application enablement, a synthetic/de-identified data-plane test must exercise
+both strict JSON Schema output and the JSON-object fallback, refusals,
+truncation, token accounting, and PHI-safe telemetry. Real chart text remains
+blocked until the executed Microsoft agreement/BAA is verified to cover Azure
+OpenAI and the US data zone and the service retention/data-processing posture is
+documented.
 
 ## PostgreSQL boundary
 
@@ -149,8 +179,8 @@ staff. There is no outbound voice implementation and no SMS transport in this
 slice. ACS email additionally requires the scheduler, patient-messaging enable,
 and operational-activation latches. Any unresolved ambiguous provider
 submission halts new outreach. Keep real messaging disabled until the Azure
-deployment layer, BAA, P5 logging/redaction, and deployment acceptance are all
-complete.
+deployment layer, the applicable Microsoft/ACS agreement and operational
+approvals, P5 logging/redaction, and deployment acceptance are all complete.
 
 ## Local development
 

@@ -9,10 +9,9 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
-      ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-high}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # The local Compose topology is deliberately offline. Live extraction is
+      # Azure-only and requires the Container Apps API managed identity.
+      COSMANEURA_AZURE_OPENAI_ENABLED: "false"
       DATABASE_URL: postgresql://${POSTGRES_APP_USER:-cosmaneura_app}:${POSTGRES_APP_URL_PASSWORD:?Set percent-encoded POSTGRES_APP_URL_PASSWORD in .env}@db:5432/${POSTGRES_DB:-cosmaneura}
       COSMANEURA_ENV: ${COSMANEURA_ENV:-production}
       COSMANEURA_LOG_LEVEL: ${COSMANEURA_LOG_LEVEL:-INFO}

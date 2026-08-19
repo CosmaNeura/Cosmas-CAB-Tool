@@ -49,14 +49,14 @@ _SAFE_EXCEPTION_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 _SAFE_LOGGER_ROOTS = (
     "cosmaneura_billing", "uvicorn", "azure", "httpx", "httpcore",
 )
-# Anthropic has used both ``claude-opus-4-1-YYYYMMDD`` and
-# ``claude-3-7-sonnet-YYYYMMDD`` orderings.  Admit those documented shapes,
-# along with the undated aliases used by this project, but never a free-form
-# suffix from deployment configuration.
+# Admit only documented OpenAI model-family shapes used for the billing
+# inference deployment. The Azure deployment name is deliberately not logged;
+# this label is the provider model identifier and cannot carry free-form data.
 _SAFE_LLM_MODEL_RE = re.compile(
-    r"claude-(?:(?:opus|sonnet|haiku)-[0-9]{1,2}(?:-[0-9]{1,2})?|"
-    r"[0-9]{1,2}(?:-[0-9]{1,2})?-(?:opus|sonnet|haiku))"
-    r"(?:-[0-9]{8})?\Z"
+    r"(?:"
+    r"gpt-(?:4o|[4-9](?:\.[0-9]+)*)(?:-(?:mini|nano|pro|chat|sol|terra|luna))?"
+    r"|o[1-9](?:-(?:mini|pro))?"
+    r")(?:-[0-9]{4}-[0-9]{2}-[0-9]{2})?\Z"
 )
 _LLM_STATUSES = frozenset({
     "http_error",
@@ -274,7 +274,7 @@ def _safe_metric_count(value: object, *, maximum: int) -> int | None:
 
 
 def safe_llm_model_label(value: object) -> str:
-    """Return only a documented Anthropic model identifier shape."""
+    """Return only an approved OpenAI model identifier shape."""
 
     if isinstance(value, str) and _SAFE_LLM_MODEL_RE.fullmatch(value):
         return value
@@ -300,7 +300,8 @@ class LLMMetricJSONFormatter(logging.Formatter):
         payload = {
             "event": LLM_LOG_EVENT,
             "provider": (
-                "anthropic" if getattr(record, "provider", None) == "anthropic"
+                "azure_openai"
+                if getattr(record, "provider", None) == "azure_openai"
                 else "unknown"
             ),
             "model": model,
@@ -646,7 +647,7 @@ def is_safe_llm_event(payload: object) -> bool:
         return False
     return (
         payload.get("event") == LLM_LOG_EVENT
-        and payload.get("provider") in {"anthropic", "unknown"}
+        and payload.get("provider") in {"azure_openai", "unknown"}
         and isinstance(payload.get("model"), str)
         and (
             payload.get("model") == "invalid_model_label"

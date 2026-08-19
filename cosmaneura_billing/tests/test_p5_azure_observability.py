@@ -59,24 +59,46 @@ def test_only_api_identity_can_publish_explicit_numeric_metrics():
         assert name not in migration
 
 
-def test_anthropic_credential_is_optional_api_only_and_default_off():
-    secret = _resource(FOUNDATION, "anthropicApiKeySecret")
-    reader = _resource(FOUNDATION, "apiAnthropicSecretReader")
+def test_private_azure_openai_is_managed_identity_only_and_default_off():
+    account = _resource(FOUNDATION, "azureOpenAI")
+    deployment = _resource(FOUNDATION, "azureOpenAIDeployment")
+    reader = _resource(FOUNDATION, "apiAzureOpenAIUser")
+    endpoint = _resource(FOUNDATION, "azureOpenAIPrivateEndpoint")
+    dns = _resource(FOUNDATION, "azureOpenAIPrivateDns")
     api = _resource(APP, "application")
     worker = _resource(APP, "chaseWorkerJob")
     migration = _resource(APP, "migrationJob")
 
-    assert "if (anthropicConfigured)" in secret
-    assert "scope: anthropicApiKeySecret" in reader
+    assert "if (provisionAzureOpenAI)" in account
+    assert "kind: 'OpenAI'" in account
+    assert "disableLocalAuth: true" in account
+    assert "publicNetworkAccess: 'Disabled'" in account
+    assert "defaultAction: 'Deny'" in account
+    assert "name: azureOpenAIModelName" in deployment
+    assert "version: azureOpenAIModelVersion" in deployment
+    assert "name: azureOpenAIDeploymentSku" in deployment
+    assert "capacity: azureOpenAIDeploymentCapacity" in deployment
+    assert "versionUpgradeOption: 'NoAutoUpgrade'" in deployment
+    assert "scope: azureOpenAI" in reader
     assert "principalId: workloadIdentity.properties.principalId" in reader
-    assert "enableAnthropicInference bool = false" in APP
-    assert "enableAnthropicInference ? [" in api
-    assert "ANTHROPIC_API_KEY" in api
-    assert "ANTHROPIC_MODEL" in api
-    assert "ANTHROPIC_EFFORT" in api
-    for forbidden in ("anthropic-api-key", "ANTHROPIC_API_KEY"):
+    assert "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd" in reader
+    assert "groupIds: [\n            'account'" in endpoint
+    assert "keyVaultPrivateEndpoint" in endpoint
+    assert "privatelink.openai.azure.com" in dns
+    assert "enableAzureOpenAIInference bool = false" in APP
+    assert "COSMANEURA_AZURE_OPENAI_ENABLED" in api
+    assert "AZURE_OPENAI_ENDPOINT" in api
+    assert "AZURE_OPENAI_DEPLOYMENT" in api
+    assert "AZURE_OPENAI_MODEL" in api
+    assert "AZURE_OPENAI_API_VERSION" in api
+    for forbidden in (
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "COSMANEURA_AZURE_OPENAI_ENABLED",
+    ):
         assert forbidden not in worker
         assert forbidden not in migration
+    assert "anthropic" not in (FOUNDATION + APP).casefold()
 
     foundation_parameters = json.loads(
         (ROOT / "infra" / "foundation.parameters.example.json").read_text(
@@ -88,11 +110,21 @@ def test_anthropic_credential_is_optional_api_only_and_default_off():
             encoding="utf-8",
         ),
     )["parameters"]
-    assert foundation_parameters["anthropicApiKey"]["value"] == ""
-    assert app_parameters["enableAnthropicInference"]["value"] is False
+    assert foundation_parameters["provisionAzureOpenAI"]["value"] is False
+    assert foundation_parameters["azureOpenAIDeploymentSku"]["value"] == (
+        "DataZoneStandard"
+    )
+    assert foundation_parameters["azureOpenAIDeploymentCapacity"]["value"] == 200
+    assert app_parameters["enableAzureOpenAIInference"]["value"] is False
+    assert app_parameters["azureOpenAIDeploymentName"]["value"] == (
+        foundation_parameters["azureOpenAIDeploymentName"]["value"]
+    )
+    assert app_parameters["azureOpenAIModelName"]["value"] == (
+        foundation_parameters["azureOpenAIModelName"]["value"]
+    )
 
 
-def test_container_installs_explicit_metrics_without_auto_instrumentation():
+def test_container_installs_inference_and_metrics_without_auto_instrumentation():
     project = (ROOT / "cosmaneura_billing" / "pyproject.toml").read_text(
         encoding="utf-8",
     )
@@ -103,7 +135,9 @@ def test_container_installs_explicit_metrics_without_auto_instrumentation():
     assert "azure-monitor-opentelemetry-exporter" in project
     assert "opentelemetry-sdk" in project
     assert "azure-identity" in project
-    assert "[api,postgres,messaging,telemetry]" in dockerfile
+    assert "openai" in project
+    assert "[api,inference,postgres,messaging,telemetry]" in dockerfile
+    assert "from openai import AzureOpenAI" in dockerfile
     assert "opentelemetry-instrumentation" not in project
     assert "azure-monitor-opentelemetry\"" not in project
     assert "opentelemetry-instrument" not in dockerfile

@@ -5,14 +5,14 @@ This is the multi-encounter harness: it exercises extraction -> coding ->
 evidence verification -> integrity -> guardrail -> denial-risk on every
 encounter and prints a per-encounter line plus an aggregate summary.
 
-    python scripts/run_corpus.py                    # offline plumbing check
-    ANTHROPIC_API_KEY=... python scripts/run_corpus.py --limit 10   # real inference
+    python scripts/run_corpus.py                         # offline plumbing check
+    COSMANEURA_AZURE_OPENAI_ENABLED=true ... python scripts/run_corpus.py --limit 10
 
-Offline (no ANTHROPIC_API_KEY) the MockLLM only knows the demo encounter, so
+With Azure OpenAI explicitly disabled, the MockLLM only knows the demo encounter, so
 extraction returns nothing and every visit levels at the floor with no
-diagnoses — that run validates the plumbing, not the coding. With a key, this
-is the engine's first real multi-encounter shakedown; expect it to surface
-extraction and mapping issues (that's the point).
+diagnoses — that run validates the plumbing, not the coding. With managed-identity
+inference explicitly enabled and fully configured, this is the engine's first real
+multi-encounter shakedown; expect it to surface extraction and mapping issues.
 """
 from __future__ import annotations
 
@@ -36,11 +36,17 @@ def main() -> int:
     ap.add_argument("--offset", type=int, default=0)
     args = ap.parse_args()
 
-    live = bool(Settings.from_env().anthropic_api_key)
-    print(f"inference: {'AnthropicLLM (live)' if live else 'MockLLM (offline plumbing check)'}")
+    live = Settings.from_env().azure_openai_enabled
+    print(
+        "inference: "
+        + ("AzureOpenAILLM (live)" if live else "MockLLM (offline plumbing check)")
+    )
     if not live:
-        print("  -> offline mode validates the pipeline mechanics only; set "
-              "ANTHROPIC_API_KEY for a real extraction/coding run.\n")
+        print(
+            "  -> offline mode validates the pipeline mechanics only; explicitly "
+            "enable and configure Azure OpenAI managed-identity inference for a "
+            "real extraction/coding run.\n"
+        )
 
     bundles = load_acibench(args.split)
     if args.offset:

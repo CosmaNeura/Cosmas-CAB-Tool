@@ -17,9 +17,9 @@ Two on-disk schemas are accepted automatically:
   * the raw 18-column AHRQ DXCCSR layout.
 ``.gz`` files are read transparently.
 
-The semantic-search helper (``embed_search``) is ported from the prototype's
-feature2 and is only used when an OpenAI embeddings key is configured; the demo
-path resolves concepts to codes by description match instead.
+The legacy semantic-search helper (``embed_search``) is development-only and
+not part of the Azure pilot runtime; the demo resolves concepts to codes by
+description match instead.
 """
 from __future__ import annotations
 
@@ -157,17 +157,22 @@ class ICD10CCSR:
 
 
 # --------------------------------------------------------------------------- #
-# Optional: semantic search (ported from prototype feature2). Requires an
-# OpenAI embeddings key + the reference-file embeddings; unused in the demo.
+# Optional legacy semantic search (ported from prototype feature2). It is
+# development-only and not part of the Azure pilot runtime.
 # --------------------------------------------------------------------------- #
 def embed_search(text: str, reference_feather: str, count: int = 5,
                  api_key: str | None = None,
                  settings: Settings | None = None):  # pragma: no cover
+    config = settings or Settings.from_env()
+    if config.environment in {"staging", "production"}:
+        raise SettingsError(
+            "direct OpenAI embeddings are disabled in deployed environments"
+        )
+
     import numpy as np
     import openai
     import pandas as pd
 
-    config = settings or Settings.from_env()
     resolved_api_key = api_key or config.openai_api_key
     if not resolved_api_key:
         raise SettingsError("OPENAI_API_KEY is required for ICD-10 semantic search")

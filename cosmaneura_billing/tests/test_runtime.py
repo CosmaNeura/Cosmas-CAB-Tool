@@ -177,8 +177,8 @@ def test_llm_formatter_preserves_only_validated_cost_metrics():
         "prompt=Jane Patient DOB 2000-01-02 token=synthetic-secret",
         extra={
             "event": "llm_request",
-            "provider": "anthropic",
-            "model": "claude-opus-5-20260801",
+            "provider": "azure_openai",
+            "model": "gpt-4.1-mini-2025-04-14",
             "status": "success",
             "attempt": 2,
             "latency_ms": 125,
@@ -196,8 +196,8 @@ def test_llm_formatter_preserves_only_validated_cost_metrics():
     event = _one_event(stream)
     assert event == {
         "event": "llm_request",
-        "provider": "anthropic",
-        "model": "claude-opus-5-20260801",
+        "provider": "azure_openai",
+        "model": "gpt-4.1-mini-2025-04-14",
         "status": "success",
         "attempt": 2,
         "latency_ms": 125,
@@ -225,7 +225,7 @@ def test_llm_formatter_redacts_untrusted_labels_and_invalid_counts():
         "llm_request",
         extra={
             "provider": "Patient-Jane",
-            "model": "claude-jane-patient",
+            "model": "gpt-jane-patient",
             "status": "Jane Patient failed",
             "attempt": "MRN-123",
             "latency_ms": "DOB-2000-01-02",
@@ -263,8 +263,8 @@ def test_llm_formatter_rejects_free_form_model_suffix():
     logger.info(
         "llm_request",
         extra={
-            "provider": "anthropic",
-            "model": "claude-opus-5-jane-patient",
+            "provider": "azure_openai",
+            "model": "gpt-4.1-mini-jane-patient",
             "status": "success",
             "attempt": 1,
             "latency_ms": 1,

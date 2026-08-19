@@ -125,32 +125,32 @@ class AzureMonitorLLMMetricsSink:
         self._request_count = meter.create_counter(
             REQUEST_COUNT_METRIC,
             unit="{request}",
-            description="Count of Anthropic provider request attempts",
+            description="Count of Azure OpenAI provider request attempts",
         )
         self._latency = meter.create_histogram(
             LATENCY_METRIC,
             unit="ms",
-            description="Anthropic provider request latency",
+            description="Azure OpenAI provider request latency",
         )
         self._input_tokens = meter.create_counter(
             INPUT_TOKEN_METRIC,
             unit="{token}",
-            description="Anthropic input tokens",
+            description="Azure OpenAI input tokens",
         )
         self._output_tokens = meter.create_counter(
             OUTPUT_TOKEN_METRIC,
             unit="{token}",
-            description="Anthropic output tokens",
+            description="Azure OpenAI output tokens",
         )
         self._cache_creation_tokens = meter.create_counter(
             CACHE_CREATION_TOKEN_METRIC,
             unit="{token}",
-            description="Anthropic cache-creation input tokens",
+            description="Azure OpenAI cache-creation input tokens",
         )
         self._cache_read_tokens = meter.create_counter(
             CACHE_READ_TOKEN_METRIC,
             unit="{token}",
-            description="Anthropic cache-read input tokens",
+            description="Azure OpenAI cache-read input tokens",
         )
 
     def __call__(self, event: dict[str, Any]) -> None:

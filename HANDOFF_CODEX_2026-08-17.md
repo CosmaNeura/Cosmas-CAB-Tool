@@ -1,5 +1,15 @@
 # Handoff — what was built 2026-08-17, and the Azure lane
 
+> **Historical snapshot.** The test counts, unbuilt-infrastructure statements,
+> and Anthropic-specific configuration below describe the repository on Aug 17
+> and must not be used as current deployment instructions. Platform deployment
+> has since advanced, and the live-inference decision changed to a dedicated,
+> private Azure OpenAI deployment with managed identity only. Read
+> [`HANDOFF_CODEX_2026-08-18.md`](HANDOFF_CODEX_2026-08-18.md) and the
+> [Azure OpenAI cost-plan addendum](docs/deployment/2026-08-18-azure-openai-cost-plan.md)
+> for the current plan. The anti-inflation, evidence, PHI, and UI-lane
+> constraints in this document remain binding.
+
 **Repo:** `CosmaNeura/Cosmas-CAB-Tool` · **Branch:** `claude/platform-handoff-codex-obnlqb`
 **Working folder:** the tool is `cosmaneura_billing/` (repo root still holds the 2023
 FluencyMed prototype)

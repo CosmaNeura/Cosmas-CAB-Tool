@@ -77,6 +77,9 @@ identities, Log Analytics, App Insights, a one-shot migration job, and the
 bounded chase job. Application ingress
 defaults private and must remain private until P2 authentication is verified.
 No Azure resources are created by tests or by building the repository.
+The reviewed Azure OpenAI resource shape, fixed network-cost delta, and token
+scenarios are in
+[`../docs/deployment/2026-08-18-azure-openai-cost-plan.md`](../docs/deployment/2026-08-18-azure-openai-cost-plan.md).
 The Entra trust boundary, role matrix, request controls, audit event contract,
 and local-development exception are in `docs/ACCESS_CONTROL.md`.
 
@@ -88,30 +91,42 @@ bootstraps only the explicitly named initial Entra administrator; all later
 membership changes use the reviewed owner-only CLI documented in
 `migrations/README.md`. Login never creates a user or membership.
 
-**Offline mode covers one encounter.** Without `ANTHROPIC_API_KEY` the engine
-runs a deterministic model that only knows the bundled GI-bleed demo visit. On
-any other encounter it extracts nothing and proposes nothing — correctly, and
-by design. Every response says which inference path ran (`inferenceMode`,
-`inferenceModel`) and, when a run produced nothing for that reason, carries a
-`degraded` object explaining it, so an empty claim is never presented as a
-finding.
+**Offline mode covers one encounter.** Unless
+`COSMANEURA_AZURE_OPENAI_ENABLED=true` and the complete Azure endpoint,
+deployment, model, API-version, and managed-identity configuration are present,
+the engine runs a deterministic model that only knows the bundled GI-bleed demo
+visit. On any other encounter it extracts nothing and proposes nothing —
+correctly, and by design. Every response says which inference path ran
+(`inferenceMode`, `inferenceModel`) and, when a run produced nothing for that
+reason, carries a `degraded` object explaining it, so an empty claim is never
+presented as a finding. Invalid enabled configuration fails startup; it never
+silently falls back to a live provider.
 
 P5 observability is deliberately narrower than general-purpose tracing. The API
 logs one closed-schema `http_request` event using a server-generated request ID
-and declared route template; Anthropic calls log per-attempt latency and
-input/output/cache token counts; the chase worker logs one terminal aggregate
-event. A fail-closed scanner rejects expanded schemas, PHI/secret markers, raw
-request targets, and synthetic patient canaries in CI. Azure exports only the
-explicit numeric LLM instruments to App Insights through the API managed
-identity. Generic HTTP/SQL/exception/logging auto-instrumentation is not enabled
-because it can observe chart content before redaction. See `../infra/README.md`
-for synthetic acceptance and retention details.
+and declared route template; Azure OpenAI calls log per-attempt latency and
+provider-reported input/output/cached-input token counts; the chase worker logs
+one terminal aggregate event. A fail-closed scanner rejects expanded schemas,
+PHI/secret markers, raw request targets, and synthetic patient canaries in CI.
+Azure exports only the explicit numeric LLM instruments to App Insights through
+the API managed identity. Generic HTTP/SQL/exception/logging
+auto-instrumentation is not enabled because it can observe chart content before
+redaction. See `../infra/README.md` for synthetic acceptance and retention
+details.
 
-The Azure template can provision an API-only Anthropic credential, but keeps
-inference disabled by default. Synthetic/de-identified model acceptance may run
-before contractual approval; real chart text must not be sent until an
-Anthropic BAA and approved retention terms are documented in addition to the
-Microsoft/Azure BAA and platform acceptance.
+The foundation template can provision a dedicated North Central US Azure OpenAI
+account with public access and local authentication disabled, a private
+endpoint/DNS zone, the pinned `gpt-5.6-sol` 2026-07-09 `DataZoneStandard`
+deployment at capacity 200, and an account-scoped inference role for the API
+managed identity. Provisioning does not enable application inference. Live
+catalog and ARM validation have passed, but strict JSON Schema output and the
+JSON-object fallback still require a synthetic data-plane acceptance run.
+
+Real chart text remains prohibited until the Microsoft agreement/BAA is
+verified to cover the Azure OpenAI service and US data zone, the service's
+data-processing and retention posture is documented, and private-network,
+managed-identity, P5 redaction, and deployment acceptance are green. Resource
+creation or parameter enablement is not evidence that those gates are complete.
 
 ## Provider billing tab and note completeness
 
@@ -141,13 +156,36 @@ curl -s localhost:8000/api/completeness -H 'content-type: application/json' -d '
   "note": "Telehealth visit. Patient consented.", "placeOfService": "10"}' | jq
 ```
 
-Production inference (clinical fact extraction via Claude) turns on automatically
-when a key is present, and the full AHRQ code set loads from a path you point at:
+Azure OpenAI inference is explicit and managed-identity-only. For a controlled
+synthetic/de-identified run from an Azure-authorized environment, configure the
+reviewed deployment and opt in; no `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, or
+static bearer token is accepted:
 
 ```bash
-ANTHROPIC_API_KEY=sk-...   python run_demo.py
+COSMANEURA_AZURE_OPENAI_ENABLED=true \
+AZURE_CLIENT_ID=<api-uami-client-id> \
+AZURE_OPENAI_ENDPOINT=https://<account>.openai.azure.com/ \
+AZURE_OPENAI_DEPLOYMENT=gpt-5-6-sol-2026-07-09 \
+AZURE_OPENAI_MODEL=gpt-5.6-sol \
+AZURE_OPENAI_API_VERSION=2025-04-01-preview \
+python run_demo.py
+
 ICD10_CCSR_CSV=/path/to/DXCCSR_v2023-1.csv   python run_demo.py
 ```
+
+The adapter selects strict Structured Outputs for locally compatible schemas
+and selects JSON-object mode up front for schemas outside the supported strict
+subset; both paths are parsed and schema-validated fail-closed in deterministic
+Python. A provider 4xx is terminal and never causes a weaker retry. OpenAI
+documents those API behaviors in the
+[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+Azure resource, networking, Entra, quota, and data-zone behavior is operated and
+validated through Microsoft Azure.
+
+The separate legacy `api.openai.com` embedding/indexing seam is development-only
+and is not part of the pilot runtime. It is prohibited in staging and production
+unless separately migrated to Azure OpenAI, private-networked, managed-identity
+authenticated, and accepted under the same PHI controls.
 
 ## Official CPT descriptors (AMA developer account)
 
@@ -334,7 +372,7 @@ unknown blocks. Point it at the practice's list with
 ```
 cosmaneura_billing/
   schemas.py                 dataclasses; the "evidence-or-it-isn't-billable" rule lives here
-  llm.py                     LLMClient protocol + offline MockLLM + AnthropicLLM adapter
+  llm.py                     LLMClient protocol + offline MockLLM + AzureOpenAILLM adapter
   orchestrator.py            runs the agents and assembles both role views
   billing_tab.py             provider billing-tab adapter (F1) — a view, never a second engine
   completeness.py            note rule packs + attestation block (F2)

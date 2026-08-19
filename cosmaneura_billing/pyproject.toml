@@ -21,6 +21,12 @@ corpus = ["pandas>=2.0", "pyarrow>=14"]
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
 # durable chase / feedback persistence in the practice's PostgreSQL server
 postgres = ["psycopg[binary]>=3.2,<4"]
+# Live billing inference: official OpenAI SDK against Azure OpenAI, authenticated
+# with the API's user-assigned managed identity. No API-key auth is supported.
+inference = [
+    "openai>=1.109,<3",
+    "azure-identity>=1.17,<2",
+]
 # Patient email delivery from the P4 scheduler. The API remains transport-inert.
 messaging = ["azure-communication-email>=1.1,<2"]
 # Explicit numeric metrics only.  No Azure/OpenTelemetry auto-instrumentation is
@@ -38,6 +44,7 @@ dev = [
     "uvicorn>=0.30",
     "httpx>=0.27",
     "psycopg[binary]>=3.2,<4",
+    "openai>=1.109,<3",
     "azure-identity>=1.17,<2",
     "azure-monitor-opentelemetry-exporter>=1.0.0b36,<2",
     "opentelemetry-sdk>=1.27,<2",

@@ -56,20 +56,17 @@ param acsEmailSenderAddress string = ''
 @description('Monitored reply-to address; shared as non-secret policy metadata only.')
 param acsEmailReplyToAddress string = ''
 
-@description('Enable API-only Anthropic inference after the foundation secret exists. Before an Anthropic BAA/retention approval, submit synthetic or de-identified text only.')
-param enableAnthropicInference bool = false
+@description('Enable API-only Azure OpenAI inference. Keep false until private networking, managed identity, telemetry, and synthetic model acceptance are complete.')
+param enableAzureOpenAIInference bool = false
 
-@description('Anthropic model alias or dated model ID used by the billing engine.')
-param anthropicModel string = 'claude-opus-5'
+@description('Must match the immutable deployment created by the foundation template.')
+param azureOpenAIDeploymentName string = 'gpt-5-6-sol-2026-07-09'
 
-@allowed([
-  'low'
-  'medium'
-  'high'
-  'max'
-])
-@description('Adaptive-thinking effort for Anthropic inference.')
-param anthropicEffort string = 'high'
+@description('Underlying model/version label reported in PHI-safe inference metadata.')
+param azureOpenAIModelName string = 'gpt-5.6-sol'
+
+@description('Azure OpenAI Responses data-plane API version used by the official OpenAI SDK.')
+param azureOpenAIApiVersion string = '2025-04-01-preview'
 
 @description('IANA timezone used for chase cadence and quiet-hour calculations.')
 param practiceTimezone string = 'UTC'
@@ -132,6 +129,7 @@ var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
 var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
+var azureOpenAIName = take('${compactPrefix}oai${suffix}', 64)
 var appName = '${containerNamePrefix}-api-${suffix}'
 var migrationJobName = '${containerNamePrefix}-mig-${suffix}'
 var chaseWorkerJobName = '${containerNamePrefix}-wrk-${suffix}'
@@ -155,6 +153,7 @@ var validatedAcsEmailReplyToAddress = validatedPatientMessagingEnabled && empty(
   : acsEmailReplyToAddress
 var schedulerEnabledValue = validatedSchedulerEnabled ? 'true' : 'false'
 var patientMessagingEnabledValue = validatedPatientMessagingEnabled ? 'true' : 'false'
+var azureOpenAIEnabledValue = enableAzureOpenAIInference ? 'true' : 'false'
 var chaseTransport = validatedPatientMessagingEnabled ? 'acs_email' : 'record_only'
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
@@ -163,6 +162,10 @@ resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
 
 resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
   name: appInsightsName
+}
+
+resource azureOpenAI 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = if (enableAzureOpenAIInference) {
+  name: azureOpenAIName
 }
 
 var applicationOrigin = 'https://${appName}.${environment.properties.defaultDomain}'
@@ -349,7 +352,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           identity: identity.id
         }
       ]
-      secrets: concat([
+      secrets: [
         {
           name: 'database-url'
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-url'
@@ -365,13 +368,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-gate-hmac-key'
           identity: identity.id
         }
-      ], enableAnthropicInference ? [
-        {
-          name: 'anthropic-api-key'
-          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/anthropic-api-key'
-          identity: identity.id
-        }
-      ] : [])
+      ]
     }
     template: {
       containers: [
@@ -398,6 +395,10 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             {
               name: 'AZURE_CLIENT_ID'
               value: identity.properties.clientId
+            }
+            {
+              name: 'COSMANEURA_AZURE_OPENAI_ENABLED'
+              value: azureOpenAIEnabledValue
             }
             {
               name: 'APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL'
@@ -523,18 +524,22 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               name: 'COSMANEURA_DIRECT_CONTRACT_LIST'
               value: directContractListPath
             }
-          ], enableAnthropicInference ? [
+          ], enableAzureOpenAIInference ? [
             {
-              name: 'ANTHROPIC_API_KEY'
-              secretRef: 'anthropic-api-key'
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: azureOpenAI!.properties.endpoint
             }
             {
-              name: 'ANTHROPIC_MODEL'
-              value: anthropicModel
+              name: 'AZURE_OPENAI_DEPLOYMENT'
+              value: azureOpenAIDeploymentName
             }
             {
-              name: 'ANTHROPIC_EFFORT'
-              value: anthropicEffort
+              name: 'AZURE_OPENAI_MODEL'
+              value: azureOpenAIModelName
+            }
+            {
+              name: 'AZURE_OPENAI_API_VERSION'
+              value: azureOpenAIApiVersion
             }
           ] : [], validatedPatientMessagingEnabled ? [
             {

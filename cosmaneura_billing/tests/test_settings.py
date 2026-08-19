@@ -11,9 +11,10 @@ def test_defaults_preserve_local_runtime_behavior():
 
     assert settings.environment == "development"
     assert settings.log_level == "INFO"
-    assert settings.anthropic_api_key == ""
-    assert settings.anthropic_model == "claude-opus-5"
-    assert settings.anthropic_effort == "high"
+    assert settings.azure_openai_endpoint == ""
+    assert settings.azure_openai_deployment == ""
+    assert settings.azure_openai_model == ""
+    assert settings.azure_openai_api_version == "2025-04-01-preview"
     assert settings.openai_api_key == ""
     assert settings.database_url == ""
     assert settings.state_store == "local"
@@ -37,6 +38,7 @@ def test_defaults_preserve_local_runtime_behavior():
     assert settings.telemetry_enabled is False
     assert settings.application_insights_connection_string == ""
     assert settings.azure_client_id == ""
+    assert settings.azure_openai_enabled is False
     assert settings.patient_messaging_enabled is False
     assert settings.patient_messaging_operationally_activated is False
     assert settings.chase_scheduler_enabled is False
@@ -64,10 +66,13 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
             "IngestionEndpoint=https://example.applicationinsights.azure.com/"
         ),
         "AZURE_CLIENT_ID": "33333333-3333-4333-8333-333333333333",
+        "COSMANEURA_AZURE_OPENAI_ENABLED": "true",
+        "AZURE_OPENAI_ENDPOINT": "https://cab-openai.openai.azure.com",
+        "AZURE_OPENAI_DEPLOYMENT": "cab-gpt",
+        "AZURE_OPENAI_MODEL": "gpt-5.6-sol",
+        "AZURE_OPENAI_API_VERSION": "2025-04-01-preview",
         "COSMANEURA_FRONTEND_DIST": str(tmp_path / "frontend"),
         "COSMANEURA_MIGRATIONS_DIR": str(tmp_path / "migrations"),
-        "ANTHROPIC_MODEL": "claude-sonnet-5",
-        "ANTHROPIC_EFFORT": "medium",
         "CPT_AUTO_FETCH": "no",
         "XDG_CACHE_HOME": str(tmp_path / "cache"),
         "ICD10_CCSR_CSV": str(tmp_path / "ccsr.csv"),
@@ -106,8 +111,11 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
     assert settings.migrations_dir == str(tmp_path / "migrations")
     assert settings.telemetry_enabled is True
     assert settings.azure_client_id == "33333333-3333-4333-8333-333333333333"
-    assert settings.anthropic_model == "claude-sonnet-5"
-    assert settings.anthropic_effort == "medium"
+    assert settings.azure_openai_enabled is True
+    assert settings.azure_openai_endpoint == "https://cab-openai.openai.azure.com"
+    assert settings.azure_openai_deployment == "cab-gpt"
+    assert settings.azure_openai_model == "gpt-5.6-sol"
+    assert settings.azure_openai_api_version == "2025-04-01-preview"
     assert settings.cpt_auto_fetch is False
     assert settings.cpt_cache_dir == tmp_path / "cache" / "cosmaneura" / "cpt"
     assert settings.icd10_ccsr_csv == str(tmp_path / "ccsr.csv")
@@ -157,6 +165,7 @@ def test_boolean_true_spellings(value):
     ("COSMANEURA_PATIENT_MESSAGING_ENABLED", "maybe"),
     ("COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED", "maybe"),
     ("COSMANEURA_CHASE_SCHEDULER_ENABLED", "maybe"),
+    ("COSMANEURA_AZURE_OPENAI_ENABLED", "maybe"),
 ])
 def test_invalid_values_raise_safe_specific_errors(name, value):
     with pytest.raises(SettingsError) as exc_info:
@@ -198,7 +207,6 @@ def test_complete_ama_credentials_resolve_with_configurable_paths():
 
 def test_repr_redacts_every_credential_and_database_dsn():
     secrets = {
-        "ANTHROPIC_API_KEY": "anthropic-secret",
         "OPENAI_API_KEY": "openai-secret",
         "DATABASE_URL": "postgresql://user:db-password@example/db",
         "COSMANEURA_CHASE_DATABASE_URL": "postgresql://user:other-password@example/db",
@@ -267,17 +275,96 @@ def test_azure_monitor_connection_error_never_echoes_configuration():
 
 
 def test_get_settings_reads_current_environment_without_global_cache(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-    assert get_settings().anthropic_model == "claude-sonnet-5"
-    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-5")
-    assert get_settings().anthropic_model == "claude-haiku-5"
+    monkeypatch.setenv("AZURE_CLIENT_ID", "33333333-3333-4333-8333-333333333333")
+    monkeypatch.setenv(
+        "AZURE_OPENAI_ENDPOINT", "https://cab-openai.openai.azure.com",
+    )
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "cab-gpt")
+    monkeypatch.setenv("AZURE_OPENAI_MODEL", "gpt-4.1-mini")
+    assert get_settings().azure_openai_model == "gpt-4.1-mini"
+    monkeypatch.setenv("AZURE_OPENAI_MODEL", "gpt-5-mini")
+    assert get_settings().azure_openai_model == "gpt-5-mini"
 
 
 def test_model_configuration_rejects_free_form_labels_without_echoing_them():
-    unsafe = "claude-opus-5-jane-patient"
+    unsafe = "gpt-4.1-mini-jane-patient"
     with pytest.raises(SettingsError, match="supported model ID shape") as exc_info:
-        Settings(anthropic_model=unsafe)
+        Settings(
+            azure_client_id="33333333-3333-4333-8333-333333333333",
+            azure_openai_endpoint="https://cab-openai.openai.azure.com",
+            azure_openai_deployment="cab-gpt",
+            azure_openai_model=unsafe,
+        )
     assert unsafe not in str(exc_info.value)
+
+
+def test_enabled_azure_openai_settings_are_complete_and_managed_identity_only():
+    preconfigured = Settings(
+        azure_openai_endpoint="https://cab-openai.openai.azure.com",
+    )
+    assert preconfigured.azure_openai_enabled is False
+
+    with pytest.raises(SettingsError, match="configured together") as exc_info:
+        Settings(
+            azure_openai_enabled=True,
+            azure_openai_endpoint="https://cab-openai.openai.azure.com",
+        )
+    assert "AZURE_OPENAI_DEPLOYMENT" in str(exc_info.value)
+    assert "AZURE_OPENAI_MODEL" in str(exc_info.value)
+
+    with pytest.raises(SettingsError, match="managed identity"):
+        Settings(
+            azure_openai_enabled=True,
+            azure_openai_endpoint="https://cab-openai.openai.azure.com",
+            azure_openai_deployment="cab-gpt",
+            azure_openai_model="gpt-4.1-mini",
+        )
+
+    with pytest.raises(SettingsError, match="must be a boolean"):
+        Settings(azure_openai_enabled="false")
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("AZURE_OPENAI_ENDPOINT", "https://patient-jane.example.invalid"),
+        ("AZURE_OPENAI_DEPLOYMENT", "patient Jane"),
+        ("AZURE_OPENAI_API_VERSION", "latest"),
+    ],
+)
+def test_azure_openai_fields_reject_unsafe_values_without_echoing_them(name, value):
+    env = {
+        "AZURE_CLIENT_ID": "33333333-3333-4333-8333-333333333333",
+        "AZURE_OPENAI_ENDPOINT": "https://cab-openai.openai.azure.com",
+        "AZURE_OPENAI_DEPLOYMENT": "cab-gpt",
+        "AZURE_OPENAI_MODEL": "gpt-4.1-mini",
+        name: value,
+    }
+    with pytest.raises(SettingsError) as exc_info:
+        Settings.from_env(env)
+    assert name in str(exc_info.value)
+    assert value not in str(exc_info.value)
+
+
+def test_deployed_runtime_rejects_direct_openai_api_key_without_echoing_it():
+    secret = "direct-openai-secret-must-not-leak"
+    with pytest.raises(SettingsError, match="development-only") as exc_info:
+        _production_messaging_settings(openai_api_key=secret)
+    assert secret not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_AD_TOKEN"],
+)
+def test_enabled_azure_openai_rejects_direct_credentials_without_echo(name):
+    secret = "ambient-direct-credential-must-not-leak"
+    with pytest.raises(SettingsError, match="managed identity") as exc_info:
+        Settings.from_env({
+            "COSMANEURA_AZURE_OPENAI_ENABLED": "true",
+            name: secret,
+        })
+    assert secret not in str(exc_info.value)
 
 
 def test_deployed_environments_require_complete_authentication():

@@ -4,16 +4,15 @@ Dialogue retrieval-augmented generation for the "leading questions" feature
 
 End-to-end shape:
     corpus (patient-doctor dialogues)
-        -> Embedder.embed(...)            # MockEmbedder offline, OpenAIEmbedder in prod
+        -> Embedder.embed(...)            # MockEmbedder offline; direct OpenAI is dev-only
         -> VectorStore.upsert(...)        # PgVectorStore in prod, LocalVectorStore in dev
     patient utterance
         -> Embedder.embed([utterance])
         -> VectorStore.query(...)         # nearest prior dialogues
         -> LLMClient.complete_json(...)   # propose the next screening questions
 
-Production wiring uses PgVectorStore (pgvector in your own Postgres, covered by
-your cloud BAA) and a BAA-covered embedding provider. The demo below runs fully
-offline (MockEmbedder + LocalVectorStore + MockLLM) so you can see it work.
+The Azure pilot does not enable a live embedding provider. The demo below runs
+fully offline (MockEmbedder + LocalVectorStore + MockLLM) so you can see it work.
 
 Ethics note carried over from the billing design: the generated questions
 complete the clinical history for the patient's benefit; they never steer the
@@ -29,7 +28,7 @@ import re
 from typing import Any, Protocol
 
 from .llm import LLMClient, MockLLM
-from .settings import Settings
+from .settings import Settings, SettingsError
 from .vectorstore import LocalVectorStore, Match, VectorStore
 
 
@@ -62,13 +61,20 @@ class MockEmbedder:
 
 
 class OpenAIEmbedder:
-    """Production embeddings via the OpenAI API. Use only on a ZDR-enabled,
-    BAA-covered project for PHI. The prototype used ada-002; text-embedding-3-small
-    is the current, cheaper default (1536 dims)."""
+    """Legacy direct-OpenAI embedder for de-identified local development only.
+
+    It is not part of the Azure pilot runtime. Deployed environments reject it
+    until embeddings are separately migrated to private Azure OpenAI with
+    managed identity and the same acceptance controls as extraction.
+    """
 
     def __init__(self, model: str = "text-embedding-3-small", dim: int = 1536,
                  api_key: str | None = None, settings: Settings | None = None):
         config = settings or Settings.from_env()
+        if config.environment in {"staging", "production"}:
+            raise SettingsError(
+                "direct OpenAI embeddings are disabled in deployed environments"
+            )
         self.model = model
         self.dim = dim
         self.api_key = api_key or config.openai_api_key
@@ -157,4 +163,4 @@ if __name__ == "__main__":
         print("  •", q)
 
     print("\nPASS — dialogue RAG runs end to end over a local vector store; "
-          "set PgVectorStore + OpenAIEmbedder for production (no Pinecone).")
+          "the Azure pilot keeps live embeddings disabled.")

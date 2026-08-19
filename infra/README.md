@@ -12,6 +12,9 @@ the spoof-resistance acceptance checks are deployed and verified.
 - VNet-injected Azure Container Apps environment
 - Azure Database for PostgreSQL Flexible Server 16 on a delegated subnet
 - Premium ACR and Key Vault with public access disabled and private endpoints
+- an optional dedicated North Central US Azure OpenAI account with local
+  authentication/public access disabled, a private endpoint/DNS zone, pinned
+  model deployment, and API-identity-only inference RBAC
 - separate user-assigned identities for the API, migration job, and chase
   worker, each with ACR pull and only its required Key Vault secret grants
 - Log Analytics for closed-schema stdout events and workspace-based Application
@@ -32,9 +35,18 @@ The foundation owns credentials and creates these additional P4 inputs:
 - secure `chaseGateHmacKey` (at least 32 bytes)
 - optional secure `acsEmailConnectionString`, empty until the real-email gates
   are satisfied
-- optional secure `anthropicApiKey`, readable only by the API identity and empty
-  until synthetic model acceptance (real PHI additionally requires an
-  Anthropic BAA and approved retention terms)
+
+It also owns the non-secret Azure OpenAI resource contract:
+
+- `provisionAzureOpenAI` (false by default and independent of application
+  inference enablement)
+- `azureOpenAIDeploymentName=gpt-5-6-sol-2026-07-09`
+- `azureOpenAIModelName=gpt-5.6-sol`, version `2026-07-09`
+- `azureOpenAIDeploymentSku=DataZoneStandard`, capacity `200`
+
+There is no model API key or Key Vault model credential. The existing API
+managed identity receives the account-scoped `Cognitive Services OpenAI User`
+role; migration and worker identities receive no Azure OpenAI access.
 
 The app deployment owns behavior and receives these additional P4 inputs:
 
@@ -48,8 +60,9 @@ The app deployment owns behavior and receives these additional P4 inputs:
   `chaseWorkerCronExpression`
 - `uploadUrl`, `directContractListPath`, and `chaseApprovalMode`, which are also
   part of the server-configured policy/evidence boundary
-- `enableAnthropicInference` (false by default), plus non-secret
-  `anthropicModel` and `anthropicEffort`
+- `enableAzureOpenAIInference` (false by default), plus non-secret
+  `azureOpenAIDeploymentName`, `azureOpenAIModelName`, and
+  `azureOpenAIApiVersion=2025-04-01-preview`
 
 The two patient-messaging latches must change together. Enabling messaging also
 requires the scheduler and all ACS metadata; otherwise Bicep fails before
@@ -59,7 +72,7 @@ Secret access is intentionally partitioned:
 
 | Principal | May read | Must not read |
 |---|---|---|
-| API identity | `database-url`, Entra client secret, `chase-gate-hmac-key`, and optional `anthropic-api-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string |
+| API identity | `database-url`, Entra client secret, and `chase-gate-hmac-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string, any model API key |
 | Migration identity | `migration-database-url`, `database-runtime-password`, `chase-worker-database-password` | API DSN, worker DSN, gate key, ACS connection string |
 | Chase-worker identity | `chase-worker-database-url`, `chase-gate-hmac-key`, and (only when configured) `acs-email-connection-string` | API/owner DSNs, raw DB passwords, Entra client secret |
 
@@ -67,6 +80,11 @@ The gate key is the only Key Vault secret shared by API and worker. ACS
 endpoint/sender/reply values are shared non-secret fingerprint metadata; the
 ACS connection string is worker-only. Do not compensate for a missing secret
 grant with a vault-scoped role assignment.
+
+Azure OpenAI authorization is resource-scoped RBAC, not Key Vault access. The
+API's Azure OpenAI endpoint, deployment, model label, and API version are
+non-secret configuration and are injected only when inference is explicitly
+enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
 
 ## Deployment sequence
 
@@ -88,16 +106,22 @@ grant with a vault-scoped role assignment.
    stable random `chaseGateHmacKey` of at least 32 bytes, and set
    `initialAdminObjectId` to the reviewed immutable Entra object UUID of the
    first pilot administrator—not an email address or display name. Keep
-   `acsEmailConnectionString` and `anthropicApiKey` empty, and the app's
-   messaging/inference enable flags false, for the initial synthetic deployment.
+   `acsEmailConnectionString` empty, `provisionAzureOpenAI=false`, and the app's
+   messaging/inference enable flags false for the initial platform deployment.
+   Provision Azure OpenAI only after the reviewed
+   [cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md)
+   is approved; provisioning still does not enable application inference.
 3. Create/select a resource group and deploy `foundation.bicep`. Keep
    `registryPublicNetworkAccess` set to its secure default, `Disabled`. This
    deployment must precede `app.bicep`: it creates all three identities, the
    worker DSN/password secrets, the shared gate-key secret, and their
-   secret-scoped grants. ACS and Anthropic secrets/grants are created only when
-   the foundation receives their non-empty credentials. The API identity alone
-   receives `Monitoring Metrics Publisher` at the Application Insights
-   component scope; worker and migration identities receive no telemetry role.
+   secret-scoped grants. The ACS secret/grant is created only when the
+   foundation receives a non-empty credential. When
+   `provisionAzureOpenAI=true`, the foundation instead creates the private model
+   account/deployment/network path and its API-only resource RBAC; it creates no
+   model secret. The API identity alone receives `Monitoring Metrics Publisher`
+   at the Application Insights component scope; worker and migration identities
+   receive no telemetry role.
 4. For the first image only, temporarily set
    `registryPublicNetworkAccess` to `Enabled`, redeploy the foundation, and
    build from the repository root with ACR Tasks:
@@ -116,7 +140,7 @@ grant with a vault-scoped role assignment.
    `publicNetworkAccess: Disabled`. Do not proceed while it is enabled.
 5. Deploy `app.bicep` with the exact immutable image tag,
    `externalIngress=false`, `enableChaseScheduler=false`, both messaging
-   latches false, and `enableAnthropicInference=false` only after that
+   latches false, and `enableAzureOpenAIInference=false` only after that
    verification. Add the output FQDN as the Entra
    web redirect URI:
    `https://<app-fqdn>/.auth/login/aad/callback`.
@@ -200,11 +224,12 @@ NCCI/coverage data fails closed. The app has no public ingress at this stage.
 
 ## Enabling ACS email
 
-Real patient email remains prohibited until the Microsoft/Azure BAAs are in
-place, P5 logging and redaction are deployed and verified, deployment/auth
-acceptance is green, the secure upload route is approved, and the practice has
-completed operational review. Until then use synthetic/de-identified recipients
-only and keep both messaging latches false.
+Real patient email remains prohibited until the applicable Microsoft/ACS
+agreement and service configuration are approved, P5 logging and redaction are
+deployed and verified, deployment/auth acceptance is green, the secure upload
+route is approved, and the practice has completed operational review. Until
+then use synthetic/de-identified recipients only and keep both messaging
+latches false.
 
 When those gates are satisfied, use this order:
 
@@ -255,7 +280,7 @@ Do not enable Azure/OpenTelemetry automatic HTTP, SQL, exception, trace,
 profiler, snapshot, live-metrics, or logging instrumentation: those generic
 collectors can observe PHI before the application boundary redacts it.
 
-Validate P5 with synthetic/de-identified values before enabling external model
+Validate P5 with synthetic/de-identified values before enabling Azure OpenAI
 inference:
 
 1. Confirm the image contains the telemetry extra and both app/worker processes
@@ -266,40 +291,57 @@ inference:
    query, body, header, and exception text. In Log Analytics, confirm none of
    those values appears and the request is represented only by a declared route
    template, status, duration, exception class, and server-owned request ID.
-3. To test the real adapter with **synthetic/de-identified chart text only**,
-   redeploy the foundation first with a reviewed `anthropicApiKey`, verify only
-   the API identity can read `anthropic-api-key`, then redeploy the app with
-   `enableAnthropicInference=true`. A new replica fails readiness if the
-   metrics exporter cannot initialize. Submit one synthetic/de-identified
-   encounter through the real adapter.
-4. Verify Application Insights reports the `cosmaneura.llm.requests`,
+3. After approval of the
+   [Azure OpenAI cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md),
+   redeploy the foundation first with `provisionAzureOpenAI=true` and the pinned
+   `gpt-5.6-sol` 2026-07-09 `DataZoneStandard` deployment at capacity 200. Keep
+   `enableAzureOpenAIInference=false`. Verify the account reports local
+   authentication disabled, public network access disabled/default deny, the
+   expected private endpoint/DNS zone, and no model secret in Key Vault.
+4. Verify only the API managed identity has the account-scoped `Cognitive
+   Services OpenAI User` role. Migration and chase identities must have no
+   Azure OpenAI role or configuration. Resolve the private endpoint from the
+   Container Apps environment and prove the public path is unavailable.
+5. Redeploy the app with the reviewed deployment/model/API version and
+   `enableAzureOpenAIInference=true`, then submit only synthetic/de-identified
+   encounters. The acceptance run must exercise both strict `text.format` JSON
+   Schema output and the locally selected JSON-object compatibility path through
+   data-plane API `2025-04-01-preview`, plus refusals, content filtering,
+   incomplete/truncated output, retries, the 8,000-token output ceiling, and
+   deterministic schema rejection. A provider 4xx must remain terminal; it must
+   not trigger a weaker retry. Catalog/ARM validation alone does not satisfy
+   this step. A new replica fails readiness for invalid local Azure settings,
+   missing inference dependencies, or a required metrics-exporter initialization
+   failure. Startup does not prove token issuance, private DNS, RBAC, the model
+   deployment, or a data-plane response; the first controlled synthetic request
+   and the acceptance checks above prove those separately.
+6. Verify Application Insights reports the `cosmaneura.llm.requests`,
    `cosmaneura.llm.latency`, input/output token, and cache-token metrics with
    only provider/model/status/attempt dimensions. Confirm no worker or migration
-   identity has the metrics role, then restore `enableAnthropicInference=false`
-   to return to deterministic offline mode until the contractual gate is met.
+   identity has the metrics role, record measured p50/p95 tokens and latency for
+   the cost plan, and restore `enableAzureOpenAIInference=false` until the
+   contractual and operational gates are met.
 
-An Azure/Microsoft BAA does not cover chart text sent to Anthropic. Real patient
-data remains prohibited until an Anthropic BAA and approved retention terms are
-documented (or inference moves to a separately BAA-covered model host), in
-addition to the deployment/auth/logging acceptance checks. Parameter enablement
-is not evidence that this contractual gate has been met.
+Real patient data remains prohibited until the executed Microsoft
+agreement/BAA is verified to cover Azure OpenAI and the selected US data zone,
+the service data-processing/retention and abuse-monitoring posture is
+documented, and deployment/auth/logging acceptance is green. A practice BAA,
+resource creation, successful ARM validation, or parameter enablement is not
+evidence that this service-specific gate has been met.
+
+There must be no Anthropic credential, secret reference, role assignment, or
+environment variable in the migrated deployment. The historical direct
+`api.openai.com` embedding seam is development-only and prohibited in staging
+and production; the Azure OpenAI extraction role does not authorize that path.
 
 Conditional resources persist under normal incremental deployments. Setting
-`anthropicApiKey` back to empty does not delete an already-created
-`anthropic-api-key` secret or its reader assignment. First redeploy the app with
-`enableAnthropicInference=false` and verify the API has no secret reference.
-Then list role assignments at the exact secret resource scope, delete only the
-verified Anthropic reader assignment by ID, and soft-delete the named secret:
-
-```bash
-az role assignment list --scope <anthropic-api-key-secret-resource-id> \
-  --query "[].{id:id,principalId:principalId,scope:scope}" --output table
-az role assignment delete --ids <verified-api-anthropic-reader-assignment-id>
-az keyvault secret delete --vault-name <foundation-output-keyVaultName> \
-  --name anthropic-api-key
-```
-
-Do not remove any API database, Entra, or chase-gate grants during this cleanup.
+`provisionAzureOpenAI=false` does not delete an already-created account, model
+deployment, private endpoint/DNS zone, or role assignment. To decommission,
+first deploy the app with `enableAzureOpenAIInference=false` and verify it has no
+Azure OpenAI configuration. Then use a reviewed what-if to remove the managed
+resources and delete only the exact API inference-role assignment and Azure
+OpenAI resources approved for removal. Do not remove database, Entra,
+chase-gate, telemetry, or unrelated private-network grants during cleanup.
 
 ## Authentication acceptance checks
 

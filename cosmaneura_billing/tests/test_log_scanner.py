@@ -40,8 +40,8 @@ def test_closed_http_and_service_events_pass_the_scanner():
         }),
         json.dumps({
             "event": LLM_LOG_EVENT,
-            "provider": "anthropic",
-            "model": "claude-opus-5-20260801",
+            "provider": "azure_openai",
+            "model": "gpt-4.1-mini-2025-04-14",
             "status": "success",
             "attempt": 1,
             "latency_ms": 250,
@@ -142,8 +142,8 @@ def test_unknown_or_expanded_structured_events_fail_closed():
     } <= _codes(sdk_identifier, prohibited_values=[PATIENT_ID])
     assert "invalid_llm_schema" in _codes(json.dumps({
         "event": LLM_LOG_EVENT,
-        "provider": "anthropic",
-        "model": "claude-opus-5",
+        "provider": "azure_openai",
+        "model": "gpt-4.1-mini",
         "status": "success",
         "attempt": 1,
         "latency_ms": 1,

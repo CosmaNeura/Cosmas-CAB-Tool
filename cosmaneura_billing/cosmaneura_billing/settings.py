@@ -48,6 +48,14 @@ _EMAIL = re.compile(
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z"
 )
+_AZURE_OPENAI_DEPLOYMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_AZURE_OPENAI_API_VERSION = re.compile(
+    r"20[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])(?:-preview)?\Z"
+)
+_PROHIBITED_AZURE_OPENAI_CREDENTIAL_ENV = (
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_AD_TOKEN",
+)
 
 
 def _parse_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
@@ -139,6 +147,34 @@ def _canonicalize_acs_email_endpoint(
     ):
         raise SettingsError(f"{setting} must be a valid ACS HTTPS endpoint")
     return f"https://{hostname}"
+
+
+def _validate_azure_openai_endpoint(value: str) -> None:
+    """Accept only a resource-scoped Azure OpenAI HTTPS endpoint."""
+    if not isinstance(value, str) or any(
+        char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
+    ):
+        raise SettingsError("AZURE_OPENAI_ENDPOINT must be a valid Azure HTTPS endpoint")
+    try:
+        endpoint = urlsplit(value)
+        endpoint_port = endpoint.port
+        hostname = (endpoint.hostname or "").lower()
+    except (TypeError, ValueError):
+        raise SettingsError(
+            "AZURE_OPENAI_ENDPOINT must be a valid Azure HTTPS endpoint"
+        ) from None
+    if (
+        endpoint.scheme.lower() != "https"
+        or not hostname.endswith(".openai.azure.com")
+        or hostname == ".openai.azure.com"
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or endpoint_port is not None
+        or endpoint.path not in {"", "/"}
+        or endpoint.query
+        or endpoint.fragment
+    ):
+        raise SettingsError("AZURE_OPENAI_ENDPOINT must be a valid Azure HTTPS endpoint")
 
 
 def _validate_acs_connection_string(value: str) -> str:
@@ -351,6 +387,11 @@ class Settings:
         default="", repr=False, metadata={"secret": True}
     )
     azure_client_id: str = ""
+    azure_openai_enabled: bool = False
+    azure_openai_endpoint: str = ""
+    azure_openai_deployment: str = ""
+    azure_openai_model: str = ""
+    azure_openai_api_version: str = "2025-04-01-preview"
 
     auth_mode: str = "disabled"
     entra_tenant_id: str = ""
@@ -364,9 +405,6 @@ class Settings:
     auth_failures_per_minute: int = 30
     access_audit_path: str = "access_audit.jsonl"
 
-    anthropic_api_key: str = field(default="", repr=False, metadata={"secret": True})
-    anthropic_model: str = "claude-opus-5"
-    anthropic_effort: str = "high"
     openai_api_key: str = field(default="", repr=False, metadata={"secret": True})
 
     database_url: str = field(default="", repr=False, metadata={"secret": True})
@@ -463,10 +501,57 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
             )
-        if safe_llm_model_label(self.anthropic_model) == "invalid_model_label":
-            raise SettingsError("ANTHROPIC_MODEL must be a supported model ID shape")
-        if self.anthropic_effort not in {"low", "medium", "high", "max"}:
-            raise SettingsError("ANTHROPIC_EFFORT must be low, medium, high, or max")
+        azure_openai_fields = {
+            "AZURE_OPENAI_ENDPOINT": bool(self.azure_openai_endpoint),
+            "AZURE_OPENAI_DEPLOYMENT": bool(self.azure_openai_deployment),
+            "AZURE_OPENAI_MODEL": bool(self.azure_openai_model),
+        }
+        if type(self.azure_openai_enabled) is not bool:
+            raise SettingsError(
+                "COSMANEURA_AZURE_OPENAI_ENABLED must be a boolean"
+            )
+        if self.azure_openai_enabled and not all(azure_openai_fields.values()):
+            missing = ", ".join(
+                name
+                for name, configured in azure_openai_fields.items()
+                if not configured
+            )
+            raise SettingsError(
+                "enabled Azure OpenAI inference settings must be configured together; "
+                f"missing: {missing}"
+            )
+        if self.azure_openai_endpoint:
+            _validate_azure_openai_endpoint(self.azure_openai_endpoint)
+        if self.azure_openai_deployment and (
+            _AZURE_OPENAI_DEPLOYMENT.fullmatch(self.azure_openai_deployment) is None
+        ):
+            raise SettingsError(
+                "AZURE_OPENAI_DEPLOYMENT must be a safe deployment name"
+            )
+        if self.azure_openai_model and (
+            safe_llm_model_label(self.azure_openai_model) == "invalid_model_label"
+        ):
+            raise SettingsError("AZURE_OPENAI_MODEL must be a supported model ID shape")
+        if self.azure_openai_enabled:
+            try:
+                client_id = UUID(self.azure_client_id)
+            except (TypeError, ValueError, AttributeError):
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity for inference"
+                ) from None
+            if str(client_id) != self.azure_client_id.casefold():
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity for inference"
+                )
+        if _AZURE_OPENAI_API_VERSION.fullmatch(self.azure_openai_api_version) is None:
+            raise SettingsError(
+                "AZURE_OPENAI_API_VERSION must be an Azure API date or preview version"
+            )
+        if self.environment in {"staging", "production"} and self.openai_api_key:
+            raise SettingsError(
+                "OPENAI_API_KEY is development-only; deployed inference must use "
+                "Azure OpenAI managed identity"
+            )
         if self.telemetry_enabled:
             if self.environment not in {"staging", "production"}:
                 raise SettingsError(
@@ -792,6 +877,20 @@ class Settings:
         """Parse and validate settings from ``environ`` (the process by default)."""
         env = os.environ if environ is None else environ
         environment = (env.get("COSMANEURA_ENV") or "development").strip().lower()
+        azure_openai_enabled = _parse_bool(
+            env, "COSMANEURA_AZURE_OPENAI_ENABLED", False,
+        )
+        direct_azure_credential_present = any(
+            (env.get(name) or "").strip()
+            for name in _PROHIBITED_AZURE_OPENAI_CREDENTIAL_ENV
+        )
+        if direct_azure_credential_present and (
+            azure_openai_enabled or environment in {"staging", "production"}
+        ):
+            raise SettingsError(
+                "direct Azure OpenAI credentials are prohibited; managed identity "
+                "is required"
+            )
         cache_value = env.get("XDG_CACHE_HOME")
         cache_home = (
             Path(cache_value) if cache_value else Path.home() / ".cache"
@@ -808,6 +907,15 @@ class Settings:
                 env.get("APPLICATIONINSIGHTS_CONNECTION_STRING") or ""
             ).strip(),
             azure_client_id=(env.get("AZURE_CLIENT_ID") or "").strip(),
+            azure_openai_enabled=azure_openai_enabled,
+            azure_openai_endpoint=(env.get("AZURE_OPENAI_ENDPOINT") or "").strip(),
+            azure_openai_deployment=(
+                env.get("AZURE_OPENAI_DEPLOYMENT") or ""
+            ).strip(),
+            azure_openai_model=(env.get("AZURE_OPENAI_MODEL") or "").strip(),
+            azure_openai_api_version=(
+                env.get("AZURE_OPENAI_API_VERSION") or "2025-04-01-preview"
+            ).strip(),
             auth_mode=(env.get("COSMANEURA_AUTH_MODE") or "disabled").strip().lower(),
             entra_tenant_id=env.get("COSMANEURA_ENTRA_TENANT_ID", "").strip(),
             allowed_roles=_parse_csv(
@@ -839,9 +947,6 @@ class Settings:
             access_audit_path=(
                 env.get("COSMANEURA_ACCESS_AUDIT_PATH") or "access_audit.jsonl"
             ),
-            anthropic_api_key=env.get("ANTHROPIC_API_KEY", ""),
-            anthropic_model=env.get("ANTHROPIC_MODEL") or "claude-opus-5",
-            anthropic_effort=env.get("ANTHROPIC_EFFORT") or "high",
             openai_api_key=env.get("OPENAI_API_KEY", ""),
             database_url=env.get("DATABASE_URL", ""),
             state_store=(
