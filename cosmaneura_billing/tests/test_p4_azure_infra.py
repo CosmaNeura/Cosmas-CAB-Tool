@@ -132,6 +132,22 @@ def test_worker_job_is_bounded_and_redeployably_disabled_by_default():
     assert "ingress:" not in job
 
 
+def test_shared_network_writes_are_serialized():
+    postgres_subnet = _resource(FOUNDATION, "postgresSubnet")
+    private_endpoints_subnet = _resource(FOUNDATION, "privateEndpointsSubnet")
+    key_vault_private_endpoint = _resource(
+        FOUNDATION,
+        "keyVaultPrivateEndpoint",
+    )
+
+    assert "dependsOn: [\n    containerAppsSubnet\n  ]" in postgres_subnet
+    assert "dependsOn: [\n    postgresSubnet\n  ]" in private_endpoints_subnet
+    assert (
+        "dependsOn: [\n    acrPrivateEndpoint\n  ]"
+        in key_vault_private_endpoint
+    )
+
+
 def test_real_messaging_is_double_latched_and_inert_by_default():
     assert _parameter_default(APP, "enablePatientMessaging") == "false"
     assert _parameter_default(APP, "activatePatientMessaging") == "false"

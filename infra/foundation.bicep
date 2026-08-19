@@ -163,6 +163,10 @@ resource postgresSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' =
       }
     ]
   }
+  // Azure serializes subnet mutations on a VNet, including no-op redeploys.
+  dependsOn: [
+    containerAppsSubnet
+  ]
 }
 
 resource privateEndpointsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
@@ -172,6 +176,10 @@ resource privateEndpointsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-
     addressPrefix: '10.20.2.32/27'
     privateEndpointNetworkPolicies: 'Disabled'
   }
+  // Keep sibling subnet PUTs ordered to avoid AnotherOperationInProgress.
+  dependsOn: [
+    postgresSubnet
+  ]
 }
 
 resource workloadIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -378,6 +386,10 @@ resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01'
       }
     ]
   }
+  // Both endpoints mutate the shared subnet while provisioning their NICs.
+  dependsOn: [
+    acrPrivateEndpoint
+  ]
 }
 
 resource keyVaultPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
