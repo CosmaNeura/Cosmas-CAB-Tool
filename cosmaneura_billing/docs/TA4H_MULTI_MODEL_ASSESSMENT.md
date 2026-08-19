@@ -107,18 +107,20 @@ The architecture is unusually well suited to this:
   provenance (`engine:ta4h`, `agreement:both`) with zero schema breakage; a defaulted
   `source_engine` field on `CodeSuggestion` is a cleaner additive change.
 
-**The two real risks, and their mitigations:**
+**The two real risks, and how they were resolved in the implementation:**
 
 1. **The no-upcode invariant.** `ComplianceGuardrailAgent` recomputes the E/M ceiling from the
    `facts` dict. If two engines' facts are merged optimistically, the ceiling can rise and the
-   invariant `prove_no_upcode.py` proves in CI is punctured. **Rule: merge facts
-   element-wise-minimum (conservative), and any code found by only one engine enters as
-   `needs_review`, never `captured`.** Extend `prove_no_upcode.py` to cover the ensemble path.
+   invariant `prove_no_upcode.py` proves in CI is punctured. The shipped policy is *stricter*
+   than the element-wise minimum originally proposed here: **the secondary engine's facts are
+   namespaced (`ta4h_*`) so they never reach a leveling key at all, and `merge_facts`
+   re-computes the ceiling both ways and reverts to primary-only facts if they ever differ.**
+   Any code only one engine found enters as `needs_review` and is held by the guardrail, never
+   `captured`. `prove_no_upcode.py` now proves all three properties.
 2. **The zero-dependency core.** `pyproject.toml` deliberately keeps the engine stdlib-only.
-   Either call TA4H's REST API via `urllib` exactly as `AnthropicLLM` and the AMA CPT fetcher
-   already do, or put `azure-ai-textanalytics` behind a new optional extra (`[azure]`) with a
-   lazy import — both patterns have precedent in the repo. Ship a `MockTA4H` mirroring
-   `MockLLM` so CI stays offline and hermetic.
+   Resolved by calling TA4H's REST API via `urllib`, exactly as `AnthropicLLM` and the AMA CPT
+   fetcher already do — **no new dependency, no `azure-ai-textanalytics` install**. A `MockTA4H`
+   mirrors `MockLLM` so CI stays offline and hermetic.
 
 Minor: endpoints are sync (`def`), and TA4H is an async long-running operation adding seconds
 of latency — run the two engines in a threadpool inside `process()` so latency is max(), not
@@ -167,12 +169,25 @@ VisitBundle ──┬── CodingAgent (Claude: facts + concepts)      ──�
   tier; (2) coder-review surfacing; (3) consensus gating. Ship nothing to `captured` from TA4H
   until the shadow metrics clear the protocol.
 
-## 7. Open items before implementation
+## 7. Status
 
-- [ ] Confirm exact S-tier per-record price for our region in the Azure pricing calculator.
-- [ ] Confirm our Azure agreement type (BAA flows through Product Terms/DPA automatically for
-      MCA/EA/CSP; verify ours).
-- [ ] Decide REST-via-urllib vs. `[azure]` optional extra.
-- [ ] Compliance sign-off on the conservative facts-merge policy.
-- [ ] Decide whether TA4H integration triggers the broader Azure hosting build-out
+**Implemented** on `claude/billing-analysis-multi-model-3k99ke`, off by default. See
+[`TA4H_INTEGRATION.md`](TA4H_INTEGRATION.md) for the operator guide, the consensus policy as
+built, and the rollout gates.
+
+Resolved during implementation:
+
+- [x] REST-via-`urllib` — no new dependency, core stays stdlib-only.
+- [x] Facts-merge policy — namespaced secondary facts + a ceiling clamp, stricter than the
+      element-wise minimum originally proposed. Proven in `prove_no_upcode.py`.
+- [x] Offline mock so CI stays hermetic; graceful degradation on a TA4H outage.
+
+Still open, and owner-decisions rather than engineering ones:
+
+- [ ] Confirm exact S-tier per-record price for our region in the Azure pricing calculator
+      (immaterial at pilot volume; the free F0 tier covers the whole validation study).
+- [ ] Compliance sign-off on the consensus policy as built.
+- [ ] Run the shadow-mode measurement against the frozen gold set per `VALIDATION_PROTOCOL.md`
+      §11/§13 before surfacing agreement badges to real coders.
+- [ ] Decide whether this triggers the broader Azure hosting build-out
       (`STATUS_REVIEW_2026-08-06.md` items: hosting, auth, Postgres, secrets).

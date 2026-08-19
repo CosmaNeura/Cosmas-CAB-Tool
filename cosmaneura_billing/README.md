@@ -79,18 +79,49 @@ Standard Data File directory, or set `CPT_AUTO_FETCH=0` to disable fetching.
 Never commit descriptor files, the downloaded ZIP, or the AMA key/secret —
 CPT content stays under your license, outside the repository.
 
+## Second extraction engine (Azure Text Analytics for health)
+
+The pipeline can run a second, independent extraction engine alongside its own
+and show coders where the two agree. Azure's Text Analytics for health
+contributes clinical NER, assertion detection (negated / hypothetical /
+family-member) and UMLS entity links to ICD-10-CM; it never levels E/M and never
+makes a billing decision. Agreement is a **triage signal for the reviewer**, not
+a licence to bill: a code only one engine found is held for a human, and either
+engine may veto.
+
+Off by default. To try it offline, or point it at a real Azure resource:
+
+```bash
+COSMANEURA_TA4H=mock  uvicorn cosmaneura_billing.api:app --port 8000   # offline mock
+
+export AZURE_LANGUAGE_ENDPOINT='https://<resource>.cognitiveservices.azure.com'
+export AZURE_LANGUAGE_KEY='...'
+uvicorn cosmaneura_billing.api:app --port 8000                          # live
+```
+
+`GET /api/health` reports `multiEngine` and a human-readable `ta4hStatus`; the UI
+shows a "2 extraction engines" pill and an agreement badge per code. Input
+logging is opted out on every request (PHI), no new Python dependency is added,
+and a TA4H outage degrades to single-engine operation rather than failing an
+encounter. See `docs/TA4H_INTEGRATION.md` for the consensus policy and rollout
+gates, and `docs/TA4H_MULTI_MODEL_ASSESSMENT.md` for the cost/HIPAA/value
+assessment.
+
 ## What's in the box
 
 ```
 cosmaneura_billing/
   schemas.py                 dataclasses; the "evidence-or-it-isn't-billable" rule lives here
   llm.py                     LLMClient protocol + offline MockLLM + AnthropicLLM adapter
+  ta4h.py                    Azure Text Analytics for health client + offline MockTA4H
   orchestrator.py            runs the agents and assembles both role views
   knowledge/
     em_ruleset.py            2021+ E/M leveling (MDM grid + time), rule-based and explainable
     icd10_ccsr.py            ICD-10 <-> CCSR lookup on the AHRQ data (+ ported embedding search)
   agents/
     coding.py                proposes E/M + ICD-10, always with a documentation span
+    ta4h_coding.py           optional 2nd extractor: UMLS-linked ICD-10 + assertion vetoes
+    consensus.py             reconciles the two extractors; only ever more conservative
     documentation_integrity.py   rejects contradicted codes, flags documentation gaps
     compliance_guardrail.py  the hard gate: can only downgrade or remove, never inflate
     denial_risk.py           specificity / linkage / modifier checks
@@ -98,8 +129,9 @@ cosmaneura_billing/
   data/icd10_ccsr_subset.csv authentic CMS ICD-10-CM rows for the demo
 demo_visit.py                the GI-bleed sample encounter
 run_demo.py                  end-to-end demo
-prove_no_upcode.py           guardrail invariant test
+prove_no_upcode.py           guardrail invariant test (single- and two-engine)
 DESIGN.md                    architecture + the design decisions and why
+docs/TA4H_INTEGRATION.md     the multi-engine path: config, policy, rollout
 ```
 
 See `DESIGN.md` for the architecture, the compliance stance, one design change

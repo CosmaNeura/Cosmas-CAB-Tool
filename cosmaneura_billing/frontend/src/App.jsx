@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ShieldCheck, Stethoscope, ClipboardCheck, Info, Wifi, WifiOff } from "lucide-react";
+import { ShieldCheck, Stethoscope, ClipboardCheck, Info, Layers, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import BillingReview from "./BillingReview.jsx";
 import CoderReview from "./CoderReview.jsx";
@@ -64,6 +64,15 @@ export default function App() {
                 <Wifi size={12} className="mr-1" />
                 live engine · NCCI {health.ncciLoaded ? "✓" : "–"} · coverage {health.coverageLoaded ? "✓" : "–"} ·
                 CPT {health.cptDescriptors > 0 ? "✓" : "–"}
+              </Pill>
+            )}
+            {health && (
+              <Pill tone={health.multiEngine
+                            ? "bg-sky-50 text-sky-700 ring-sky-200"
+                            : "bg-slate-100 text-slate-500 ring-slate-300"}
+                    title={health.ta4hStatus}>
+                <Layers size={12} className="mr-1" />
+                {health.multiEngine ? "2 extraction engines" : "1 extraction engine"}
               </Pill>
             )}
           </div>

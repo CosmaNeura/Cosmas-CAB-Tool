@@ -84,6 +84,10 @@ def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None) -> dict[st
     }
     if "primary_candidate" in s.notes:
         out["primary"] = True
+    if s.agreement:
+        out["agreement"] = s.agreement
+    if s.source_engine:
+        out["sourceEngine"] = s.source_engine
     if s.disposition != Disposition.CAPTURED and s.rationale:
         out["reason"] = s.rationale
     if (s.kind == CodeKind.EM and s.disposition == Disposition.CAPTURED
@@ -149,6 +153,9 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, An
             "primary": "primary_candidate" in s.notes or None,
             "why": s.rationale,
             "evidence": s.evidence[0].quote if s.evidence else "",
+            # multi-engine provenance; absent when only one engine ran
+            "agreement": s.agreement or None,
+            "sourceEngine": s.source_engine or None,
         }
 
     em = next((s for s in card.captured_codes if s.kind == CodeKind.EM), None)
@@ -160,6 +167,7 @@ def _coder_view_json(bundle: VisitBundle, result: BillingResult) -> dict[str, An
         "engineVersion": _ENGINE_VERSION,
         "submittedEm": bundle.submitted_em_code,
         "coderId": os.environ.get("COSMANEURA_CODER_ID", "coder_A"),
+        "multiEngine": get_orchestrator().multi_engine,
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
@@ -220,6 +228,20 @@ def _cpt_status(cpt) -> str:
             "generic labels in use")
 
 
+def _ta4h_status(orch) -> str:
+    """One human-readable line for the second-engine pill tooltip."""
+    if orch.ta4h is None:
+        return ("second extraction engine off — set AZURE_LANGUAGE_ENDPOINT and "
+                "AZURE_LANGUAGE_KEY (or COSMANEURA_TA4H=mock to try it offline); "
+                "single-engine coding in use")
+    name = type(orch.ta4h).__name__
+    if name == "MockTA4H":
+        return "Azure Text Analytics for health: offline mock (demo encounter only)"
+    return (f"Azure Text Analytics for health live at "
+            f"{os.environ.get('AZURE_LANGUAGE_ENDPOINT', '(injected client)')} — "
+            "input logging opted out")
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     orch = get_orchestrator()
@@ -234,6 +256,8 @@ def health() -> dict[str, Any]:
         "cptStatus": _cpt_status(orch.cpt),
         "denialPriors": orch.denial_priors.size,
         "encounters": len(get_encounters()),
+        "multiEngine": orch.multi_engine,
+        "ta4hStatus": _ta4h_status(orch),
     }
 
 

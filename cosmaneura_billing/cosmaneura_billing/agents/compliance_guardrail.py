@@ -23,6 +23,19 @@ def _level(code: str) -> int:
     return int(code[-1]) if code[:2] in ("99", "99") and code[-1].isdigit() else 0
 
 
+# Notes that force a code to REVIEW. Both are one-directional: they can only
+# hold a code back, never argue one into the claim, so honouring them keeps the
+# keep/downgrade/remove invariant intact.
+#   preference_hold -- a learned reviewer preference (preferences.py); checked
+#                      first, because the reviewer's own history outranks our
+#                      reasoning about the chart
+#   consensus_hold  -- only one extraction engine proposed it (consensus.py);
+#                      checked last, so a code held for a *clinical* reason
+#                      reports that reason rather than the engine split
+_PREFERENCE_HOLD = "preference_hold"
+_CONSENSUS_HOLD = "consensus_hold"
+
+
 class ComplianceGuardrailAgent:
     def run(
         self,
@@ -62,16 +75,26 @@ class ComplianceGuardrailAgent:
                 # a learned reviewer preference can hold a code for review; it
                 # never argues one INTO the claim, so honoring it here keeps
                 # the guardrail's keep/downgrade/remove invariant intact
-                if any(n.startswith("preference_hold") for n in s.notes):
+                hint = next((n for n in s.notes if n.startswith(_PREFERENCE_HOLD)), None)
+                if hint is not None:
                     s.disposition = Disposition.REVIEW
-                    hint = next(n for n in s.notes if n.startswith("preference_hold"))
                     audit.append(f"HOLD    {s.code} ({s.label}): {hint.split(': ', 1)[-1]}.")
                     continue
                 addressed = "not_addressed_in_plan" not in s.notes
                 s.necessity_supported = s.has_evidence and addressed
                 if s.necessity_supported and s.disposition != Disposition.REJECTED:
-                    s.disposition = Disposition.CAPTURED
-                    audit.append(f"CAPTURE {s.code} ({s.label}): linked to documented finding.")
+                    # Clinically capturable. One last gate: a code only one
+                    # extraction engine found still needs a human, so it is held
+                    # rather than captured. Checked here (and not earlier) so a
+                    # code held for a clinical reason reports that reason.
+                    split = next((n for n in s.notes
+                                  if n.startswith(_CONSENSUS_HOLD)), None)
+                    if split is not None:
+                        s.disposition = Disposition.REVIEW
+                        audit.append(f"HOLD    {s.code} ({s.label}): {split.split(': ', 1)[-1]}.")
+                    else:
+                        s.disposition = Disposition.CAPTURED
+                        audit.append(f"CAPTURE {s.code} ({s.label}): linked to documented finding.")
                 else:
                     s.disposition = Disposition.REVIEW
                     reason = ("documented but not addressed in plan" if not addressed
