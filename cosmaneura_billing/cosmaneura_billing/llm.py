@@ -445,6 +445,11 @@ class AzureOpenAILLM:
                 },
             }
         else:
+            # Azure requires the literal JSON marker in request input for
+            # JSON-object mode. Append this code-controlled requirement only
+            # when that mode is selected before the provider call; a provider
+            # rejection still cannot trigger a weaker-format retry.
+            request["input"] = user + "\n\nReturn a single valid JSON object."
             request["instructions"] = (
                 instructions
                 + "\n\nReturn a single valid JSON object and nothing else. "
