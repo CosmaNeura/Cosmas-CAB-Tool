@@ -204,6 +204,7 @@ def test_unconstrained_object_uses_json_mode_without_narrowing_schema(
     }
     request = fake.responses.calls[0]
     assert request["text"] == {"format": {"type": "json_object"}}
+    assert request["input"] == "u\n\nReturn a single valid JSON object."
     assert "valid JSON object" in request["instructions"]
     assert "JSON Schema contract" in request["instructions"]
     assert '"required":["vitals"]' in request["instructions"]
@@ -216,6 +217,9 @@ def test_no_schema_uses_json_mode(no_sleep: list[float]) -> None:
     assert fake.responses.calls[0]["text"] == {
         "format": {"type": "json_object"},
     }
+    assert fake.responses.calls[0]["input"] == (
+        "user\n\nReturn a single valid JSON object."
+    )
     assert "JSON Schema contract" not in fake.responses.calls[0]["instructions"]
     assert fake.responses.calls[0]["store"] is False
 
@@ -338,6 +342,26 @@ def test_structured_output_rejection_never_falls_back_to_weaker_format(
         adapter.complete_json("s", "u", schema=SCHEMA)
     assert len(fake.responses.calls) == 1
     assert fake.responses.calls[0]["text"]["format"]["type"] == "json_schema"
+    assert no_sleep == []
+
+
+def test_json_mode_rejection_is_terminal_without_changing_format(
+    no_sleep: list[float],
+) -> None:
+    schema = {
+        "type": "object",
+        "required": ["vitals"],
+        "properties": {"vitals": {"type": "object"}},
+    }
+    adapter, fake = _client(StatusError(400), max_retries=3)
+
+    with pytest.raises(StatusError):
+        adapter.complete_json("s", "u", schema=schema)
+
+    assert len(fake.responses.calls) == 1
+    request = fake.responses.calls[0]
+    assert request["text"]["format"]["type"] == "json_object"
+    assert request["input"] == "u\n\nReturn a single valid JSON object."
     assert no_sleep == []
 
 
