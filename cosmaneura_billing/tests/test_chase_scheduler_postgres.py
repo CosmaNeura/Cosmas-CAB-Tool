@@ -48,6 +48,15 @@ pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="COSMANEURA_TEST_DATABASE_URL is not configured",
 )
 ROOT = Path(__file__).resolve().parents[1]
+# These integration tests exercise durable scheduling and transaction behavior,
+# not the pure quiet-hours rules covered in test_chase_scheduling.py.  Keep the
+# policy window twelve hours away from the module's real-time test clock so a CI
+# run crossing midnight cannot silently turn every due reservation into BLOCKED.
+_TEST_CLOCK_HOUR = datetime.now(timezone.utc).hour
+_TEST_QUIET_HOURS = (
+    (_TEST_CLOCK_HOUR + 12) % 24,
+    (_TEST_CLOCK_HOUR + 13) % 24,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -187,7 +196,7 @@ def _policy(*, mode: ApprovalMode = ApprovalMode.PER_POLICY,
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=mode,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=len(steps),
         steps=tuple(steps),
         templates=tuple(
@@ -204,7 +213,7 @@ def _email_sms_email_policy() -> ChasePolicy:
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=3,
         steps=(
             Step(Channel.EMAIL, "email.first", 0),
@@ -225,7 +234,7 @@ def _two_email_policy() -> ChasePolicy:
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=2,
         steps=(
             Step(Channel.EMAIL, "email.first", 0),
@@ -248,7 +257,7 @@ def _phone_only_policy() -> ChasePolicy:
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=1,
         steps=(Step(Channel.PHONE, "phone.call", 0),),
         templates=(phone_template,),
@@ -2470,7 +2479,7 @@ def test_record_only_initialization_skips_system_rungs_to_phone_task(scope):
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=4,
         steps=(
             Step(Channel.EMAIL, "email.first", 0),
@@ -2678,7 +2687,7 @@ def test_accepted_overdue_automated_rung_defers_to_next_local_day(scope):
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=2,
         steps=(
             Step(Channel.EMAIL, "email.first", 0),
@@ -2924,7 +2933,7 @@ def test_new_approval_cannot_replace_active_pending_phone_evidence(scope):
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=1,
         steps=(Step(Channel.PHONE, "phone.call", 0),),
         templates=(phone_template,),
@@ -3067,7 +3076,7 @@ def test_revoke_then_reapprove_removes_and_recreates_exact_phone_task(scope):
         practice_name="Synthetic Practice",
         upload_url="https://upload.example.invalid/insurance",
         approval_mode=ApprovalMode.PER_POLICY,
-        quiet_hours=(0, 1),
+        quiet_hours=_TEST_QUIET_HOURS,
         max_touches=1,
         steps=(Step(Channel.PHONE, "phone.call", 0),),
         templates=(phone_template,),
