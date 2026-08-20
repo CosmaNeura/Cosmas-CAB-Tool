@@ -69,7 +69,10 @@ def test_language_uses_shared_private_subnet_and_private_dns():
     assert "privateLinkServiceId: azureLanguage.id" in endpoint
     assert "groupIds: [\n            'account'" in endpoint
     assert "apiAzureLanguageReader\n    azureLanguageDnsLink" in endpoint
-    assert "privatelink.cognitiveservices.azure.com" in dns
+    assert any(
+        line.strip() == "name: 'privatelink.cognitiveservices.azure.com'"
+        for line in dns.splitlines()
+    )
     assert "id: vnet.id" in dns_link
     assert "privateDnsZoneId: azureLanguagePrivateDns.id" in dns_group
     assert "must not overlap a foundation deployment" in INFRA_README

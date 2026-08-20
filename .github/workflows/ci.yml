@@ -101,7 +101,7 @@ jobs:
           assert data == {'status':'ready','ncciLoaded':True,'coverageLoaded':True}, data"
       - name: Verify production corpus quarantine and safe demo pack
         run: >-
-          docker compose -f cosmaneura_billing/compose.yaml exec -T api
+          docker compose -f cosmaneura_billing/compose.yaml exec -T app
           python -c "from importlib.resources import files;
           root=files('cosmaneura_billing');
           assert not root.joinpath('data/corpora/mts_dialog_train.csv').is_file();
