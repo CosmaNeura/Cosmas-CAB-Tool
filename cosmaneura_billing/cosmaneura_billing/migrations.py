@@ -21,6 +21,62 @@ def _checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _membership_rows_are_unsafe(
+    rows,
+    *,
+    role_oid: int,
+    current_user_oid: int,
+) -> bool:
+    """Reject authority edges except PostgreSQL 16's creator-admin tuple.
+
+    PostgreSQL 16 gives a non-superuser ``CREATEROLE`` principal one inbound
+    ADMIN membership on every role it creates.  That edge is required for the
+    migration owner to rotate the login later, but it cannot inherit or
+    ``SET ROLE`` to the runtime login.  Every other inbound edge, every edge
+    where the runtime login is itself a member, and duplicate creator edges
+    fail closed.
+    """
+    safe_creator_edges = 0
+    for granted_role_oid, member_oid, admin, inherit, can_set in rows:
+        if member_oid == role_oid:
+            return True
+        if (
+            granted_role_oid != role_oid
+            or member_oid != current_user_oid
+            or not bool(admin)
+            or bool(inherit)
+            or bool(can_set)
+        ):
+            return True
+        safe_creator_edges += 1
+    return safe_creator_edges > 1
+
+
+def _role_has_unsafe_membership(
+    conn,
+    *,
+    role_oid: int,
+    current_user: str,
+) -> bool:
+    current_user_row = conn.execute(
+        "SELECT oid FROM pg_roles WHERE rolname = %s",
+        (current_user,),
+    ).fetchone()
+    if current_user_row is None:
+        return True
+    rows = conn.execute(
+        """SELECT roleid, member, admin_option, inherit_option, set_option
+             FROM pg_auth_members
+            WHERE member = %s OR roleid = %s""",
+        (role_oid, role_oid),
+    ).fetchall()
+    return _membership_rows_are_unsafe(
+        rows,
+        role_oid=role_oid,
+        current_user_oid=current_user_row[0],
+    )
+
+
 def _prepare_bound_login(
     conn,
     *,
@@ -57,11 +113,11 @@ def _prepare_bound_login(
     if existing and any(bool(value) for value in existing[1:]):
         raise RuntimeError(f"configured {description} is already privileged")
     if existing:
-        membership = conn.execute(
-            """SELECT 1 FROM pg_auth_members
-                WHERE member = %s OR roleid = %s LIMIT 1""",
-            (existing[0], existing[0]),
-        ).fetchone()
+        unsafe_membership = _role_has_unsafe_membership(
+            conn,
+            role_oid=existing[0],
+            current_user=str(current_user),
+        )
         ownership = conn.execute(
             """SELECT 1
                  FROM pg_class c
@@ -85,19 +141,36 @@ def _prepare_bound_login(
                 LIMIT 1""",
             (role, role, role, role),
         ).fetchone()
-        if membership or ownership:
+        if unsafe_membership or ownership:
             raise RuntimeError(
                 f"configured {description} has inherited authority or owns objects"
             )
         conn.execute(sql.SQL(
-            "ALTER ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
-            "NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            "ALTER ROLE {} LOGIN PASSWORD {} NOCREATEROLE NOINHERIT"
         ).format(identifier, password))
     else:
         conn.execute(sql.SQL(
             "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
             "NOCREATEROLE NOINHERIT NOBYPASSRLS"
         ).format(identifier, password))
+    final_role = conn.execute(
+        """SELECT oid, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+                  rolinherit, rolreplication, rolbypassrls
+             FROM pg_roles WHERE rolname = %s""",
+        (role,),
+    ).fetchone()
+    expected_flags = (True, False, False, False, False, False, False)
+    if (
+        final_role is None
+        or tuple(bool(value) for value in final_role[1:]) != expected_flags
+    ):
+        raise RuntimeError(f"configured {description} did not remain unprivileged")
+    if _role_has_unsafe_membership(
+        conn,
+        role_oid=final_role[0],
+        current_user=str(current_user),
+    ):
+        raise RuntimeError(f"configured {description} has unsafe role membership")
     database_name = conn.execute("SELECT current_database()").fetchone()[0]
     conn.execute(sql.SQL("REVOKE ALL PRIVILEGES ON DATABASE {} FROM {}").format(
         sql.Identifier(database_name), identifier,
