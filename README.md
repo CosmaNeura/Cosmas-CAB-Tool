@@ -1,4 +1,13 @@
 # FluencyMed
+
+> **Current source of truth (2026-08-19):** the maintained billing application
+> lives under [`cosmaneura_billing/`](cosmaneura_billing/). GitHub `main` is the
+> code source of truth; the accepted Azure image may lag it. See the
+> [deployment source-of-truth map](docs/deployment/README.md) and the
+> [current synthetic-only evidence record](docs/deployment/2026-08-19-demo-release-candidate-evidence.md).
+> The pilot remains private with inference, scheduling, and messaging disabled;
+> real-PHI readiness has not been established.
+
 Increasing doctor capacity and patient care quality. We enrich physician practices and enhance patient telehealth experience. Fluency Med is creating a healthier, more efficient future in healthcare.
 
 **Business Model:**

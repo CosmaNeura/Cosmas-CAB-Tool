@@ -59,7 +59,13 @@ Sources: [TA4H overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azu
 - **Billing unit**: the "text record" = 1,000 characters (a 6,500-character visit bundle = 7
   text records per API call).
 - **Free tier (F0)**: 5,000 text records/month — more than enough for the entire validation
-  study before we pay anything. The S tier also includes the same initial free quota.
+  study before Azure AI Language usage charges. The S tier also includes the same initial
+  free quota.
+- **Private-network standing cost still applies on F0**: the required private endpoint is
+  `$0.01/hour × 730 = $7.30/month` and the additional private DNS zone is `$0.50/month`,
+  using the same reviewed rates as the Azure OpenAI cost addendum. The exact fixed increase
+  is therefore **$7.80/month**, plus separately metered Private Link data processing. F0 is
+  free service capacity, not a zero-cost private deployment.
 - **Standard (S) tier**: pay-per-text-record with volume discounts; **commitment tiers** and
   disconnected-container pricing exist for scale.
 - ⚠️ The exact per-1,000-record dollar rate varies by region/agreement and could not be
@@ -202,11 +208,13 @@ Resolved during implementation:
 Still open:
 
 - [ ] Confirm exact S-tier per-record price for our region in the Azure pricing calculator
-      (immaterial at pilot volume; the free F0 tier covers the whole validation study).
+      (immaterial at pilot volume; F0 covers the study's Language usage, while the documented
+      $7.80/month private-network standing cost remains).
 - [ ] Compliance sign-off on the consensus policy as built.
 - [ ] Implement the isolated, non-influencing shadow seam before enabling TA4H
       on any reviewer-serving process.
 - [ ] Run the shadow-mode measurement against the frozen gold set per `VALIDATION_PROTOCOL.md`
       §11/§13 before surfacing agreement badges to real coders.
-- [ ] Extend the existing private Azure deployment with the Language account
-      and API-identity role assignment while keeping extraction disabled.
+- [x] Extend `infra/app.bicep` with dormant F0 Language account provisioning,
+      private endpoint/DNS, and the API-identity-only reader assignment. The tracked
+      deployment defaults still provision nothing and keep extraction disabled.

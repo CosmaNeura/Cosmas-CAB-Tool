@@ -35,9 +35,12 @@ and refuses redirects.
 Provision Azure AI Language only through `infra/app.bicep`. The account must
 disable public network access and local authentication, use the existing private
 network/DNS pattern, and grant only the API user-assigned identity the
-account-scoped *Cognitive Services Language Reader* role. Provisioning the
-account does not enable extraction; every deployed parameter set keeps
-`COSMANEURA_AZURE_LANGUAGE_ENABLED=false`.
+account-scoped *Cognitive Services Language Reader* role. Set
+`provisionAzureLanguage=true` to create that dormant F0 account while keeping
+`enableAzureLanguageExtraction=false`. Provisioning the account does not enable
+extraction; every tracked parameter set keeps the extraction flag false. The
+template supplies `COSMANEURA_AZURE_LANGUAGE_ENABLED=false` to the API and does
+not inject the endpoint or API version until the separate enable flag is true.
 
 The following is future operator reference only. Do not enable this
 configuration until Azure OpenAI inference is enabled and the shadow milestone
@@ -51,8 +54,10 @@ uvicorn cosmaneura_billing.api:app --reload
 ```
 
 The F0 (free) tier gives 5,000 text records/month — a text record is 1,000
-characters, so a typical visit bundle is a handful of records. That covers the
-whole shadow-mode validation before any spend. Use `--sku S` for volume.
+characters, so a typical visit bundle is a handful of records. That should
+cover the study's Language service usage, but the required private endpoint and
+DNS add $7.80/month in standing cost, plus separately metered Private Link data
+processing. Use the S tier for volume only after separate pricing approval.
 
 **No new HTTP dependency.** The transport is `urllib` against the REST API, the
 same stance as the AMA CPT fetcher, so no SDK is added; only `azure-identity`

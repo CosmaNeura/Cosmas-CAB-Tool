@@ -62,7 +62,7 @@ from .runtime import PHISafeHTTPMiddleware, configure_json_logging
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
 from .security import (
     FixedWindowLimiter, PrincipalRateLimitMiddleware,
-    RequestBodyLimitMiddleware, StrictOriginMiddleware,
+    RequestBodyLimitMiddleware, SecurityHeadersMiddleware, StrictOriginMiddleware,
 )
 from .settings import Settings, get_settings
 
@@ -1446,8 +1446,8 @@ def create_app(
     application.state.auth_failure_limiter = failed_auth_limiter
 
     # Starlette's last-added middleware is outermost. Request order is:
-    # PHI-safe runtime -> exact CORS -> origin -> auth -> audit -> principal
-    # rate -> body cap -> API.
+    # Security headers -> PHI-safe runtime -> exact CORS -> origin -> auth ->
+    # audit -> principal rate -> body cap -> API.
     application.add_middleware(
         RequestBodyLimitMiddleware,
         max_bytes=config.max_request_bytes,
@@ -1485,6 +1485,10 @@ def create_app(
         allow_credentials=False,
     )
     application.add_middleware(PHISafeHTTPMiddleware, logger=http_logger)
+    application.add_middleware(
+        SecurityHeadersMiddleware,
+        deployed_https=config.environment in {"staging", "production"},
+    )
     application.include_router(router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):

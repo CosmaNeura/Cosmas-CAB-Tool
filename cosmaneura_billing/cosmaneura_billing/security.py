@@ -11,6 +11,64 @@ from urllib.parse import urlsplit
 from .settings import Settings
 
 
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "connect-src 'self'; "
+    "font-src 'self' data:; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'; "
+    "img-src 'self' data:; "
+    "object-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self'"
+)
+_SECURITY_RESPONSE_HEADERS = (
+    (b"content-security-policy", _CONTENT_SECURITY_POLICY.encode("ascii")),
+    (b"permissions-policy", b"camera=(), geolocation=(), microphone=()"),
+    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+)
+_HSTS_HEADER = (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
+_NO_STORE_HEADER = (b"cache-control", b"no-store")
+
+
+class SecurityHeadersMiddleware:
+    """Apply one non-overridable browser-security policy to every HTTP response."""
+
+    def __init__(self, app, *, deployed_https: bool) -> None:
+        self.app = app
+        self.headers = _SECURITY_RESPONSE_HEADERS + (
+            (_HSTS_HEADER,) if deployed_https else ()
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_headers = self.headers + (
+            (_NO_STORE_HEADER,) if scope.get("path", "").startswith("/api/") else ()
+        )
+        response_header_names = frozenset(name for name, _ in response_headers)
+
+        async def send_with_security_headers(message):
+            if message.get("type") == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if isinstance(name, bytes)
+                    and name.lower() not in response_header_names
+                ]
+                headers.extend(response_headers)
+                message = dict(message)
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
+
+
 async def send_json(
     send,
     status: int,

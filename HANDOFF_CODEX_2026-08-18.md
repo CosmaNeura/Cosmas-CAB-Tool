@@ -7,6 +7,9 @@
 **Cost plan:**
 [`docs/deployment/2026-08-18-azure-openai-cost-plan.md`](docs/deployment/2026-08-18-azure-openai-cost-plan.md)
 
+**Current evidence:**
+[`docs/deployment/2026-08-19-demo-release-candidate-evidence.md`](docs/deployment/2026-08-19-demo-release-candidate-evidence.md)
+
 This document supersedes the Anthropic-specific and pre-deployment instructions
 in `HANDOFF_CODEX_2026-08-17.md`. It does not supersede `CLAUDE.md`, the
 anti-inflation invariant, evidence requirements, or the discovery contracts.
@@ -19,14 +22,18 @@ anti-inflation invariant, evidence requirements, or the discovery contracts.
   through the API user-assigned managed identity, rejects model API keys/static
   tokens, requires explicit enablement, and otherwise uses the deterministic
   offline model.
-- Infrastructure targets one dedicated private Azure OpenAI account in North
-  Central US. Public network access and local authentication are disabled; only
-  the API identity receives the account-scoped inference role.
+- Infrastructure provisioned one dedicated private Azure OpenAI account in North
+  Central US. Public network access and local authentication are disabled. The
+  application-specific account assignment is on the API identity; separately,
+  the signed-in human inherits subscription-level Foundry User and requires a
+  minimum-necessary review before any real-PHI decision.
 - The pinned deployment contract is `gpt-5.6-sol`, version `2026-07-09`,
   `DataZoneStandard`, capacity 200, no automatic model upgrade. The data-plane
   API version is `2025-04-01-preview`.
-- Live catalog discovery and ARM validation accepted that resource shape. This
-  proves deployability, not model behavior, compliance coverage, or production
+- Live catalog/ARM validation and bounded synthetic data-plane acceptance passed
+  on image `1c5d7e7`; the application was then returned to inference-off. The
+  2026-08-19 release-candidate baseline `de2b16f` was not deployed, so acceptance
+  must be repeated for the eventual merged release digest. Neither result proves compliance coverage or production
   readiness.
 - The adapter selects strict JSON Schema Structured Outputs for locally
   compatible schemas and selects JSON-object mode up front for schemas outside
@@ -37,28 +44,31 @@ anti-inflation invariant, evidence requirements, or the discovery contracts.
   Azure hosting, model deployment, identity, networking, quota, and data-zone
   operations are Microsoft Azure concerns.
 
+## Executed through synthetic acceptance
+
+The cost addendum was approved, the private account/model/network path was
+provisioned, and a bounded synthetic acceptance run passed strict-schema,
+JSON-object, private-DNS, managed-identity, closed-log-schema, and canary checks
+on image `1c5d7e7`. The final live revision is private and inference-off. GitHub
+Actions run `32244337843` passed for `1c5d7e7`; post-merge run `32317475914`
+passed for the release-candidate baseline `de2b16f`, and CodeQL setup run `32317672236`
+passed both configured languages. Current `main` is not yet deployed.
+
 ## Required order from here
 
-1. Review and approve the linked cost addendum. The exact fixed private-network
-   delta is $7.80/month; model tokens and Azure Private Link per-GB processing
-   are usage-based and must be repriced from measured synthetic acceptance data.
-2. Deploy the foundation resource, model deployment, private endpoint/DNS, and
-   API-only role assignment with application inference still disabled.
-3. Verify public access/local authentication are disabled, private DNS resolves
-   only on the intended network, the API identity can obtain an inference token,
-   and migration/worker identities cannot call the account.
-4. Run synthetic/de-identified data-plane acceptance for both strict-schema and
-   JSON-object fallback paths. Cover refusal, content filter, truncation, the
-   8,000-token output ceiling, retries, latency, and provider token accounting.
-5. Verify P5 logs and metrics contain only the closed allowlist: provider/model,
-   status, attempt, latency, and numeric token counters. Re-run the PHI canary
-   scanner against deployed logs.
-6. Recalculate the operating forecast from measured p50/p95 input, cached-input,
+1. Merge the reviewed release candidate, build its commit-derived tag, resolve
+   and record its immutable manifest digest, and deploy that digest
+   privately with inference, Language, scheduler, and messaging latches false,
+   and rerun the repository-owned synthetic acceptance harness.
+2. Reconfirm private DNS, managed-identity scope, closed-schema metrics, the PHI
+   canary scan, and a final zero-LLM-event observation after disabling inference.
+3. Review the signed-in human's inherited subscription-level Foundry User role
+   for minimum-necessary access.
+4. Recalculate the operating forecast from measured p50/p95 input, cached-input,
    and output tokens and expected encounter volume.
-7. Keep inference disabled and continue with synthetic/de-identified data until
+5. Keep inference disabled and continue with synthetic/de-identified data until
    the real-PHI gate below is documented and approved.
-8. Run the full local verification suite and GitHub Actions before merging the
-   branch to `main`; never fix an anti-inflation failure by weakening its test.
+6. Never fix an anti-inflation failure by weakening its proof.
 
 ## Real-PHI gate
 
@@ -69,7 +79,9 @@ Real chart text remains prohibited until all of the following are true:
 - the service's data-processing, retention, abuse-monitoring, and regional
   behavior is documented for this deployment;
 - private-network, managed-identity, access-control, logging/redaction, and
-  deployment acceptance are green; and
+  deployment acceptance are green;
+- inherited human cloud entitlements have passed a minimum-necessary review;
+  and
 - the operational owner explicitly authorizes application enablement.
 
 Creating the resource, passing ARM validation, or setting an enable parameter is

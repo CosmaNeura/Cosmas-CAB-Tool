@@ -2,10 +2,12 @@
 
 Source: CMS MCD full export (`current_article.zip`), downloaded from
 https://www.cms.gov/medicare-coverage-database/downloads/downloads.aspx
-(export dated 2026-07-20). Coverage relationships and code numbers are CMS
-public data. **CPT descriptor columns were stripped before bundling** — they
-are AMA-licensed content; only article IDs, code numbers, titles, and status
-remain.
+(export dated 2026-07-20). The MCD acceptance notice applies AMA terms to CPT
+codes, descriptions, and other data and does not grant a general commercial
+training license. **CPT descriptor columns were stripped before bundling**;
+article IDs, the minimum code relationships, titles, and status remain for
+entitlement-bound runtime coverage checks only. Do not train, embed, distill,
+or redistribute this bundle beyond the organization's applicable authorization.
 
 **Scope: filtered to National Government Services (NGS) — the pilot group's
 MAC (Jurisdiction K, which covers New Hampshire).** 109 current articles,

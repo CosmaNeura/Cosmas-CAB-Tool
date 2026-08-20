@@ -139,10 +139,12 @@ provider 4xx is terminal rather than a trigger for a weaker retry. OpenAI
 documents the API behavior and the difference from JSON mode in its
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 Azure hosting, private networking, Entra authorization, model availability,
-quota, and data-zone behavior are Microsoft Azure operational concerns. Live
-catalog and ARM validation passed for the proposed resource shape, but both the
-strict-schema request and JSON-object fallback still require a synthetic live
-data-plane acceptance run before inference can be enabled.
+quota, and data-zone behavior are Microsoft Azure operational concerns. The
+private resource and a bounded synthetic data-plane run accepted both the
+strict-schema request and JSON-object fallback on image `1c5d7e7`; inference was
+then disabled. The 2026-08-19 release-candidate baseline `de2b16f` was not
+deployed, so the eventual merged digest still requires deployment and repeat acceptance. See the
+dated [evidence record](../docs/deployment/2026-08-19-demo-release-candidate-evidence.md).
 
 Real chart text remains prohibited until the executed Microsoft agreement/BAA
 is verified to cover the selected Azure OpenAI service and US data zone, its
@@ -159,9 +161,10 @@ calibrate the agents against human coders before any claim goes out unattended.
 
 ## Suggested next steps
 
-After approval of the Azure OpenAI cost-plan addendum, provision the private
-resource with application inference still disabled; complete synthetic
-strict-schema, JSON-object, networking, identity, telemetry, and log-scanner
-acceptance; then build a small validation set of de-identified encounters scored
-against a certified coder. Real PHI and model enablement remain separate
-approvals after those technical checks.
+Merge the reviewed release candidate and deploy its immutable manifest digest with application
+inference disabled; repeat the repository-owned synthetic strict-schema,
+JSON-object, networking, identity, telemetry, and log-scanner acceptance; then
+build a small validation set of de-identified encounters scored against a
+certified coder. Review the inherited human Foundry User entitlement for
+minimum-necessary access. Real PHI and any sustained model enablement remain
+separate approvals after those technical checks.

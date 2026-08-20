@@ -47,14 +47,23 @@ membership store fails closed with 503. Chase assignees must likewise be active
 `Admin` or `BillingStaff` members of the same practice.
 
 Public surfaces are limited to the same-origin frontend assets, Container Apps
-authentication endpoints, and shallow `/api/live` and `/api/ready` probes.
-Every other `/api/*` route requires the trusted principal.
+authentication endpoints, and the shallow `/api/live` probe. The more expensive
+`/api/ready` dependency check requires an authenticated session at the external
+Easy Auth edge. Container Apps startup and readiness probes still reach that
+route directly inside the app environment, before the external auth edge. Every
+other externally reachable `/api/*` route requires the trusted principal.
 
 ## Request controls
 
 - Production is same-origin. Development CORS accepts only explicitly listed
   origins; wildcard origins and credentials are disabled. Simple requests with
   a foreign `Origin` are rejected server-side.
+- Every response produced by the application, including its auth denials and
+  generic errors, carries a same-origin CSP with framing and object embedding
+  disabled, legacy `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, a
+  bounded referrer policy, and a permissions policy disabling camera,
+  geolocation, and microphone. Deployed HTTPS responses additionally carry
+  one-year HSTS; local HTTP development deliberately does not.
 - A pure ASGI limiter checks both declared and actually streamed body bytes
   before JSON parsing. The default is 1 MiB, and compressed request bodies are
   rejected.
