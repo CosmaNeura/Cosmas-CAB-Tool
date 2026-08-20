@@ -1,8 +1,11 @@
 # Bundled CMS NCCI edits — practitioner services
 
 Source: CMS National Correct Coding Initiative, downloaded from cms.gov.
-Public domain (the underlying CPT code *numbers* appear as data; no CPT
-descriptors are included).
+The bundle contains CPT/HCPCS identifiers but no CPT descriptors. Treat the
+identifiers and edit relationships as entitlement-bound runtime policy data
+under the applicable CMS/AMA source terms; they are not public-domain training
+examples and must not be used for model training, embeddings, distillation, or
+redistribution beyond the organization's authorization.
 
 - `ptp_practitioner_2026q3_v322.tsv.gz` — Procedure-to-Procedure edits,
   practitioner services, **2026 Q3, version v32.2r0**, merged from the four

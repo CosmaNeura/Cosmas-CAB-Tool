@@ -1,0 +1,200 @@
+{
+  "schema_version": "1.0",
+  "pack_id": "cosmaneura-demo-rc-v1",
+  "allowed_use": "demo_and_evaluation_only",
+  "training_use": "prohibited",
+  "synthetic_declaration": "Every encounter and every sentence in this pack is wholly synthetic and was authored for software evaluation. No real or deidentified patient record was used or adapted.",
+  "contains_real_patient_data": false,
+  "contains_deidentified_patient_data": false,
+  "pack_invariants": [
+    "captured_codes_require_verbatim_signed_note_evidence",
+    "negated_findings_are_not_captured",
+    "family_history_does_not_become_patient_diagnosis",
+    "differentials_are_not_captured_as_confirmed_diagnoses",
+    "signed_note_overrides_unsigned_suspicion",
+    "policy_tables_never_create_a_clinical_code",
+    "no_em_level_without_documented_support"
+  ],
+  "cases": [
+    {
+      "case_id": "SYN-RC-0001",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0001",
+        "patient_age": 52,
+        "patient_sex": "female",
+        "encounter_type": "office_established",
+        "place_of_service": "11",
+        "provider_specialty": "Family Medicine",
+        "intake_text": "Here for a blood-pressure follow-up. Home readings have been steady. No new symptoms.",
+        "transcript": "Provider: Any chest pressure, breathing trouble, or dizziness?\nPatient: No chest pain, breathing trouble, or dizziness.\nProvider: We will continue the current blood-pressure plan.",
+        "signed_note": "Established follow-up. Review of systems: Denies chest pain. Blood-pressure log reviewed. Assessment: Essential hypertension [I10], controlled on current therapy. Continue current plan. No medication change.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      },
+      "expectations": {
+        "must_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "I10",
+            "evidence": {
+              "source": "signed_note",
+              "quote": "Assessment: Essential hypertension [I10], controlled on current therapy."
+            }
+          }
+        ],
+        "must_not_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "R07.9",
+            "reason": "negated",
+            "source": "signed_note",
+            "quote": "Denies chest pain."
+          }
+        ],
+        "invariants": [
+          "captured_codes_require_verbatim_signed_note_evidence",
+          "negated_findings_are_not_captured",
+          "no_em_level_without_documented_support"
+        ]
+      }
+    },
+    {
+      "case_id": "SYN-RC-0002",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0002",
+        "patient_age": 35,
+        "patient_sex": "male",
+        "encounter_type": "office_new",
+        "place_of_service": "11",
+        "provider_specialty": "Family Medicine",
+        "intake_text": "Requests general risk counseling because a parent has type 2 diabetes. Reports no symptoms.",
+        "transcript": "Patient: A parent has type 2 diabetes and I want to understand my risk.\nProvider: Your screening value is in the normal range, and today we are discussing prevention rather than diagnosing diabetes.",
+        "signed_note": "New preventive consultation. Family history: one parent has type 2 diabetes. Screening result reviewed and within the normal range. The patient has no diabetes diagnosis. Counseling provided on activity and nutrition.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      },
+      "expectations": {
+        "must_capture": [],
+        "must_not_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "E11.9",
+            "reason": "family_history_only",
+            "source": "signed_note",
+            "quote": "Family history: one parent has type 2 diabetes."
+          }
+        ],
+        "invariants": [
+          "family_history_does_not_become_patient_diagnosis",
+          "policy_tables_never_create_a_clinical_code"
+        ]
+      }
+    },
+    {
+      "case_id": "SYN-RC-0003",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0003",
+        "patient_age": 41,
+        "patient_sex": "nonbinary",
+        "encounter_type": "telehealth_established",
+        "place_of_service": "10",
+        "provider_specialty": "Family Medicine",
+        "intake_text": "Dry cough for four days. No shortness of breath and no measured fever.",
+        "transcript": "Provider: Pneumonia is one possibility, but the current history does not establish it.\nPatient: The cough is dry and I am breathing normally.\nProvider: We will use supportive care and reassess if warning signs develop.",
+        "signed_note": "Remote follow-up. Breathing is comfortable during the visit. Assessment: Acute cough [R05.1]. Pneumonia remains a differential only and is not diagnosed. Supportive care and return precautions reviewed.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      },
+      "expectations": {
+        "must_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "R05.1",
+            "evidence": {
+              "source": "signed_note",
+              "quote": "Assessment: Acute cough [R05.1]."
+            }
+          }
+        ],
+        "must_not_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "J18.9",
+            "reason": "differential_only",
+            "source": "signed_note",
+            "quote": "Pneumonia remains a differential only and is not diagnosed."
+          }
+        ],
+        "invariants": [
+          "captured_codes_require_verbatim_signed_note_evidence",
+          "differentials_are_not_captured_as_confirmed_diagnoses"
+        ]
+      }
+    },
+    {
+      "case_id": "SYN-RC-0004",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0004",
+        "patient_age": 29,
+        "patient_sex": "female",
+        "encounter_type": "office_established",
+        "place_of_service": "11",
+        "provider_specialty": "Primary Care",
+        "intake_text": "Reports burning with urination and wonders whether this is a urinary infection.",
+        "transcript": "Patient: I thought this might be a urinary infection.\nProvider: The office urine test is negative, so the signed assessment will record the symptom while we await any change.",
+        "signed_note": "Established problem visit. Office urinalysis is negative. Assessment: Dysuria [R30.0]. No urinary tract infection is diagnosed. Hydration and return precautions reviewed.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      },
+      "expectations": {
+        "must_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "R30.0",
+            "evidence": {
+              "source": "signed_note",
+              "quote": "Assessment: Dysuria [R30.0]."
+            }
+          }
+        ],
+        "must_not_capture": [
+          {
+            "kind": "icd10_diagnosis",
+            "code": "N39.0",
+            "reason": "contradicted_by_signed_note",
+            "source": "signed_note",
+            "quote": "No urinary tract infection is diagnosed."
+          }
+        ],
+        "invariants": [
+          "captured_codes_require_verbatim_signed_note_evidence",
+          "signed_note_overrides_unsigned_suspicion"
+        ]
+      }
+    }
+  ]
+}

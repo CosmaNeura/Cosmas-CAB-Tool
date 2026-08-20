@@ -1,4 +1,4 @@
-"""ACI-Bench and MTS-Dialog corpora — synthetic outpatient encounters, no PHI.
+"""ACI-Bench and MTS-Dialog corpus loaders with distinct release postures.
 
 These are the best public stand-ins for this pipeline's real input (visit
 transcript + signed note), and the engine's first multi-encounter test bed.
@@ -9,13 +9,17 @@ a novel ambient clinical intelligence dataset for benchmarking automatic visit
 note generation", Scientific Data 10, 586 (2023). CC-BY-4.0.
 Source: https://github.com/wyim/aci-bench
 
-MTS-Dialog: ~1,700 short doctor-patient conversation snippets paired with
-clinical-note sections. Ben Abacha et al., EACL 2023. CC-BY-4.0.
+ACI-Bench's peer-reviewed data descriptor documents constructed/role-played
+encounters. MTS-Dialog provides ~1,700 short doctor-patient conversation
+snippets paired with clinical-note sections (Ben Abacha et al., EACL 2023,
+CC-BY-4.0), but its synthetic-only provenance remains unresolved for the
+release gate. A permissive copyright license does not establish PHI posture.
 Source: https://github.com/abachaa/MTS-Dialog
 
-The train/valid splits are bundled under ``data/corpora/`` (attribution and
-licenses in data/corpora/README.md); other splits can be fetched with
-``scripts/fetch_public_data.py``.
+The train/valid splits are bundled under ``data/corpora/``. Attribution,
+licenses, and allowed-use controls are in ``data/corpora/README.md`` and
+``cosmaneura_billing/docs/DATA_PROVENANCE_CATALOG.md``; other splits can be fetched with
+``scripts/fetch_public_data.py`` only after applying those controls.
 """
 from __future__ import annotations
 

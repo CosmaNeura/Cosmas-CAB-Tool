@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import cosmaneura_billing.api as api
 from cosmaneura_billing.runtime import PHISafeHTTPMiddleware, is_valid_request_id
+from cosmaneura_billing.security import SecurityHeadersMiddleware
 from cosmaneura_billing.settings import Settings
 
 
@@ -40,8 +41,75 @@ def _application(monkeypatch, tmp_path, *, cors_origins=()):
         frontend_dist=tmp_path / "missing-frontend",
     )
     assert configured_levels == ["WARNING"]
-    assert application.user_middleware[0].cls is PHISafeHTTPMiddleware
+    assert application.user_middleware[0].cls is SecurityHeadersMiddleware
+    assert application.user_middleware[1].cls is PHISafeHTTPMiddleware
     return application, logger
+
+
+def test_browser_security_headers_cover_success_and_error_responses(
+    monkeypatch, tmp_path,
+):
+    application, _ = _application(monkeypatch, tmp_path)
+    client = TestClient(application)
+
+    responses = (client.get("/api/live"), client.get("/missing"))
+    assert [response.status_code for response in responses] == [200, 404]
+    for response in responses:
+        assert response.headers["Content-Security-Policy"] == (
+            "default-src 'self'; base-uri 'self'; connect-src 'self'; "
+            "font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; "
+            "img-src 'self' data:; object-src 'none'; script-src 'self'; "
+            "style-src 'self'"
+        )
+        assert response.headers["Permissions-Policy"] == (
+            "camera=(), geolocation=(), microphone=()"
+        )
+        assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert "Strict-Transport-Security" not in response.headers
+    assert responses[0].headers["Cache-Control"] == "no-store"
+    assert "Cache-Control" not in responses[1].headers
+
+
+def test_deployed_https_headers_override_weaker_downstream_values():
+    async def downstream(_scope, _receive, send):
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"x-frame-options", b"SAMEORIGIN"),
+                (b"strict-transport-security", b"max-age=0"),
+                (b"cache-control", b"public, max-age=3600"),
+            ],
+        })
+        await send({"type": "http.response.body", "body": b""})
+
+    app = SecurityHeadersMiddleware(downstream, deployed_https=True)
+    response = TestClient(app).get("/")
+
+    assert response.headers.get_list("X-Frame-Options") == ["DENY"]
+    assert response.headers.get_list("Strict-Transport-Security") == [
+        "max-age=31536000; includeSubDomains"
+    ]
+    # This request is not under /api/, so downstream cache policy is retained.
+    assert response.headers.get_list("Cache-Control") == ["public, max-age=3600"]
+
+
+def test_api_no_store_overrides_a_cacheable_success_response():
+    async def downstream(_scope, _receive, send):
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"cache-control", b"private, max-age=300")],
+        })
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    app = SecurityHeadersMiddleware(downstream, deployed_https=True)
+    response = TestClient(app).get("/api/encounters")
+
+    assert response.status_code == 200
+    assert response.headers.get_list("Cache-Control") == ["no-store"]
 
 
 def test_request_id_is_server_owned_available_on_state_and_exposed(

@@ -1,4 +1,4 @@
-"""Static deployment invariants for the isolated P4 chase worker.
+"""Static deployment invariants for the isolated P4 runtime.
 
 The Bicep compiler runs separately in CI.  These tests pin the security and
 activation boundaries in source form so a future template refactor cannot
@@ -58,6 +58,31 @@ def test_worker_identity_is_distinct_and_owns_only_its_job_image_pull():
     assert "identity: chaseWorkerIdentity.id" in job
     assert "'${identity.id}': {}" not in job
     assert "'${migrationIdentity.id}': {}" not in job
+
+
+def test_expensive_readiness_is_edge_protected_but_internal_probes_remain():
+    auth = _resource(APP, "applicationAuth")
+    application = _resource(APP, "application")
+
+    assert "'/api/live'" in auth
+    assert "'/api/ready'" not in auth
+    assert application.count("path: '/api/ready'") == 2
+    assert application.count("path: '/api/live'") == 1
+
+
+def test_every_runtime_lane_deploys_one_validated_manifest_digest():
+    application = _resource(APP, "application")
+    migration = _resource(APP, "migrationJob")
+    worker = _resource(APP, "chaseWorkerJob")
+
+    assert "@minLength(71)\n@maxLength(71)\nparam imageDigest string" in APP
+    assert "startsWith(normalizedImageDigest, 'sha256:')" in APP
+    assert "empty(imageDigestNonHex)" in APP
+    assert "cosmaneura-billing@${validatedImageDigest}" in APP
+    assert "cosmaneura-billing:${imageTag}" not in APP
+    for runtime in (application, migration, worker):
+        assert "image: image" in runtime
+    assert "output deployedImageDigest string = validatedImageDigest" in APP
 
 
 def test_key_vault_permissions_are_secret_scoped_and_partitioned():

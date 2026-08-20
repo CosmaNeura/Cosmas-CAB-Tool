@@ -7,8 +7,13 @@ param namePrefix string = 'cosmaneura-pilot'
 
 param location string = resourceGroup().location
 
-@description('Immutable image tag previously built in the foundation ACR.')
+@description('Commit-derived discovery tag that must resolve to imageDigest before deployment.')
 param imageTag string
+
+@description('Immutable OCI manifest digest resolved from imageTag, in sha256:<64-hex> form. The app, migration, and worker all deploy this digest.')
+@minLength(71)
+@maxLength(71)
+param imageDigest string
 
 @description('Stable pilot practice identifier used for every tenant key.')
 param practiceId string
@@ -67,6 +72,15 @@ param azureOpenAIModelName string = 'gpt-5.6-sol'
 
 @description('Azure OpenAI Responses data-plane API version used by the official OpenAI SDK.')
 param azureOpenAIApiVersion string = '2025-04-01-preview'
+
+@description('Provision a dedicated private Azure AI Language F0 account. This does not enable application extraction.')
+param provisionAzureLanguage bool = false
+
+@description('Enable API-only Azure AI Language extraction. Keep false until Azure OpenAI inference and the isolated shadow milestone are approved.')
+param enableAzureLanguageExtraction bool = false
+
+@description('Azure Text Analytics for health data-plane API version.')
+param azureLanguageApiVersion string = '2023-04-01'
 
 @description('IANA timezone used for chase cadence and quiet-hour calculations.')
 param practiceTimezone string = 'UTC'
@@ -130,10 +144,35 @@ var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
 var azureOpenAIName = take('${compactPrefix}oai${suffix}', 64)
+var azureLanguageName = take('${compactPrefix}lang${suffix}', 64)
+var vnetName = '${namePrefix}-vnet-${suffix}'
 var appName = '${containerNamePrefix}-api-${suffix}'
 var migrationJobName = '${containerNamePrefix}-mig-${suffix}'
 var chaseWorkerJobName = '${containerNamePrefix}-wrk-${suffix}'
-var image = '${registry.properties.loginServer}/cosmaneura-billing:${imageTag}'
+var normalizedImageDigest = toLower(imageDigest)
+var imageDigestHex = substring(normalizedImageDigest, 7, 64)
+var imageDigestNonHex = reduce([
+  '0'
+  '1'
+  '2'
+  '3'
+  '4'
+  '5'
+  '6'
+  '7'
+  '8'
+  '9'
+  'a'
+  'b'
+  'c'
+  'd'
+  'e'
+  'f'
+], imageDigestHex, (remaining, allowedCharacter) => replace(remaining, allowedCharacter, ''))
+var validatedImageDigest = startsWith(normalizedImageDigest, 'sha256:') && empty(imageDigestNonHex)
+  ? normalizedImageDigest
+  : fail('imageDigest must use sha256:<64-hex> form')
+var image = '${registry.properties.loginServer}/cosmaneura-billing@${validatedImageDigest}'
 var entraSecretSettingName = 'microsoft-provider-authentication-secret'
 var entraIssuer = '${az.environment().authentication.loginEndpoint}${entraTenantId}/v2.0'
 var validatedSchedulerEnabled = enablePatientMessaging && !enableChaseScheduler
@@ -154,6 +193,10 @@ var validatedAcsEmailReplyToAddress = validatedPatientMessagingEnabled && empty(
 var schedulerEnabledValue = validatedSchedulerEnabled ? 'true' : 'false'
 var patientMessagingEnabledValue = validatedPatientMessagingEnabled ? 'true' : 'false'
 var azureOpenAIEnabledValue = enableAzureOpenAIInference ? 'true' : 'false'
+var validatedAzureLanguageExtractionEnabled = enableAzureLanguageExtraction && !provisionAzureLanguage
+  ? fail('enableAzureLanguageExtraction requires provisionAzureLanguage')
+  : enableAzureLanguageExtraction
+var azureLanguageEnabledValue = validatedAzureLanguageExtractionEnabled ? 'true' : 'false'
 var chaseTransport = validatedPatientMessagingEnabled ? 'acs_email' : 'record_only'
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
@@ -166,6 +209,15 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
 
 resource azureOpenAI 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = if (enableAzureOpenAIInference) {
   name: azureOpenAIName
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
+  name: vnetName
+}
+
+resource privateEndpointsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  parent: vnet
+  name: 'private-endpoints'
 }
 
 var applicationOrigin = 'https://${appName}.${environment.properties.defaultDomain}'
@@ -188,6 +240,100 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
+}
+
+resource azureLanguage 'Microsoft.CognitiveServices/accounts@2024-10-01' = if (provisionAzureLanguage) {
+  name: azureLanguageName
+  location: location
+  tags: tags
+  kind: 'TextAnalytics'
+  sku: {
+    name: 'F0'
+  }
+  properties: {
+    customSubDomainName: azureLanguageName
+    disableLocalAuth: true
+    networkAcls: {
+      defaultAction: 'Deny'
+    }
+    publicNetworkAccess: 'Disabled'
+  }
+}
+
+resource apiAzureLanguageReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionAzureLanguage) {
+  scope: azureLanguage
+  name: guid(azureLanguage.id, identity.id, 'cognitive-services-language-reader')
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7628b7b8-a8b2-4cdc-b46f-e9b35248918e'
+    )
+  }
+}
+
+resource azureLanguagePrivateDns 'Microsoft.Network/privateDnsZones@2024-06-01' = if (provisionAzureLanguage) {
+  name: 'privatelink.cognitiveservices.azure.com'
+  location: 'global'
+  tags: tags
+}
+
+resource azureLanguageDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (provisionAzureLanguage) {
+  parent: azureLanguagePrivateDns
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource azureLanguagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (provisionAzureLanguage) {
+  name: '${namePrefix}-lang-pe-${suffix}'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointsSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'account'
+        properties: {
+          privateLinkServiceId: azureLanguage.id
+          groupIds: [
+            'account'
+          ]
+        }
+      }
+    ]
+  }
+  // A private endpoint NIC mutates the shared foundation subnet. The
+  // foundation deployment must finish before this app deployment starts; the
+  // dependencies below keep this template's only subnet writer ordered after
+  // its account, RBAC, DNS-zone, and VNet-link prerequisites.
+  dependsOn: [
+    apiAzureLanguageReader
+    azureLanguageDnsLink
+  ]
+}
+
+resource azureLanguagePrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (provisionAzureLanguage) {
+  parent: azureLanguagePrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'azure-language'
+        properties: {
+          privateDnsZoneId: azureLanguagePrivateDns.id
+        }
+      }
+    ]
+  }
 }
 
 resource entraClientSecretVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
@@ -401,6 +547,10 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               value: azureOpenAIEnabledValue
             }
             {
+              name: 'COSMANEURA_AZURE_LANGUAGE_ENABLED'
+              value: azureLanguageEnabledValue
+            }
+            {
               name: 'APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL'
               value: 'true'
             }
@@ -541,6 +691,15 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               name: 'AZURE_OPENAI_API_VERSION'
               value: azureOpenAIApiVersion
             }
+          ] : [], validatedAzureLanguageExtractionEnabled ? [
+            {
+              name: 'AZURE_LANGUAGE_ENDPOINT'
+              value: azureLanguage!.properties.endpoint
+            }
+            {
+              name: 'AZURE_LANGUAGE_API_VERSION'
+              value: azureLanguageApiVersion
+            }
           ] : [], validatedPatientMessagingEnabled ? [
             {
               name: 'COSMANEURA_ACS_EMAIL_ENDPOINT'
@@ -607,6 +766,8 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
   dependsOn: [
     entraClientSecretVault
     entraClientSecretReader
+    apiAzureLanguageReader
+    azureLanguagePrivateDnsGroup
   ]
 }
 
@@ -791,7 +952,6 @@ resource applicationAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = 
         '/favicon.ico'
         '/assets/*'
         '/api/live'
-        '/api/ready'
       ]
     }
     httpSettings: {
@@ -817,3 +977,9 @@ output chaseSchedulerEnabled bool = validatedSchedulerEnabled
 output patientMessagingEnabled bool = validatedPatientMessagingEnabled
 output ingressExternal bool = externalIngress
 output applicationFqdn string = application.properties.configuration.ingress.fqdn
+output imageSourceTag string = imageTag
+output deployedImageDigest string = validatedImageDigest
+output azureLanguageProvisioned bool = provisionAzureLanguage
+output azureLanguageExtractionEnabled bool = validatedAzureLanguageExtractionEnabled
+output azureLanguageAccountName string = provisionAzureLanguage ? azureLanguage!.name : ''
+output azureLanguageEndpoint string = provisionAzureLanguage ? azureLanguage!.properties.endpoint : ''

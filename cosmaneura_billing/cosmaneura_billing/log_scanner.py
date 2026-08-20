@@ -16,12 +16,14 @@ import sys
 from typing import Iterable, Sequence
 
 from .runtime import (
+    AZURE_OPENAI_ACCEPTANCE_LOG_EVENT,
     CHASE_WORKER_LOG_EVENT,
     HTTP_LOG_EVENT,
     LLM_LOG_EVENT,
     SERVICE_LOG_EVENT,
     is_safe_http_event,
     is_safe_chase_worker_event,
+    is_safe_azure_openai_acceptance_event,
     is_safe_llm_event,
 )
 
@@ -84,6 +86,7 @@ _FINDING_CODES = frozenset({
     "forbidden_assignment",
     "forbidden_field",
     "invalid_http_schema",
+    "invalid_acceptance_schema",
     "invalid_llm_schema",
     "invalid_worker_schema",
     "invalid_schema",
@@ -265,6 +268,9 @@ def scan_log_text(
         elif event == CHASE_WORKER_LOG_EVENT:
             if not is_safe_chase_worker_event(payload):
                 findings.add(LogFinding(line_number, "invalid_worker_schema"))
+        elif event == AZURE_OPENAI_ACCEPTANCE_LOG_EVENT:
+            if not is_safe_azure_openai_acceptance_event(payload):
+                findings.add(LogFinding(line_number, "invalid_acceptance_schema"))
         elif event == SERVICE_LOG_EVENT:
             if not _is_safe_service_event(payload):
                 findings.add(LogFinding(line_number, "invalid_service_schema"))

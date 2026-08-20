@@ -6,8 +6,8 @@ E/M + ICD-10-CM + edits engine for a small physician group. Module tags:
 **TEST** (pipeline testing), **WF** (coder/physician workflow).
 
 **Top five to integrate first:** CMS NCCI files (#1), MCD downloads (#2), Tuva
-Project (#7) to bootstrap the terminology warehouse, ACI-Bench/MTS-Dialog (#18)
-as the transcript-to-note test corpus, and MDACE (#13) as the evidence-span
+Project (#7) to bootstrap the terminology warehouse, ACI-Bench (#18) as the
+transcript-to-note test corpus, and MDACE (#13) as the evidence-span
 validation benchmark.
 
 ## Tier 1 — Core regulatory knowledge base (free, authoritative, maintained)
@@ -15,17 +15,21 @@ validation benchmark.
 **1. CMS NCCI PTP & MUE files** — https://www.cms.gov/medicare/coding-billing/national-correct-coding-initiative-ncci-edits/medicare-ncci-procedure-procedure-ptp-edits and https://www.cms.gov/medicare/coding-billing/national-correct-coding-initiative-ncci-edits/medicare-ncci-medically-unlikely-edits-mues
 Quarterly ZIP/CSV of Procedure-to-Procedure pairs (with modifier indicators) and
 Medically Unlikely Edits for *Practitioner Services* (the file set we want, not
-hospital). Free, public domain; note some MUE values are confidential ("MAI"
-published, a minority of values withheld). **Plugs in:** direct data feed for
+hospital). Direct public CMS download; the tables contain CPT/HCPCS identifiers
+and remain subject to applicable source/AMA terms. They are runtime policy
+inputs, never model-training examples. Note some MUE values are confidential
+("MAI" published, a minority of values withheld). **Plugs in:** direct data feed for
 `knowledge/ncci.py` (loader already built); add a quarterly ingest job keyed to
 effective dates.
 
 **2. CMS Medicare Coverage Database (MCD) downloads** — https://www.cms.gov/medicare-coverage-database/downloads/downloads.aspx
 Weekly (Thursdays) full dumps of current + retired LCDs, Articles (incl. billing
 & coding articles with covered ICD-10/CPT lists), and NCDs, as CSV + Access .mdb
-with data dictionaries. Free; the license/attestation click-through includes AMA
-CPT and ADA CDT notices because descriptors appear in the data — display
-restrictions apply to CPT descriptors, not the coverage logic. **Plugs in:**
+with data dictionaries. The license/attestation says CPT codes, descriptions,
+and other data are AMA-copyrighted and limits the displayed license to
+personal/non-commercial use unless a separate AMA license applies. Strip
+descriptors and use only the minimum coverage relationships under the
+organization's entitlement; never train or embed the licensed content. **Plugs in:**
 `knowledge/coverage.py` (loader already built); the "Billing and Coding Articles"
 tables are the machine-usable ICD-10↔HCPCS coverage pairs.
 
@@ -158,13 +162,16 @@ LLM-generated narrative notes from Synthea FHIR bundles. **Plugs in:** TEST —
 end-to-end pipeline fixtures (intake→note→codes) with zero PHI risk; control the
 diagnosis mix to stress specific NCCI/LCD rules.
 
-**18. ACI-Bench / MTS-Dialog (Microsoft clinical_visit_note_summarization_corpus)** — https://github.com/microsoft/clinical_visit_note_summarization_corpus
-Synthetic (actor/clinician-created, no PHI) doctor-patient dialogues with paired
-clinical notes: ACI-Bench = 207 full ambient visits with full notes; MTS-Dialog
-= ~1,700 dialogue snippets with note sections. CC-BY-4.0 — commercially usable.
-**Plugs in:** TEST — the best public stand-in for our "visit transcript +
-signed note" input pair; run the whole pipeline on these and hand-code a subset
-as a regression suite.
+**18. ACI-Bench / MTS-Dialog** — https://github.com/wyim/aci-bench and
+https://github.com/abachaa/MTS-Dialog
+Both repositories publish data under CC-BY-4.0, but copyright permission is not
+the same as patient-data provenance. ACI-Bench's peer-reviewed descriptor
+documents expert-constructed and clinician/volunteer role-played encounters,
+so it is a training/evaluation candidate after identifier screening and
+attribution. The reviewed MTS-Dialog repository and paper landing page do not
+establish that every source dialogue is wholly synthetic; quarantine it from
+release demos and training until that lineage is documented. **Plugs in:** TEST
+— ACI-Bench is the cleared public stand-in for transcript + signed-note input.
 
 **19. PriMock57** — https://github.com/babylonhealth/primock57
 57 mock primary-care consultations with **audio**, transcripts, and notes
@@ -172,12 +179,14 @@ as a regression suite.
 audio→transcript→note, and primary-care outpatient like our users. **Plugs in:**
 TEST — validating transcript-noise robustness of evidence extraction.
 
-**20. CMS DE-SynPUF** — https://www.cms.gov/data-research/statistics-trends-reports/medicare-claims-synthetic-public-use-files/cms-2008-2010-data-entrepreneurs-synthetic-public-use-file-de-synpuf
+**20. CMS DE-SynPUF** — https://www.cms.gov/data-research/statistics-trends-and-reports/medicare-claims-synthetic-public-use-files
 Synthetic Medicare claims (2008–2010): beneficiary, carrier (Part B professional
-claims with HCPCS/ICD-9), inpatient/outpatient. Free, no restrictions, but old
-(ICD-9 era) and statistically distorted. **Plugs in:** TEST — volume/load
+claims with HCPCS/ICD-9), inpatient/outpatient. Free public download without
+ordinary beneficiary-privacy restrictions, but old (ICD-9 era) and statistically
+distorted. **Plugs in:** TEST — volume/load
 testing of the claims-side plumbing (837 generation, edit throughput), not
-clinical realism.
+clinical realism, modern coding truth, or clinical-label training. Follow the
+CMS public-use disclaimer linked by the source page.
 
 ## Tier 5 — Claims plumbing & denial intelligence
 

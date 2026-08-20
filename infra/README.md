@@ -15,6 +15,10 @@ the spoof-resistance acceptance checks are deployed and verified.
 - an optional dedicated North Central US Azure OpenAI account with local
   authentication/public access disabled, a private endpoint/DNS zone, pinned
   model deployment, and API-identity-only inference RBAC
+- an independently optional Azure AI Language `TextAnalytics` F0 account with
+  local authentication/public access disabled, a private endpoint/DNS zone,
+  and API-identity-only `Cognitive Services Language Reader` RBAC; provisioning
+  it does not enable the second extraction engine
 - separate user-assigned identities for the API, migration job, and chase
   worker, each with ACR pull and only its required Key Vault secret grants
 - Log Analytics for closed-schema stdout events and workspace-based Application
@@ -50,6 +54,8 @@ role; migration and worker identities receive no Azure OpenAI access.
 
 The app deployment owns behavior and receives these additional P4 inputs:
 
+- `imageTag` as a commit-derived discovery label and `imageDigest` as the
+  required `sha256:<64-hex>` manifest identity actually deployed
 - `postgresChaseWorkerLogin`, `enableChaseScheduler`,
   `enablePatientMessaging`, and `activatePatientMessaging`
 - non-secret `acsEmailEndpoint`, `acsEmailSenderAddress`, and
@@ -63,6 +69,9 @@ The app deployment owns behavior and receives these additional P4 inputs:
 - `enableAzureOpenAIInference` (false by default), plus non-secret
   `azureOpenAIDeploymentName`, `azureOpenAIModelName`, and
   `azureOpenAIApiVersion=2025-04-01-preview`
+- `provisionAzureLanguage` and `enableAzureLanguageExtraction` (both false by
+  default), plus non-secret `azureLanguageApiVersion=2023-04-01`; enablement is
+  rejected unless provisioning is also selected
 
 The two patient-messaging latches must change together. Enabling messaging also
 requires the scheduler and all ACS metadata; otherwise Bicep fails before
@@ -86,6 +95,16 @@ API's Azure OpenAI endpoint, deployment, model label, and API version are
 non-secret configuration and are injected only when inference is explicitly
 enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
 
+Azure AI Language follows the same boundary without sharing the OpenAI role.
+`provisionAzureLanguage=true` creates a `TextAnalytics` F0 account, its
+`privatelink.cognitiveservices.azure.com` private DNS zone/link, one private
+endpoint, and one account-scoped `Cognitive Services Language Reader` assignment
+for the API identity. It creates no key or Key Vault secret. Endpoint and API
+version environment variables are injected only when
+`enableAzureLanguageExtraction=true`; the enabled marker remains false
+otherwise. Migration and chase-worker identities receive no Language role or
+configuration.
+
 ## Deployment sequence
 
 1. Create a single-tenant Microsoft Entra app registration for staff. Define
@@ -108,6 +127,9 @@ enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
    first pilot administrator—not an email address or display name. Keep
    `acsEmailConnectionString` empty, `provisionAzureOpenAI=false`, and the app's
    messaging/inference enable flags false for the initial platform deployment.
+   Keep both `provisionAzureLanguage=false` and
+   `enableAzureLanguageExtraction=false` unless the reviewed dormant Language
+   resource slice is being provisioned.
    Provision Azure OpenAI only after the reviewed
    [cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md)
    is approved; provisioning still does not enable application inference.
@@ -128,7 +150,7 @@ enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
 
    ```bash
    az acr build --registry <foundation-output-registryName> \
-     --image cosmaneura-billing:<immutable-tag> \
+     --image cosmaneura-billing:<commit-derived-tag> \
      --file cosmaneura_billing/Dockerfile cosmaneura_billing
    ```
 
@@ -138,10 +160,15 @@ enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
    the build completes, restore `registryPublicNetworkAccess` to `Disabled`,
    redeploy `foundation.bicep`, and verify the registry reports
    `publicNetworkAccess: Disabled`. Do not proceed while it is enabled.
-5. Deploy `app.bicep` with the exact immutable image tag,
-   `externalIngress=false`, `enableChaseScheduler=false`, both messaging
-   latches false, and `enableAzureOpenAIInference=false` only after that
-   verification. Add the output FQDN as the Entra
+5. Build a commit-derived discovery tag, resolve its `sha256:<64-hex>` manifest
+   digest, and deploy `app.bicep` with both values. The API, migration job, and
+   chase worker reference `repo@digest`; a tag alone is never a deployment input.
+   Deploy with `externalIngress=false`, `enableChaseScheduler=false`, both
+   messaging latches false, `enableAzureOpenAIInference=false`, and
+   `enableAzureLanguageExtraction=false` only after that verification. The
+   app deployment must not overlap a foundation deployment: private endpoint
+   creation mutates the same `private-endpoints` subnet and the two deployments
+   are the cross-template serialization boundary. Add the output FQDN as the Entra
    web redirect URI:
    `https://<app-fqdn>/.auth/login/aad/callback`.
 
@@ -302,6 +329,15 @@ inference:
    Services OpenAI User` role. Migration and chase identities must have no
    Azure OpenAI role or configuration. Resolve the private endpoint from the
    Container Apps environment and prove the public path is unavailable.
+   When the dormant Language slice is approved, deploy the app with
+   `provisionAzureLanguage=true` but keep
+   `enableAzureLanguageExtraction=false`. Verify the `TextAnalytics` account is
+   F0, local authentication and public network access are disabled/default
+   deny, private DNS resolves only through the VNet path, and only the API UAMI
+   has role `7628b7b8-a8b2-4cdc-b46f-e9b35248918e`. The worker and migration
+   jobs must have no Language role, endpoint, API version, or enable marker.
+   Do not run a Language shadow study before Azure OpenAI inference is enabled
+   and the isolated shadow seam is approved.
 5. Redeploy the app with the reviewed deployment/model/API version and
    `enableAzureOpenAIInference=true`, then submit only synthetic/de-identified
    encounters. The acceptance run must exercise both strict `text.format` JSON
@@ -347,8 +383,9 @@ chase-gate, telemetry, or unrelated private-network grants during cleanup.
 
 Run these against the Container Apps FQDN, not a direct local container:
 
-- `/api/live` and `/api/ready` are anonymous; `/api/health` returns 401 when
-  signed out.
+- `/api/live` is anonymous; `/api/ready` and `/api/health` return 401 when
+  signed out at the Container Apps FQDN. The platform's direct container startup
+  and readiness probes continue to use `/api/ready` without traversing Easy Auth.
 - A caller-supplied, syntactically valid `X-MS-CLIENT-PRINCIPAL` (including the
   configured tenant and an allowed role) still returns 401 when signed out.
   This proves the Container Apps auth sidecar is the only network path and

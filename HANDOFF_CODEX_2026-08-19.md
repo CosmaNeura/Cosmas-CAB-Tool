@@ -8,8 +8,10 @@ surfacing remains deferred to the inference-on milestone. No infrastructure
 change is included in this pull request.
 
 **Pull request:** [#4](https://github.com/CosmaNeura/Cosmas-CAB-Tool/pull/4) —
-`claude/billing-analysis-multi-model-3k99ke`, merged from and reconciled against
-`main` at `1c5d7e7`.
+`claude/billing-analysis-multi-model-3k99ke`, merged to `main` as `de2b16f`.
+Its first parent is the previously accepted/live image source `1c5d7e7`; current
+`main` is not yet deployed. See the dated
+[release-candidate evidence](docs/deployment/2026-08-19-demo-release-candidate-evidence.md).
 
 **Design docs:**
 [`cosmaneura_billing/docs/TA4H_INTEGRATION.md`](cosmaneura_billing/docs/TA4H_INTEGRATION.md) (config, policy, rollout gates)
@@ -51,8 +53,9 @@ the platform order wins: the release-candidate slice ships first.
   new `language` extra.
 - The offline `MockTA4H` is refused by `Settings` in staging and production, so
   mock output can never be presented as engine output.
-- **Nothing is provisioned and nothing is enabled.** No Language resource exists,
-  and no Bicep template references one.
+- **Nothing is provisioned and nothing is enabled.** The application Bicep now
+  defines dormant private F0 provisioning and API-only RBAC, but both provisioning
+  and extraction default false and require separate cost/deployment approval.
 
 ## What the consensus layer guarantees
 
@@ -110,7 +113,7 @@ the existing "Demo Release Candidate & Canonical Evidence" slice; defer the rest
 1. Add the Language resource and the role assignment to `infra/app.bicep`, with
    public network access disabled and local authentication disabled, matching the
    Azure OpenAI account shape. Grant only the API user-assigned identity a
-   *Cognitive Services Language Reader* (or User) role on the account. Keep
+   *Cognitive Services Language Reader* role on the account. Keep
    `COSMANEURA_AZURE_LANGUAGE_ENABLED` false in every deployed parameter file.
    Provisioning the resource is not enabling it.
 2. Add `run_consensus_fuzz` to the required-CI set alongside the existing
@@ -119,8 +122,10 @@ the existing "Demo Release Candidate & Canonical Evidence" slice; defer the rest
 
 **Deferred to the inference-on milestone, in this order:**
 
-3. Provision the Language resource on F0 (5,000 text records/month, a text record
-   being 1,000 characters). This covers the whole shadow-mode study at no cost.
+3. After separate approval of the $7.80/month private endpoint and DNS standing
+   cost, provision the Language resource on F0 (5,000 text records/month, a text
+   record being 1,000 characters). F0 should cover the study's service usage;
+   Private Link data processing remains separately metered.
 4. Implement an isolated shadow seam before enabling the engine on any
    reviewer-serving process. The current `azure_language_enabled` path performs
    active conservative consensus; hiding badges alone is not shadow mode. The
@@ -168,13 +173,21 @@ rather than silently rewritten:
 
 Both make the case for TA4H stronger, not weaker. No conclusion changed.
 
-## Independent finding, outside this lane
+## GitHub control-plane follow-up
 
-`HANDOFF_CODEX_2026-08-18.md` and the 2026-08-19 security review both note that
-GitHub `main` is unprotected, with Dependabot, code scanning, secret scanning and
-push protection disabled. That remains the highest-leverage, lowest-cost item on
-the list and it gates the value of every other verification step in the slice. If
-only part of the slice is approved, this should be the part.
+The earlier finding that `main` was unprotected is resolved as of 2026-08-19.
+The live repository settings now enforce seven strict required contexts:
+`infra`, both Python `test` jobs, `frontend`, `container`, `Analyze (python)`,
+and `Analyze (javascript-typescript)`. Administrators are included, conversation
+resolution is required, and force-pushes/deletions are disabled.
+Dependabot security updates, code security, secret scanning, push protection,
+validity checks, and non-provider patterns are enabled; default CodeQL setup is
+configured for Python and JavaScript/TypeScript.
+Post-merge CI run `32317475914` and CodeQL setup run `32317672236` passed.
+
+`prove_no_upcode.py` remains the `Guardrail invariant proof` step inside both
+required Python test contexts and invokes both the single-engine and consensus
+harnesses. Do not remove or bypass that step while leaving the job name green.
 
 ## Files
 

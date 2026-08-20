@@ -1,7 +1,11 @@
 # Bundled data — sources and provenance
 
-All files here are public/government works or Apache-2.0-packaged public data;
-no AMA CPT descriptors are bundled anywhere (code numbers + numeric stats only).
+These files have different allowed-use lanes. Government terminology and
+policy tables are runtime knowledge, not clinical training examples; dialogue
+corpora have their own provenance requirements. No AMA CPT descriptors are
+bundled, but NCCI/MCD code identifiers still require the applicable source
+terms and organizational entitlement. The release gate and source-by-source
+decisions are tracked in `cosmaneura_billing/docs/DATA_PROVENANCE_CATALOG.md`.
 
 | File | Source | Contents |
 |---|---|---|
@@ -13,7 +17,8 @@ no AMA CPT descriptors are bundled anywhere (code numbers + numeric stats only).
 | `tcpuf_issuer_denials_2026.csv.gz` | CMS Marketplace Transparency in Coverage PUF PY2026 (2024 claims) | issuer-level claims received/denied, denial rate, top denial-reason category; issuers with ≥1,000 claims |
 | `ncci/` | CMS NCCI 2026 Q3 (see ncci/README.md) | PTP edits + MUE limits, practitioner |
 | `mcd/` | CMS Medicare Coverage Database (see mcd/README.md) | NGS-jurisdiction coverage articles |
-| `corpora/` | ACI-Bench, MTS-Dialog (see corpora/README.md) | synthetic encounters, CC-BY-4.0 |
+| `corpora/` | ACI-Bench, MTS-Dialog (see corpora/README.md) | externally authored encounters, CC-BY-4.0; allowed-use posture differs by source |
+| `demo_release_candidate/` | authored in-repository; see `cosmaneura_billing/docs/DATA_PROVENANCE_CATALOG.md` | wholly synthetic demo/evaluation cases; training prohibited |
 
 Also: `benchmarks/data/em_benchmark_by_specialty.csv` (national) and
 `benchmarks/data/em_nh_2024.csv` (New Hampshire, from the CMS Medicare

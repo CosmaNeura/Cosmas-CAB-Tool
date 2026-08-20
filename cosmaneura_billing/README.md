@@ -80,6 +80,9 @@ No Azure resources are created by tests or by building the repository.
 The reviewed Azure OpenAI resource shape, fixed network-cost delta, and token
 scenarios are in
 [`../docs/deployment/2026-08-18-azure-openai-cost-plan.md`](../docs/deployment/2026-08-18-azure-openai-cost-plan.md).
+The difference between current `main` and the accepted live image, plus the
+final disabled-latch audit, is recorded in
+[`../docs/deployment/2026-08-19-demo-release-candidate-evidence.md`](../docs/deployment/2026-08-19-demo-release-candidate-evidence.md).
 The Entra trust boundary, role matrix, request controls, audit event contract,
 and local-development exception are in `docs/ACCESS_CONTROL.md`.
 
@@ -114,13 +117,16 @@ auto-instrumentation is not enabled because it can observe chart content before
 redaction. See `../infra/README.md` for synthetic acceptance and retention
 details.
 
-The foundation template can provision a dedicated North Central US Azure OpenAI
+The foundation has provisioned a dedicated North Central US Azure OpenAI
 account with public access and local authentication disabled, a private
 endpoint/DNS zone, the pinned `gpt-5.6-sol` 2026-07-09 `DataZoneStandard`
 deployment at capacity 200, and an account-scoped inference role for the API
-managed identity. Provisioning does not enable application inference. Live
-catalog and ARM validation have passed, but strict JSON Schema output and the
-JSON-object fallback still require a synthetic data-plane acceptance run.
+managed identity. Provisioning does not enable application inference. A
+synthetic data-plane run accepted strict JSON Schema and the JSON-object path on
+the `1c5d7e7` image, then returned the application to inference-off. The
+2026-08-19 release-candidate baseline `de2b16f` was not deployed; the eventual
+merged manifest digest must be accepted separately. Do not transfer acceptance
+across source identities.
 
 Real chart text remains prohibited until the Microsoft agreement/BAA is
 verified to cover the Azure OpenAI service and US data zone, the service's
@@ -172,6 +178,18 @@ python run_demo.py
 
 ICD10_CCSR_CSV=/path/to/DXCCSR_v2023-1.csv   python run_demo.py
 ```
+
+The deployment acceptance command is intentionally narrower than `run_demo.py`
+and accepts no chart/prompt input:
+
+```bash
+python -m cosmaneura_billing.azure_openai_acceptance > /tmp/azure-openai-acceptance.jsonl
+python -m cosmaneura_billing.log_scanner /tmp/azure-openai-acceptance.jsonl
+```
+
+Restore the application inference latch to false immediately after the bounded
+synthetic run and verify the final revision contains no Azure OpenAI variables
+and emits no LLM events.
 
 The adapter selects strict Structured Outputs for locally compatible schemas
 and selects JSON-object mode up front for schemas outside the supported strict
