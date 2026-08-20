@@ -33,8 +33,9 @@ def _principal_header(user_id: str, *roles: str) -> dict[str, str]:
 
 
 def _review_context(client, headers: dict[str, str] | None = None) -> str:
-    response = client.get(
-        "/api/encounters/ENC-100237/coder-view", headers=headers or {},
+    response = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+        headers=headers or {},
     )
     assert response.status_code == 200
     return response.json()["reviewContext"]
@@ -85,17 +86,54 @@ def test_list_and_get_encounter(client):
     encs = client.get("/api/encounters").json()
     ids = [e["id"] for e in encs]
     assert "ENC-100237" in ids
-    one = client.get("/api/encounters/ENC-100237").json()
+    assert all("preview" not in encounter for encounter in encs)
+    one = client.post(
+        "/api/encounters/detail", json={"encounterId": "ENC-100237"},
+    ).json()
     assert one["submittedEm"] == "99213"
     assert "hematochezia" in one["signedNote"].lower()
 
 
+def test_read_only_data_class_comes_only_from_persisted_source(client):
+    store = client.app.state.encounter_store
+    stored = store.get("ENC-100237")
+    store.upsert(stored.bundle, source="synthetic_demo_release_candidate")
+    misleading_id = replace(stored.bundle, encounter_id="SYN-RC-NOT-PROVENANCE")
+    store.upsert(misleading_id, source="explicit_import")
+
+    listed = {row["id"]: row for row in client.get("/api/encounters").json()}
+    assert listed["ENC-100237"]["dataClass"] == \
+        "synthetic_demo_release_candidate"
+    assert listed["ENC-100237"]["readOnly"] is True
+    assert listed["SYN-RC-NOT-PROVENANCE"]["dataClass"] == "operational"
+    assert listed["SYN-RC-NOT-PROVENANCE"]["readOnly"] is False
+
+    detail = client.post(
+        "/api/encounters/detail", json={"encounterId": "ENC-100237"},
+    ).json()
+    billing = client.post(
+        "/api/encounters/billing", json={"encounterId": "ENC-100237"},
+    ).json()
+    coder = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
+    assert all(
+        response["dataClass"] == "synthetic_demo_release_candidate"
+        and response["readOnly"] is True
+        for response in (detail, billing, coder)
+    )
+
+
 def test_unknown_encounter_404(client):
-    assert client.post("/api/encounters/NOPE/billing").status_code == 404
+    assert client.post(
+        "/api/encounters/billing", json={"encounterId": "NOPE"},
+    ).status_code == 404
 
 
 def test_stored_billing_matches_contract(client):
-    j = client.post("/api/encounters/ENC-100237/billing").json()
+    j = client.post(
+        "/api/encounters/billing", json={"encounterId": "ENC-100237"},
+    ).json()
     assert j["encounterId"] == "ENC-100237"
     assert j["em"]["code"] == "99214"
     assert j["primary"]["code"] == "K62.5"
@@ -124,7 +162,9 @@ def test_adhoc_billing_runs_posted_documentation(client):
 
 
 def test_coder_view_contract(client):
-    cv = client.get("/api/encounters/ENC-100237/coder-view").json()
+    cv = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
     assert cv["encounterVersion"] == 1
     assert cv["reviewContext"]
     assert cv["submittedEm"] == "99213"
@@ -249,20 +289,26 @@ def test_feedback_summary_empty(client):
 
 
 def test_billing_carries_denial_prior(client):
-    j = client.post("/api/encounters/ENC-100237/billing").json()
+    j = client.post(
+        "/api/encounters/billing", json={"encounterId": "ENC-100237"},
+    ).json()
     em = next(c for c in j["captured"] if c["kind"] == "EM")
     assert 0.0 < em["denialPrior"] < 0.10
 
 
 def test_em_benchmarks_endpoint(client):
-    b = client.get("/api/benchmarks/em?specialty=Family%20Practice").json()
+    b = client.post(
+        "/api/benchmarks/em", json={"specialty": "Family Practice"},
+    ).json()
     assert b["state"] == "NH"
     assert abs(sum(b["stateMix"].values()) - 1.0) < 0.01
     assert b["stateAllowed"]["99214"] > b["stateAllowed"]["99213"]
 
 
 def test_payer_denials_endpoint(client):
-    p = client.get("/api/benchmarks/payer-denials?state=NH").json()
+    p = client.post(
+        "/api/benchmarks/payer-denials", json={"state": "NH"},
+    ).json()
     assert p["state"] == "NH" and len(p["issuers"]) >= 2
     assert p["issuers"][0]["denialRate"] >= p["issuers"][-1]["denialRate"]
 
@@ -295,7 +341,8 @@ def test_reviewer_rejections_influence_future_runs_for_that_reviewer(tmp_path):
         assert response.status_code == 200
 
     j = client.post(
-        "/api/encounters/ENC-100237/billing", headers=smith,
+        "/api/encounters/billing", json={"encounterId": "ENC-100237"},
+        headers=smith,
     ).json()
     captured = {c["code"] for c in j["captured"]}
     assert "K59.00" not in captured
@@ -306,13 +353,15 @@ def test_reviewer_rejections_influence_future_runs_for_that_reviewer(tmp_path):
 
     # a different reviewer still gets the base behavior
     j2 = client.post(
-        "/api/encounters/ENC-100237/billing", headers=jones,
+        "/api/encounters/billing", json={"encounterId": "ENC-100237"},
+        headers=jones,
     ).json()
     assert "K59.00" in {c["code"] for c in j2["captured"]}
 
     # and the coder view surfaces the learned history
-    cv = client.get(
-        "/api/encounters/ENC-100237/coder-view", headers=smith,
+    cv = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+        headers=smith,
     ).json()
     assert cv["coderId"] == SMITH_ID
     row = next(w for w in cv["withheld"] if w["code"] == "K59.00")

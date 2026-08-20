@@ -19,13 +19,16 @@ the spoof-resistance acceptance checks are deployed and verified.
   local authentication/public access disabled, a private endpoint/DNS zone,
   and API-identity-only `Cognitive Services Language Reader` RBAC; provisioning
   it does not enable the second extraction engine
-- separate user-assigned identities for the API, migration job, and chase
-  worker, each with ACR pull and only its required Key Vault secret grants
+- separate user-assigned identities for the API, migration job, chase worker,
+  and optional Athena sandbox sync lane, each with ACR pull and only its
+  required Key Vault secret grants
 - Log Analytics for closed-schema stdout events and workspace-based Application
   Insights for explicit numeric LLM metrics only
 - a manual Container Apps migration job, the same-origin API/frontend app, and
   a no-ingress chase-worker job that is manual by default and scheduled only
   when explicitly enabled
+- an optional no-ingress Athena sandbox sync job with no scheduler; both its
+  provisioning and execution gates are false by default
 
 ## Platform parameters and secret boundary
 
@@ -72,6 +75,13 @@ The app deployment owns behavior and receives these additional P4 inputs:
 - `provisionAzureLanguage` and `enableAzureLanguageExtraction` (both false by
   default), plus non-secret `azureLanguageApiVersion=2023-04-01`; enablement is
   rejected unless provisioning is also selected
+- `provisionAthenaSync` and `enableAthenaSync` (both false by default);
+  enablement is rejected unless provisioning is also selected and the exact
+  approved HTTPS base/token URLs, client ID, and synthetic/read-only scopes are
+  supplied
+- `athenaClientSecretKeyVaultSecretName`, which names an operator-created
+  dedicated sandbox OAuth secret; this template accepts no Athena secret value
+  parameter, while all live Athena endpoint/client/scope examples remain empty
 
 The two patient-messaging latches must change together. Enabling messaging also
 requires the scheduler and all ACS metadata; otherwise Bicep fails before
@@ -84,6 +94,7 @@ Secret access is intentionally partitioned:
 | API identity | `database-url`, Entra client secret, and `chase-gate-hmac-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string, any model API key |
 | Migration identity | `migration-database-url`, `database-runtime-password`, `chase-worker-database-password` | API DSN, worker DSN, gate key, ACS connection string |
 | Chase-worker identity | `chase-worker-database-url`, `chase-gate-hmac-key`, and (only when configured) `acs-email-connection-string` | API/owner DSNs, raw DB passwords, Entra client secret |
+| Athena-sync identity (optional) | only the operator-created secret named by `athenaClientSecretKeyVaultSecretName`, and only when sync is enabled | every API/migration/worker/database/Entra/chase/ACS/model secret |
 
 The gate key is the only Key Vault secret shared by API and worker. ACS
 endpoint/sender/reply values are shared non-secret fingerprint metadata; the
@@ -104,6 +115,16 @@ version environment variables are injected only when
 `enableAzureLanguageExtraction=true`; the enabled marker remains false
 otherwise. Migration and chase-worker identities receive no Language role or
 configuration.
+
+The Athena lane is more tightly dormant. With `provisionAthenaSync=false`, no
+Athena identity, role assignment, or job exists. Provisioning alone creates a
+dedicated identity, its registry-scoped `AcrPull` assignment, and a bounded
+manual Container Apps Job; it does not resolve or grant the Athena credential.
+Only `enableAthenaSync=true` adds an exact secret-scoped Key Vault reader grant
+and injects the approved non-secret live connection metadata. The job has no
+ingress and no scheduler. It receives no API, migration, or chase-worker
+credential. A separate least-privilege database import role and its acceptance
+evidence are still required before a live data import may be enabled.
 
 ## Deployment sequence
 
@@ -130,6 +151,10 @@ configuration.
    Keep both `provisionAzureLanguage=false` and
    `enableAzureLanguageExtraction=false` unless the reviewed dormant Language
    resource slice is being provisioned.
+   Keep both `provisionAthenaSync=false` and `enableAthenaSync=false`, and leave
+   `athenaBaseUrl`, `athenaTokenUrl`, `athenaClientId`, and `athenaScopes` empty
+   until Athena returns the exact synthetic/read-only sandbox contract. Never
+   place the Athena OAuth client secret in a parameter file.
    Provision Azure OpenAI only after the reviewed
    [cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md)
    is approved; provisioning still does not enable application inference.
@@ -165,7 +190,8 @@ configuration.
    chase worker reference `repo@digest`; a tag alone is never a deployment input.
    Deploy with `externalIngress=false`, `enableChaseScheduler=false`, both
    messaging latches false, `enableAzureOpenAIInference=false`, and
-   `enableAzureLanguageExtraction=false` only after that verification. The
+   `enableAzureLanguageExtraction=false`, `provisionAthenaSync=false`, and
+   `enableAthenaSync=false` only after that verification. The
    app deployment must not overlap a foundation deployment: private endpoint
    creation mutates the same `private-endpoints` subnet and the two deployments
    are the cross-template serialization boundary. Add the output FQDN as the Entra
@@ -238,20 +264,48 @@ az containerapp job start \
   --args "-m" "cosmaneura_billing.seed_demo_release_candidate"
 ```
 
-The command accepts no chart, file, or identifier argument. It loads only
-`cosmaneura-demo-rc-v1` case `SYN-RC-0001` from the installed package, checks a
-pinned SHA-256 digest, proves the configured practice/tenant binding inside the
-database transaction, and inserts source
+The command accepts no chart, file, or identifier argument. It loads only the
+four cases in `cosmaneura-demo-rc-v1` from the installed package, checks the
+pinned whole-pack and per-case SHA-256 digests, proves the configured
+practice/tenant binding inside the database transaction, and inserts source
 `synthetic_demo_release_candidate`. An exact retry reports `replayed`; any
-different row occupying that case ID reports `conflict` and is never updated.
-Its stdout is limited to the fixed pack ID, case ID, status, and digest.
+different row occupying one of the four case IDs reports `conflict`, rolls back
+the entire invocation, and is never updated. Its stdout is limited to the fixed
+pack ID, closed case/insert/replay counts, status, and whole-pack digest.
 
 Require a successful execution, then verify the assigned demo administrator
-can list and open `SYN-RC-0001`. With Azure OpenAI inference disabled, this case
-must display an explicit degraded/offline notice and no claim suggestions. The
+can list and open `SYN-RC-0001` through `SYN-RC-0004`. With Azure OpenAI
+inference disabled, every case must display an explicit degraded/offline notice
+and no claim suggestions. The
 tracked expectations are evaluation assertions, not engine output, and must
 never be rendered as a claim. Do not substitute `ENC-100237`, hand-edit the
 database row, or use this command for real/de-identified records.
+
+### Prepare the dormant Athena sandbox lane
+
+Request a dedicated, independently revocable Athena sandbox OAuth client for
+synthetic patients only. Ask Athena to return the exact API base URL, token URL,
+read-only scope strings, pagination/rate-limit behavior, and any outbound-IP
+allowlist requirement. Do not infer endpoint paths or broaden a scope name.
+
+After that grant is reviewed:
+
+1. Store only the dedicated client secret directly in Key Vault under the
+   reviewed `athenaClientSecretKeyVaultSecretName`; keep the value out of Bicep,
+   parameter files, shell history, logs, and application configuration.
+2. A deployment with `provisionAthenaSync=true` and
+   `enableAthenaSync=false` may create the dedicated identity and manual job for
+   infrastructure inspection. A manual start still fails closed because the
+   sync enable marker is false, and the identity has no Athena secret grant.
+3. Do not set `enableAthenaSync=true` until static egress/allowlisting is
+   resolved, the mock adapter suite passes, a separate database import role is
+   implemented, and synthetic live acceptance is approved. Enabling requires
+   exact HTTPS URLs, client ID, and synthetic/read-only scopes and adds only the
+   one secret-scoped Key Vault reader assignment.
+4. Even after enablement, execution is manual: this template defines no Athena
+   cron or event trigger. Start one reviewed execution explicitly and require
+   count-only logs, bounded pagination, idempotent replay, RLS, and credential
+   non-disclosure evidence before any further run.
 
 7. After staff assignments and the redirect URI are complete, redeploy with
    `externalIngress=true` and immediately run the acceptance checks below. If
@@ -345,10 +399,19 @@ inference:
    emit structured JSON only. Run
    `python -m cosmaneura_billing.log_scanner --self-test`, then capture a
    synthetic API/worker log sample and run the scanner against that file.
-2. Send a synthetic error request containing unique canaries in its path,
-   query, body, header, and exception text. In Log Analytics, confirm none of
-   those values appears and the request is represented only by a declared route
-   template, status, duration, exception class, and server-owned request ID.
+2. Send a synthetic error request containing unique canaries in its strict JSON
+   body, header, and exception text, and use a separate opaque synthetic
+   resource ID as the body-selected encounter/chase target. In Log Analytics,
+   confirm none of those values appears and the application request is
+   represented only by a declared fixed route, status, duration, exception
+   class, and server-owned request ID. Protected production routes must never
+   contain a path parameter: Azure Container Apps Easy Auth can emit raw request
+   targets from its `http-auth` sidecar before application middleware runs.
+   Query parameters are prohibited for protected application routes for the
+   same reason. Do not manufacture a canary-bearing URL path or query for this
+   test: the Easy Auth sidecar would persist it before application rejection.
+   CI instead proves that deployed routes declare no path or query parameters
+   and that official frontend request targets contain neither.
 3. After approval of the
    [Azure OpenAI cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md),
    redeploy the foundation first with `provisionAzureOpenAI=true` and the pinned
@@ -388,6 +451,67 @@ inference:
    identity has the metrics role, record measured p50/p95 tokens and latency for
    the cost plan, and restore `enableAzureOpenAIInference=false` until the
    contractual and operational gates are met.
+
+### Required cross-container log-scan evidence
+
+Scanning only the `api` container is insufficient. Easy Auth is outside the
+application middleware boundary, and job executions have independent console
+streams. For the exact acceptance time window and deployed digest, query both
+`ContainerAppConsoleLogs_CL` and `ContainerAppSystemLogs_CL` in Log Analytics.
+The query must account for all five logical sources below:
+
+| Count-report source | Azure rows included |
+| --- | --- |
+| `api-console` | API Container App console rows for the exact revision and `api` container |
+| `http-auth-console` | API Container App console rows for the exact revision and `http-auth` sidecar container |
+| `migration-job-console` | Migration/seed Container Apps Job console rows for the exact acceptance executions |
+| `chase-worker-job-console` | Chase-worker Container Apps Job console rows for the exact synthetic acceptance execution |
+| `platform-system` | Container Apps system rows for the exact API revision and acceptance job executions |
+
+Exercise every source so its row count is nonzero. Search every string field in
+those scoped rows for the complete set of opaque synthetic prohibited canaries.
+Perform the match and aggregation in Log Analytics; do not download, print, or
+paste raw `Log_s` values. Export only this closed count report (the numbers below
+are illustrative):
+
+```json
+{
+  "schema_version": 2,
+  "canary_count": 5,
+  "scope": {
+    "query_id": "cosmaneura-deployment-log-boundary-v1",
+    "canary_set_sha256": "<sha256 of sorted unique synthetic canaries>",
+    "image_digest": "sha256:<64 lowercase hex characters>",
+    "api_revision": "<exact revision name>",
+    "window_start": "2026-08-20T17:00:00Z",
+    "window_end": "2026-08-20T17:30:00Z",
+    "migration_execution_ids": ["<exact migration and seed execution names>"],
+    "chase_worker_execution_ids": ["<exact worker execution name>"]
+  },
+  "streams": [
+    {"source": "api-console", "row_count": 12, "prohibited_match_count": 0},
+    {"source": "chase-worker-job-console", "row_count": 1, "prohibited_match_count": 0},
+    {"source": "http-auth-console", "row_count": 4, "prohibited_match_count": 0},
+    {"source": "migration-job-console", "row_count": 1, "prohibited_match_count": 0},
+    {"source": "platform-system", "row_count": 3, "prohibited_match_count": 0}
+  ]
+}
+```
+
+Validate that report with:
+
+```bash
+python -m cosmaneura_billing.log_scanner \
+  --deployment-count-report /secure/path/deployment-log-counts.json
+```
+
+The validator fails closed for a missing, empty, duplicate, or unknown stream,
+an invalid or unbound scope, a window longer than 24 hours, or any
+nonzero prohibited-canary match. Its output is
+limited to finding codes and counts; it never repeats source rows, canaries, or
+the report path. Keep the existing raw application-event scan as a separate
+check: the count report proves cross-container coverage and canary absence, not
+that an application JSON event satisfies its closed schema.
 
 Real patient data remains prohibited until the executed Microsoft
 agreement/BAA is verified to cover Azure OpenAI and the selected US data zone,

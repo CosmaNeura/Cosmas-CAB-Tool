@@ -7,8 +7,8 @@ import { api } from "./api.js";
 
 /*
   Provider card + biller worksheet, wired to the live engine:
-    GET  /api/encounters/{id}   -> populate the editable documentation
-    POST /api/encounters/{id}/billing -> run an immutable SYN-RC fixture
+    POST /api/encounters/detail  -> populate the documentation
+    POST /api/encounters/billing -> run a server-classified read-only fixture
     POST /api/billing           -> run edited non-SYN-RC documentation
   When the engine is unreachable (`live` prop false) the demo encounter and a
   canned result keep the page walkable.
@@ -16,6 +16,8 @@ import { api } from "./api.js";
 
 const DEMO_ENCOUNTER = {
   encounterId: "ENC-100237",
+  dataClass: "operational",
+  readOnly: false,
   submittedEm: "99213",
   intake:
     "Hi doctor, I am a 26 year old male. I am 5 feet and 9 inches tall and weigh 255 pounds. " +
@@ -280,10 +282,14 @@ export default function BillingReview({ encounterId, live }) {
     setEnc(null);
     (async () => {
       try {
-        const e = await api(`/api/encounters/${encodeURIComponent(encounterId)}`);
+        const e = await api("/api/encounters/detail", {
+          method: "POST",
+          body: { encounterId },
+        });
         setEnc({
           encounterId: e.id, submittedEm: e.submittedEm || "",
           intake: e.intake || "", transcript: e.transcript || "", signedNote: e.signedNote || "",
+          dataClass: e.dataClass, readOnly: e.readOnly === true,
         });
       } catch (loadFailure) {
         setLoadError(loadFailure.message || "could not load encounter");
@@ -297,16 +303,18 @@ export default function BillingReview({ encounterId, live }) {
     return <p>{loadError ? `Could not load encounter: ${loadError}` : "Loading encounter…"}</p>;
   }
 
-  const isSyntheticReleaseCandidate = enc.encounterId === "SYN-RC-0001";
+  const isSyntheticReleaseCandidate = enc.dataClass === "synthetic_demo_release_candidate";
+  const documentationReadOnly = enc.readOnly === true;
 
   const run = async () => {
     setLoading(true);
     setError(null);
     try {
       if (live) {
-        const j = isSyntheticReleaseCandidate
-          ? await api(`/api/encounters/${encodeURIComponent(enc.encounterId)}/billing`, {
+        const j = documentationReadOnly
+          ? await api("/api/encounters/billing", {
               method: "POST",
+              body: { encounterId: enc.encounterId },
             })
           : await api("/api/billing", {
               method: "POST",
@@ -344,9 +352,9 @@ export default function BillingReview({ encounterId, live }) {
           </span>
         </div>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} readOnly={isSyntheticReleaseCandidate} />
-          <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} readOnly={isSyntheticReleaseCandidate} />
-          <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} readOnly={isSyntheticReleaseCandidate} />
+          <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} readOnly={documentationReadOnly} />
+          <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} readOnly={documentationReadOnly} />
+          <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} readOnly={documentationReadOnly} />
         </div>
         <div className="mt-4 flex items-center gap-3">
           <button

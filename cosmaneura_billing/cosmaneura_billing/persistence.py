@@ -40,11 +40,18 @@ class ReviewerNotAuthorized(PermissionError):
     """The feedback actor is not an active Coder or Admin membership."""
 
 
+SYNTHETIC_DEMO_SOURCE = "synthetic_demo_release_candidate"
+
+
 @dataclass(frozen=True)
 class StoredEncounter:
     resource_id: str
     bundle: VisitBundle
     version: int = 1
+    # Server-owned ingestion provenance. Presentation logic must use this
+    # persisted value, never an external-ID naming convention, when deciding
+    # whether an encounter is a read-only synthetic demo fixture.
+    source: str | None = None
 
 
 class MemoryEncounterStore:
@@ -61,8 +68,25 @@ class MemoryEncounterStore:
     def _resource_id(self, encounter_id: str) -> str:
         return str(uuid5(NAMESPACE_URL, f"{self.practice_id}:{encounter_id}"))
 
-    def upsert(self, bundle: VisitBundle, **_kwargs) -> StoredEncounter:
+    def upsert(
+        self,
+        bundle: VisitBundle,
+        *,
+        source: str | None = None,
+        **_kwargs,
+    ) -> StoredEncounter:
         prior = self._items.get(bundle.encounter_id)
+        if (
+            prior is not None
+            and prior.source == SYNTHETIC_DEMO_SOURCE
+            and (
+                prior.bundle != bundle
+                or source not in {None, SYNTHETIC_DEMO_SOURCE}
+            )
+        ):
+            raise PersistenceUnavailable(
+                "read-only synthetic encounter cannot be changed"
+            )
         row = StoredEncounter(
             self._resource_id(bundle.encounter_id), bundle,
             version=(
@@ -70,6 +94,12 @@ class MemoryEncounterStore:
                 if prior is not None and prior.bundle != bundle
                 else prior.version if prior is not None
                 else 1
+            ),
+            source=(
+                source
+                if source is not None
+                else prior.source if prior is not None
+                else None
             ),
         )
         self._items[bundle.encounter_id] = row
@@ -240,6 +270,7 @@ class PostgresEncounterStore:
                 submitted_icd10=list(row["submitted_icd10"] or []),
             ),
             version=int(row["version"]),
+            source=row["source"],
         )
 
     @staticmethod
@@ -247,7 +278,7 @@ class PostgresEncounterStore:
         return """SELECT encounter_uid, external_id, patient_age, patient_sex,
                          encounter_type, place_of_service, intake_text,
                          transcript, signed_note, provider_specialty,
-                         submitted_em_code, submitted_icd10, version
+                         submitted_em_code, submitted_icd10, version, source
                     FROM encounters"""
 
     def get(self, encounter_id: str) -> StoredEncounter | None:
@@ -271,10 +302,15 @@ class PostgresEncounterStore:
         self,
         bundle: VisitBundle,
         *,
-        source: str = "explicit_import",
+        source: str | None = None,
         ingested_by_tenant_id: str | None = None,
         ingested_by_user_id: str | None = None,
     ) -> StoredEncounter:
+        if source == SYNTHETIC_DEMO_SOURCE:
+            raise PersistenceUnavailable(
+                "reserved synthetic provenance requires the fixed seeder"
+            )
+        effective_source = source or "explicit_import"
         resource_id = str(uuid4())
         with self.context.connection() as conn:
             row = conn.execute(
@@ -299,7 +335,10 @@ class PostgresEncounterStore:
                        provider_specialty = EXCLUDED.provider_specialty,
                        submitted_em_code = EXCLUDED.submitted_em_code,
                        submitted_icd10 = EXCLUDED.submitted_icd10,
-                       source = EXCLUDED.source,
+                       source = CASE
+                           WHEN %s THEN EXCLUDED.source
+                           ELSE encounters.source
+                       END,
                        ingested_by_tenant_id = EXCLUDED.ingested_by_tenant_id,
                        ingested_by_user_id = EXCLUDED.ingested_by_user_id,
                        version = encounters.version + CASE WHEN ROW(
@@ -312,7 +351,8 @@ class PostgresEncounterStore:
                            encounters.signed_note,
                            encounters.provider_specialty,
                            encounters.submitted_em_code,
-                           encounters.submitted_icd10
+                           encounters.submitted_icd10,
+                           encounters.source
                        ) IS DISTINCT FROM ROW(
                            EXCLUDED.patient_age,
                            EXCLUDED.patient_sex,
@@ -323,21 +363,30 @@ class PostgresEncounterStore:
                            EXCLUDED.signed_note,
                            EXCLUDED.provider_specialty,
                            EXCLUDED.submitted_em_code,
-                           EXCLUDED.submitted_icd10
+                           EXCLUDED.submitted_icd10,
+                           CASE
+                               WHEN %s THEN EXCLUDED.source
+                               ELSE encounters.source
+                           END
                        ) THEN 1 ELSE 0 END,
                        updated_at = now()
+                   WHERE encounters.source <> %s
                    RETURNING encounter_uid, external_id, patient_age,
                              patient_sex, encounter_type, place_of_service,
                              intake_text, transcript, signed_note,
                              provider_specialty, submitted_em_code,
-                             submitted_icd10, version""",
+                             submitted_icd10, version, source""",
                 (
                     self.context.practice_id, resource_id, bundle.encounter_id,
                     bundle.patient_age, bundle.patient_sex, bundle.encounter_type,
                     bundle.place_of_service, bundle.intake_text, bundle.transcript,
                     bundle.signed_note, bundle.provider_specialty,
-                    bundle.submitted_em_code, bundle.submitted_icd10, source,
+                    bundle.submitted_em_code, bundle.submitted_icd10,
+                    effective_source,
                     ingested_by_tenant_id, ingested_by_user_id,
+                    source is not None,
+                    source is not None,
+                    SYNTHETIC_DEMO_SOURCE,
                 ),
             ).fetchone()
         if row is None:  # INSERT/UPDATE always returns exactly one scoped row.

@@ -336,6 +336,12 @@ def test_encounters_round_trip_update_and_database_rls(pilot_scope):
     )
     assert replayed == first
 
+    source_preserved = store_a.upsert(original_a)
+    assert source_preserved == first
+    source_changed = store_a.upsert(original_a, source="manual")
+    assert source_changed.source == "manual"
+    assert source_changed.version == first.version + 1
+
     updated = replace(
         original_a,
         signed_note="Updated synthetic note for practice A.",
@@ -344,7 +350,7 @@ def test_encounters_round_trip_update_and_database_rls(pilot_scope):
     second = store_a.upsert(updated, source="synthetic")
 
     assert second.resource_id == first.resource_id
-    assert second.version == first.version + 1
+    assert second.version == source_changed.version + 1
     assert second.bundle == updated
     assert store_b.get(encounter_id).bundle.signed_note == original_b.signed_note
 

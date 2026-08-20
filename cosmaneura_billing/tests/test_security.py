@@ -261,7 +261,7 @@ def test_conflicting_convenience_identity_header_is_rejected(tmp_path):
     [
         ("/api/billing", {"encounterId": "SYN-1"}, "userId"),
         ("/api/feedback", {"encounter_id": "SYN-1"}, "coder_id"),
-        ("/api/chase/unknown/action", {"action": "assign"}, "actor"),
+        ("/api/chase/action", {"chaseId": "unknown", "action": "assign"}, "actor"),
     ],
 )
 def test_caller_supplied_body_identity_is_rejected(
@@ -437,14 +437,14 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
         },
         headers=provider,
     ).status_code == 403
-    assert client.get(
-        "/api/chase/worklist", headers=coder,
+    assert client.post(
+        "/api/chase/worklist", json={}, headers=coder,
     ).status_code == 403
     assert client.get(
         "/api/feedback/summary", headers=billing_staff,
     ).status_code == 403
-    assert client.get(
-        "/api/chase/worklist", headers=billing_staff,
+    assert client.post(
+        "/api/chase/worklist", json={}, headers=billing_staff,
     ).status_code == 200
 
 
@@ -480,9 +480,70 @@ def test_auth_runs_before_engine_and_authenticated_unknown_stays_404(tmp_path):
     assert client.get("/api/health").status_code == 401
     assert client.app.state.orchestrator is None
     assert client.post(
-        "/api/encounters/DOES-NOT-EXIST/billing",
+        "/api/encounters/billing",
+        json={"encounterId": "DOES-NOT-EXIST"},
         headers=_auth_headers(roles=("Coder",)),
     ).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/api/encounters/ENC-100237"),
+        ("post", "/api/encounters/ENC-100237/billing"),
+        ("get", "/api/encounters/ENC-100237/coder-view"),
+        ("get", "/api/encounters/ENC-100237/billing-tab"),
+        ("post", "/api/chase/synthetic-patient/action"),
+        ("post", "/api/chase/synthetic-patient/release-message"),
+    ],
+)
+def test_identifier_bearing_legacy_request_targets_are_unreachable(
+    tmp_path, method, path,
+):
+    client, _ = _client(tmp_path)
+
+    response = getattr(client, method)(path, headers=_auth_headers())
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/encounters/detail", {"encounterId": "../ENC-100237"}),
+        ("/api/encounters/billing", {"encounterId": "ENC 100237"}),
+        ("/api/encounters/coder-view", {"encounterId": "ENC-100237/claim"}),
+        ("/api/chase/action", {"chaseId": "patient/path"}),
+    ],
+)
+def test_fixed_path_resource_ids_are_strictly_validated(tmp_path, path, body):
+    client, _ = _client(tmp_path)
+
+    response = client.post(path, json=body, headers=_auth_headers())
+
+    assert response.status_code == 422
+    identifier = "chaseId" if "chaseId" in body else "encounterId"
+    assert any(
+        identifier in error["loc"] for error in response.json()["detail"]
+    )
+
+
+def test_fixed_encounter_route_audit_never_carries_the_external_id(tmp_path):
+    store = MemoryAccessAuditStore()
+    client, _ = _client(tmp_path, store=store)
+
+    response = client.post(
+        "/api/encounters/detail",
+        json={"encounterId": "ENC-100237"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    event = store.events[-1]
+    assert event.route == "/api/encounters/detail"
+    assert event.action == "encounter.view"
+    UUID(event.resource_id)
+    assert "ENC-100237" not in json.dumps(asdict(event), sort_keys=True)
 
 
 def test_audit_records_throttled_and_oversized_attempts(tmp_path):

@@ -45,8 +45,12 @@ def _detect(client):
 
 def _action(client, chase_id, payload, *, action_id=None):
     return client.post(
-        f"/api/chase/{chase_id}/action",
-        json={"action_id": action_id or str(uuid4()), **payload},
+        "/api/chase/action",
+        json={
+            "chaseId": chase_id,
+            "action_id": action_id or str(uuid4()),
+            **payload,
+        },
     )
 
 
@@ -66,15 +70,17 @@ def test_detect_is_idempotent(client):
 
 def test_worklist_buckets_and_filters(client):
     _detect(client)
-    body = client.get("/api/chase/worklist").json()
+    body = client.post("/api/chase/worklist", json={}).json()
     assert body["counts"]["by_bucket"] == {"missing": 1, "expired": 0,
                                           "eligibility": 1}
-    eligibility = client.get("/api/chase/worklist?bucket=eligibility").json()
+    eligibility = client.post(
+        "/api/chase/worklist", json={"bucket": "eligibility"},
+    ).json()
     assert [r["patient_ref"] for r in eligibility["rows"]] == ["API-2"]
 
 
 def test_worklist_exposes_the_policy_and_who_approved_it(client):
-    policy = client.get("/api/chase/worklist").json()["policy"]
+    policy = client.post("/api/chase/worklist", json={}).json()["policy"]
     assert policy["approval_mode"] in ("per_policy", "per_message")
     # Unapproved out of the box: the staff who own the process approve it.
     assert policy["approved"] is False
@@ -94,7 +100,9 @@ def test_priority_orders_the_list(client):
 def test_assign_then_filter_by_assignee(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
     _action(client, chase_id, {"action": "assign", "assignee": "maggie"})
-    body = client.get("/api/chase/worklist?assignee=maggie").json()
+    body = client.post(
+        "/api/chase/worklist", json={"assignee": "maggie"},
+    ).json()
     assert len(body["rows"]) == 1
 
 
@@ -181,7 +189,7 @@ def test_unknown_action_and_unknown_chase(client):
 # --------------------------------------------------------------------------- #
 def test_metrics_report_outstanding_and_flag_the_missing_baseline(client):
     _detect(client)
-    body = client.get("/api/chase/metrics").json()
+    body = client.post("/api/chase/metrics", json={}).json()
     assert body["measured"]["outstanding"] == 2
     assert body["baseline_available"] is False
     assert "re-ask" in body["note"]
@@ -193,9 +201,13 @@ def test_metrics_compute_a_delta_when_a_baseline_is_supplied(client):
         "action": "log_attempt", "channel": "phone",
         "outcome": "reached", "minutes_spent": 4.0})
     _action(client, chase_id, {"action": "verify"})
-    body = client.get(
-        "/api/chase/metrics?baseline_minutes_per_card=12&"
-        "baseline_claims_held_monthly=400").json()
+    body = client.post(
+        "/api/chase/metrics",
+        json={
+            "baselineMinutesPerCard": 12,
+            "baselineClaimsHeldMonthly": 400,
+        },
+    ).json()
     assert body["baseline_available"] is True
     assert body["minutes_per_card_delta"] == -8.0
     assert body["measured"]["verified_closed"] == 1

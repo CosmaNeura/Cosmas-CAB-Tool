@@ -84,13 +84,18 @@ def test_coder_view_carries_inference_mode_and_degraded():
     client = TestClient(app)
     ids = [e["id"] for e in client.get("/api/encounters").json()]
 
-    demo = client.get(f"/api/encounters/{SAMPLE_VISIT.encounter_id}/coder-view").json()
+    demo = client.post(
+        "/api/encounters/coder-view",
+        json={"encounterId": SAMPLE_VISIT.encounter_id},
+    ).json()
     assert demo["inferenceMode"] == "mock"
     assert demo["degraded"] is None
     assert demo["em"]["code"] == "99214"
 
     other = next(i for i in ids if i != SAMPLE_VISIT.encounter_id)
-    view = client.get(f"/api/encounters/{other}/coder-view").json()
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": other},
+    ).json()
     assert view["degraded"]["reason"] == "offline_model_unsupported_encounter"
     assert view["em"] is None and view["dx"] == []
     # and no fabricated diagnoses in the withheld list either

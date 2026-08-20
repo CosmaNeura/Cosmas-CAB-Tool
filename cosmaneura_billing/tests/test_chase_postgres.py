@@ -265,7 +265,7 @@ def test_api_restart_reads_the_same_postgres_worklist(monkeypatch, tmp_path):
     second_process = TestClient(api.create_app(
         settings=settings, frontend_dist=tmp_path / "missing-frontend",
     ))
-    restored = second_process.get("/api/chase/worklist")
+    restored = second_process.post("/api/chase/worklist", json={})
 
     assert restored.status_code == 200
     assert [row["patient_ref"] for row in restored.json()["rows"]] == [

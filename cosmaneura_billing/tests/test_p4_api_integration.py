@@ -71,9 +71,9 @@ _CONTACT_SNAPSHOT_ID = "22222222-2222-4222-8222-222222222222"
         ),
         (
             "POST",
-            "/api/chase/synthetic-patient/release-message",
+            "/api/chase/release-message",
             "chase.decide",
-            "/api/chase/{id}/release-message",
+            "/api/chase/release-message",
         ),
     ],
 )
@@ -323,7 +323,8 @@ def test_phone_log_attempt_routes_to_atomic_scheduler_completion(p4_api):
     legacy_store = SingleLookupStore(_chase_item(chase_id=chase_id))
     client.app.state.chase_context["store"] = legacy_store
 
-    response = client.post(f"/api/chase/{chase_id}/action", json={
+    response = client.post("/api/chase/action", json={
+        "chaseId": chase_id,
         "action_id": action_id,
         "action": "log_attempt",
         "channel": "phone",
@@ -351,7 +352,8 @@ def test_direct_contract_release_routes_to_exact_gate_release(p4_api):
     )
     client.app.state.chase_context["store"] = legacy_store
 
-    response = client.post(f"/api/chase/{chase_id}/action", json={
+    response = client.post("/api/chase/action", json={
+        "chaseId": chase_id,
         "action_id": action_id,
         "action": "release",
         "reason": "staff confirmed insurance outreach is appropriate",
@@ -373,8 +375,9 @@ def test_per_message_release_resolves_and_releases_the_exact_cadence(p4_api):
     _put_chase(store, chase_id=chase_id)
 
     response = client.post(
-        f"/api/chase/{chase_id}/release-message",
+        "/api/chase/release-message",
         json={
+            "chaseId": chase_id,
             "release_id": release_id,
             "reason": "staff reviewed this exact scheduled message",
         },
@@ -399,7 +402,7 @@ def test_durable_worklist_uses_active_policy_status(p4_api):
     client, _store, scheduler, fingerprint = p4_api
     scheduler.active = True
 
-    response = client.get("/api/chase/worklist")
+    response = client.post("/api/chase/worklist", json={})
 
     assert response.status_code == 200, response.text
     policy = response.json()["policy"]
