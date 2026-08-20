@@ -94,6 +94,14 @@ bootstraps only the explicitly named initial Entra administrator; all later
 membership changes use the reviewed owner-only CLI documented in
 `migrations/README.md`. Login never creates a user or membership.
 
+The durable encounter store is also empty by default; production never imports
+the local `ENC-100237` fixture. A synthetic-only release demo may load exactly
+`cosmaneura-demo-rc-v1` case `SYN-RC-0001` with
+`python -m cosmaneura_billing.seed_demo_release_candidate` through the private
+migration job, following the bounded procedure in `../infra/README.md`. The
+command accepts no payload, verifies the packaged case digest and practice
+binding, is an exact-replay no-op, and refuses to overwrite a conflicting row.
+
 **Offline mode covers one encounter.** Unless
 `COSMANEURA_AZURE_OPENAI_ENABLED=true` and the complete Azure endpoint,
 deployment, model, API-version, and managed-identity configuration are present,

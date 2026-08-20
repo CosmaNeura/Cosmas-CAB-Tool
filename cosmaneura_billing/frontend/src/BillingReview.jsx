@@ -8,7 +8,8 @@ import { api } from "./api.js";
 /*
   Provider card + biller worksheet, wired to the live engine:
     GET  /api/encounters/{id}   -> populate the editable documentation
-    POST /api/billing           -> run the 5-agent pipeline on what's shown
+    POST /api/encounters/{id}/billing -> run an immutable SYN-RC fixture
+    POST /api/billing           -> run edited non-SYN-RC documentation
   When the engine is unreachable (`live` prop false) the demo encounter and a
   canned result keep the page walkable.
 */
@@ -248,20 +249,22 @@ function BillerCard({ r }) {
   );
 }
 
-function Field({ label, value, onChange, rows = 3 }) {
+function Field({ label, value, onChange, rows = 3, readOnly = false }) {
   return (
     <label className="block">
       <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">{label}</span>
       <textarea
-        value={value} onChange={(e) => onChange(e.target.value)} rows={rows}
-        className="w-full resize-y rounded-lg border border-slate-200 bg-white p-2.5 text-sm text-slate-700 shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+        value={value} onChange={(e) => onChange(e.target.value)} rows={rows} readOnly={readOnly}
+        className={`w-full resize-y rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 shadow-sm outline-none ${
+          readOnly ? "bg-slate-50" : "bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+        }`}
       />
     </label>
   );
 }
 
 export default function BillingReview({ encounterId, live }) {
-  const [enc, setEnc] = useState(live ? null : DEMO_ENCOUNTER);
+  const [enc, setEnc] = useState(null);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -272,6 +275,7 @@ export default function BillingReview({ encounterId, live }) {
     setResult(null);
     setError(null);
     setLoadError(null);
+    if (!encounterId) { setEnc(null); return; }
     if (!live) { setEnc(DEMO_ENCOUNTER); return; }
     setEnc(null);
     (async () => {
@@ -288,22 +292,29 @@ export default function BillingReview({ encounterId, live }) {
   }, [encounterId, live]);
 
   // UI SEAM (P2): a live API failure must never substitute a canned claim.
-  if (live && !enc) {
+  if (!enc) {
+    if (!encounterId) return null;
     return <p>{loadError ? `Could not load encounter: ${loadError}` : "Loading encounter…"}</p>;
   }
+
+  const isSyntheticReleaseCandidate = enc.encounterId === "SYN-RC-0001";
 
   const run = async () => {
     setLoading(true);
     setError(null);
     try {
       if (live) {
-        const j = await api("/api/billing", {
-          method: "POST",
-          body: {
-            encounterId: enc.encounterId, submittedEm: enc.submittedEm || null,
-            intake: enc.intake, transcript: enc.transcript, signedNote: enc.signedNote,
-          },
-        });
+        const j = isSyntheticReleaseCandidate
+          ? await api(`/api/encounters/${encodeURIComponent(enc.encounterId)}/billing`, {
+              method: "POST",
+            })
+          : await api("/api/billing", {
+              method: "POST",
+              body: {
+                encounterId: enc.encounterId, submittedEm: enc.submittedEm || null,
+                intake: enc.intake, transcript: enc.transcript, signedNote: enc.signedNote,
+              },
+            });
         setResult(j);
       } else {
         await new Promise((r) => setTimeout(r, 500));
@@ -320,15 +331,22 @@ export default function BillingReview({ encounterId, live }) {
     <>
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm font-medium text-slate-900">Encounter {enc.encounterId}</p>
+          <div>
+            <p className="text-sm font-medium text-slate-900">Encounter {enc.encounterId}</p>
+            {isSyntheticReleaseCandidate && (
+              <p className="mt-1 text-xs text-slate-500">
+                Validated synthetic release-candidate fixture · documentation is read-only
+              </p>
+            )}
+          </div>
           <span className="text-xs text-slate-500">
             {enc.submittedEm ? <>submitted as <code className="font-mono">{enc.submittedEm}</code></> : "no code submitted yet"}
           </span>
         </div>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} />
-          <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} />
-          <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} />
+          <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} readOnly={isSyntheticReleaseCandidate} />
+          <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} readOnly={isSyntheticReleaseCandidate} />
+          <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} readOnly={isSyntheticReleaseCandidate} />
         </div>
         <div className="mt-4 flex items-center gap-3">
           <button
@@ -345,7 +363,19 @@ export default function BillingReview({ encounterId, live }) {
         )}
       </div>
 
-      {result && (
+      {result?.degraded ? (
+        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-sm">
+          <p className="text-sm font-medium">Inference is unavailable for this encounter</p>
+          <p className="mt-1 text-sm leading-relaxed text-amber-800">{result.degraded.detail}</p>
+          <p className="mt-2 text-xs text-amber-700">
+            Encounter {result.encounterId} · {result.inferenceMode} mode
+            {result.inferenceModel ? ` (${result.inferenceModel})` : ""}
+          </p>
+          <p className="mt-2 text-xs text-amber-700">
+            No claim suggestions or feedback are shown for this degraded run.
+          </p>
+        </div>
+      ) : result ? (
         <>
           <div className="mt-5 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
             <ShieldCheck size={18} className="mt-0.5 shrink-0" />
@@ -382,7 +412,7 @@ export default function BillingReview({ encounterId, live }) {
             </div>
           </div>
         </>
-      )}
+      ) : null}
     </>
   );
 }

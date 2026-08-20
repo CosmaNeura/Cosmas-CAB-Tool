@@ -42,6 +42,12 @@ approval to replace only cancelled or definitive-failure reservations;
 submitting, accepted, and ambiguous deliveries remain uniqueness barriers and
 are never made retryable.
 
+`007_synthetic_demo_release_candidate_source` adds one explicit encounter
+source value for the fixed, repository-owned synthetic demo seed. It does not
+insert a chart or broaden any runtime privilege. The matching down migration
+restores the prior allowlist and therefore fails closed while such a seed row
+still exists.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).
@@ -162,6 +168,23 @@ and tenant binding and never accepts a display name or email as identity. There
 is no just-in-time membership path: an Entra login without an active database
 membership remains denied.
 
+### Fixed synthetic demo seed
+
+After migration `007` is applied, a reviewed synthetic demo may load the one
+pinned release-candidate case through the same private migration execution
+environment:
+
+    DATABASE_URL='<migration-owner DSN>' \
+    COSMANEURA_ENTRA_TENANT_ID='<tenant UUID>' \
+    COSMANEURA_PRACTICE_ID='<stable practice ID>' \
+    python -m cosmaneura_billing.seed_demo_release_candidate
+
+The command accepts no arguments. It validates the packaged pack, fixed case
+ID and digest, proves the practice/tenant binding, inserts without an update
+path, and treats only byte-equivalent persisted fields as an idempotent replay.
+Use the Container Apps override and acceptance sequence in `../../infra/README.md`
+for Azure; never paste the owner DSN into a shell command there.
+
 ### Manual SQL (disposable/reviewed use only)
 
 Plain psql:
@@ -172,7 +195,9 @@ Plain psql:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004_chase_delivery_runtime.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_accepted_delivery_attempt.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_synthetic_demo_release_candidate_source.up.sql
     # rollback:
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_synthetic_demo_release_candidate_source.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_accepted_delivery_attempt.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004_chase_delivery_runtime.down.sql
