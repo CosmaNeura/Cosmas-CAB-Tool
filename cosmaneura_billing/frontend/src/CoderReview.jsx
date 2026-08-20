@@ -146,11 +146,12 @@ export default function CoderReview({ encounterId, live }) {
   // load the pre-coded claim for this encounter
   useEffect(() => {
     setEngine(null); setDone(null); setError(null); setAdded([]); setSeconds(0);
+    pendingPayload.current = null;
+    if (!encounterId) { reviewId.current = null; return; }
     // P3 DATA SEAM: one stable retry key per loaded review draft. Keep it until
     // the server acknowledges the submission so response loss cannot double
     // count a preference signal.
     reviewId.current = globalThis.crypto.randomUUID();
-    pendingPayload.current = null;
     (async () => {
       let eng = live ? null : FALLBACK_ENGINE;
       if (live) {
@@ -173,6 +174,7 @@ export default function CoderReview({ encounterId, live }) {
   useEffect(() => { const t = setInterval(() => setSeconds((s) => s + 1), 1000); return () => clearInterval(t); }, []);
 
   if (!engine) {
+    if (!encounterId) return null;
     // UI SEAM (P2): never turn an expired/denied session into a mock claim.
     if (error) return <p>{error}</p>;
     return (
@@ -195,6 +197,9 @@ export default function CoderReview({ encounterId, live }) {
         <p className="mt-2 text-xs text-amber-700">
           Encounter {engine.encounterId} · {engine.inferenceMode} mode
           {engine.inferenceModel ? ` (${engine.inferenceModel})` : ""}
+        </p>
+        <p className="mt-2 text-xs text-amber-700">
+          No claim suggestions or feedback actions are shown for this degraded run.
         </p>
       </div>
     );

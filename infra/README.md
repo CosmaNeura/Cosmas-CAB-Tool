@@ -222,6 +222,37 @@ The API startup performs its own database/schema and access-audit checks before 
 returns 200, so a missing migration, unreachable database, or omitted bundled
 NCCI/coverage data fails closed. The app has no public ingress at this stage.
 
+### Load the fixed synthetic demo encounter
+
+The production PostgreSQL store never auto-seeds a chart. For a reviewed
+synthetic-only demo, run the fixed-purpose seed command through the existing
+private migration job only after the normal migration execution above has
+succeeded:
+
+```bash
+az containerapp job start \
+  --resource-group <resource-group> \
+  --name <app-output-migrationJobName> \
+  --container-name migrate \
+  --command "python" \
+  --args "-m" "cosmaneura_billing.seed_demo_release_candidate"
+```
+
+The command accepts no chart, file, or identifier argument. It loads only
+`cosmaneura-demo-rc-v1` case `SYN-RC-0001` from the installed package, checks a
+pinned SHA-256 digest, proves the configured practice/tenant binding inside the
+database transaction, and inserts source
+`synthetic_demo_release_candidate`. An exact retry reports `replayed`; any
+different row occupying that case ID reports `conflict` and is never updated.
+Its stdout is limited to the fixed pack ID, case ID, status, and digest.
+
+Require a successful execution, then verify the assigned demo administrator
+can list and open `SYN-RC-0001`. With Azure OpenAI inference disabled, this case
+must display an explicit degraded/offline notice and no claim suggestions. The
+tracked expectations are evaluation assertions, not engine output, and must
+never be rendered as a claim. Do not substitute `ENC-100237`, hand-edit the
+database row, or use this command for real/de-identified records.
+
 7. After staff assignments and the redirect URI are complete, redeploy with
    `externalIngress=true` and immediately run the acceptance checks below. If
    any protected request reaches the application without the expected result,

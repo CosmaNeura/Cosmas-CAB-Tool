@@ -22,7 +22,8 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
   const [serviceError, setServiceError] = useState(null);
   const [encounters, setEncounters] = useState([]);
-  const [selected, setSelected] = useState("ENC-100237");
+  const [encountersLoaded, setEncountersLoaded] = useState(false);
+  const [selected, setSelected] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -31,7 +32,9 @@ export default function App() {
         setHealth(h);
         const encs = await api("/api/encounters");
         setEncounters(encs);
-        if (encs.length && !encs.some((e) => e.id === selected)) setSelected(encs[0].id);
+        setSelected((current) => (
+          encs.some((e) => e.id === current) ? current : (encs[0]?.id || null)
+        ));
       } catch (error) {
         if (error?.status === 401 || error?.status === 403) {
           setAuthStatus(error.status);
@@ -40,9 +43,10 @@ export default function App() {
         } else {
           setHealth(false);
         }
+      } finally {
+        setEncountersLoaded(true);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // UI SEAM (P2): Container Apps owns the Entra session. Keep this state
@@ -82,7 +86,7 @@ export default function App() {
             {health === null && <Pill tone="bg-slate-100 text-slate-500 ring-slate-300">connecting…</Pill>}
             {health === false && (
               <Pill tone="bg-amber-50 text-amber-700 ring-amber-200">
-                <WifiOff size={12} className="mr-1" />engine offline · mock data
+                <WifiOff size={12} className="mr-1" />billing service offline · no mock claim loaded
               </Pill>
             )}
             {health && (
@@ -108,7 +112,7 @@ export default function App() {
           {encounters.length > 0 && (
             <label className="flex items-center gap-2 text-sm text-slate-600">
               Encounter
-              <select value={selected} onChange={(e) => setSelected(e.target.value)}
+              <select value={selected || ""} onChange={(e) => setSelected(e.target.value)}
                       className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm shadow-sm">
                 {encounters.map((e) => (
                   <option key={e.id} value={e.id}>
@@ -122,6 +126,16 @@ export default function App() {
 
         {health === null ? (
           <p>Connecting to the billing service…</p>
+        ) : !encountersLoaded ? (
+          <p>Loading available encounters…</p>
+        ) : !selected ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-sm">
+            <p className="text-sm font-medium">No synthetic demo encounter is loaded</p>
+            <p className="mt-1 text-sm text-amber-800">
+              Load the approved synthetic release-candidate fixture before starting a review.
+              No mock claim or expected code has been substituted.
+            </p>
+          </div>
         ) : view === "billing" ? (
           <BillingReview encounterId={selected} live={Boolean(health)} />
         ) : (
