@@ -4,6 +4,9 @@ Status: mock adapter and dormant job infrastructure implemented locally; no
 Athena credential, network call, imported record, or production write path is
 enabled. The exact Preview enrollment boundary is captured in
 [ATHENA_SANDBOX_ACCESS_REQUEST.md](ATHENA_SANDBOX_ACCESS_REQUEST.md).
+The authenticated portal exposes proprietary AthenaOne access only as a
+Read/Write wildcard, so the desired read-only boundary is not yet grantable at
+the vendor-scope layer and live execution remains blocked.
 
 ## Deployment decision
 

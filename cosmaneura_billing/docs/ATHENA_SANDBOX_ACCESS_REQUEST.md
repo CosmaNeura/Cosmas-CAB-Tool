@@ -1,6 +1,9 @@
 # Athena Preview synthetic/read-only access request
 
-Status: pending Developer Portal sign-in and final credential-creation approval.
+Status: authenticated portal review completed 2026-08-20. An existing Preview
+application already matches the proposed integration, but athenahealth does not
+offer a read-only proprietary AthenaOne scope. No application, credential, or
+scope was created, opened, rotated, or changed during this review.
 
 Official onboarding source:
 
@@ -23,9 +26,38 @@ Official onboarding source:
 | Write access | Not requested |
 | Webhooks/events | Not requested |
 
-The portal's exact scope names must be read from the authenticated Scopes page.
-Do not guess or broaden scope strings in code or documentation. Select only read
-scopes needed for:
+## Authenticated portal finding — read-only scope unavailable
+
+The existing `Cosmaneura CAB Pilot` Preview application is already configured
+as a 2-Legged OAuth app with Non-Certified and Certified API access. Its app
+description limits the first phase to read-only sandbox billing and coverage
+workflows and explicitly defers production and write behavior.
+
+However, the authenticated Scopes page exposes the proprietary AthenaOne
+product as one checked `Read/Write` selection. The resulting scope is
+`athena/service/Athenanet.MDP.*`; the portal does not expose separate read and
+write scopes for that product. The edit screen was cancelled without changing
+the grant, and the Credentials page was not opened.
+
+Therefore the desired boundary cannot be enforced by the vendor scope for the
+proprietary billing/claim APIs. The current broad Preview grant must remain
+unused while the sync lane is disabled. Before any token request, choose and
+approve one of these narrower operating strategies:
+
+1. use only Certified/FHIR read scopes for the limited data they can provide,
+   accepting that this will not cover the full claims/denials workflow; or
+2. retain the Preview AthenaOne wildcard but enforce a reviewed GET-only
+   endpoint allowlist, synthetic Practice `195900`, and read-only adapter
+   contract in code and acceptance tests, with no generic request method
+   exposed to the sync workflow.
+
+Option 2 provides the intended billing effectiveness but is an explicit
+least-privilege exception at the vendor OAuth layer. It requires separate user
+approval before retrieving or storing the existing client credential.
+
+For any future Certified/FHIR addition, read the exact scope names from the
+authenticated Scopes page. Do not guess or broaden scope strings in code or
+documentation. Select only read scopes needed for:
 
 1. practice and department reference data required to validate identifiers;
 2. appointments and encounters;
