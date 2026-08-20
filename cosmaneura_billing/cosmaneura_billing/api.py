@@ -4,10 +4,10 @@ Endpoints (shapes match the documented contracts in frontend/*.jsx):
 
   GET  /api/health                        engine + knowledge-base status
   GET  /api/encounters                    encounters available to demo
-  GET  /api/encounters/{id}               one encounter's documentation
-  POST /api/encounters/{id}/billing       run the pipeline on a stored encounter
+  POST /api/encounters/detail             one encounter's documentation
+  POST /api/encounters/billing            run the pipeline on a stored encounter
   POST /api/billing                       run the pipeline on posted documentation
-  GET  /api/encounters/{id}/coder-view    pre-coded claim for the coder review UI
+  POST /api/encounters/coder-view         pre-coded claim for the coder review UI
   POST /api/feedback                      persist a coder's reviewed decisions
   GET  /api/feedback/summary              accuracy metrics + tuning backlog
 
@@ -35,7 +35,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import coder_feedback
 from .access_audit import (
@@ -55,7 +55,7 @@ from .orchestrator import BillingOrchestrator
 from .persistence import (
     MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
     PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
-    UnknownEncounter, postgres_services,
+    SYNTHETIC_DEMO_SOURCE, UnknownEncounter, postgres_services,
 )
 from .preferences import PreferenceStore
 from .runtime import PHISafeHTTPMiddleware, configure_json_logging
@@ -71,6 +71,7 @@ router = APIRouter()
 _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
          CodeKind.PROCEDURE: "PROCEDURE", CodeKind.MODIFIER: "MODIFIER"}
 _ENGINE_VERSION = "cpt2026u4;icd10-FY2026;ncci-2026Q3-v32.2;mcd-NGS-2026-07-20"
+_REQUEST_RESOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 
 def _review_context_binding(
@@ -354,6 +355,30 @@ class StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class EncounterRequest(StrictRequest):
+    encounterId: str = Field(min_length=1, max_length=128)
+
+    @field_validator("encounterId")
+    @classmethod
+    def validate_encounter_id(cls, value: str) -> str:
+        if _REQUEST_RESOURCE_ID.fullmatch(value) is None:
+            raise ValueError("encounterId has an invalid format")
+        return value
+
+
+class BillingTabRequest(EncounterRequest):
+    generatedAt: str = Field(default="", max_length=64)
+
+
+class EMBenchmarkRequest(StrictRequest):
+    specialty: Optional[str] = Field(default=None, max_length=128)
+    state: str = Field(default="NH", min_length=2, max_length=2)
+
+
+class PayerDenialRequest(StrictRequest):
+    state: str = Field(default="NH", min_length=2, max_length=2)
+
+
 class ProcessRequest(StrictRequest):
     encounterId: str = Field(default="ADHOC-1", min_length=1, max_length=128)
     intake: str = Field(default="", max_length=250_000)
@@ -382,7 +407,29 @@ class ChaseDetectRequest(StrictRequest):
     snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=5_000)
 
 
-class ChaseActionRequest(StrictRequest):
+class ChaseWorklistRequest(StrictRequest):
+    bucket: str = Field(default="", max_length=32)
+    assignee: str = Field(default="", max_length=128)
+    needsPerson: bool = False
+
+
+class ChaseMetricsRequest(StrictRequest):
+    baselineMinutesPerCard: Optional[float] = Field(default=None, ge=0)
+    baselineClaimsHeldMonthly: Optional[int] = Field(default=None, ge=0)
+
+
+class ChaseTargetRequest(StrictRequest):
+    chaseId: str = Field(min_length=1, max_length=128)
+
+    @field_validator("chaseId")
+    @classmethod
+    def validate_chase_id(cls, value: str) -> str:
+        if _REQUEST_RESOURCE_ID.fullmatch(value) is None:
+            raise ValueError("chaseId has an invalid format")
+        return value
+
+
+class ChaseActionRequest(ChaseTargetRequest):
     action_id: UUID
     action: str = Field(min_length=1, max_length=32)
     assignee: str = Field(default="", max_length=128)
@@ -417,7 +464,7 @@ class ChasePolicyRevocationRequest(StrictRequest):
     reason: str = Field(min_length=1, max_length=2_000)
 
 
-class ChaseMessageReleaseRequest(StrictRequest):
+class ChaseMessageReleaseRequest(ChaseTargetRequest):
     release_id: UUID
     reason: str = Field(default="", max_length=2_000)
 
@@ -550,35 +597,48 @@ def list_encounters(request: Request) -> list[dict[str, Any]]:
         "id": b.encounter_id,
         "encounterType": b.encounter_type,
         "submittedEm": b.submitted_em_code,
-        "preview": (b.signed_note or b.transcript)[:110],
+        **_encounter_data_policy(row),
     } for row in _request_encounter_store(request).all() for b in [row.bundle]]
+
+
+def _encounter_data_policy(stored) -> dict[str, Any]:
+    is_synthetic_demo = stored.source == SYNTHETIC_DEMO_SOURCE
+    return {
+        "dataClass": (
+            SYNTHETIC_DEMO_SOURCE if is_synthetic_demo else "operational"
+        ),
+        "readOnly": is_synthetic_demo,
+    }
 
 
 def _get_stored_encounter(request: Request, encounter_id: str):
     stored = _request_encounter_store(request).get(encounter_id)
     if stored is None:
-        raise HTTPException(status_code=404, detail=f"unknown encounter '{encounter_id}'")
+        raise HTTPException(status_code=404, detail="unknown encounter")
     _set_audit_resource(request, stored.resource_id)
     return stored
 
 
-@router.get("/api/encounters/{encounter_id}")
-def get_encounter(request: Request, encounter_id: str) -> dict[str, Any]:
-    b = _get_stored_encounter(request, encounter_id).bundle
+@router.post("/api/encounters/detail")
+def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
+    stored = _get_stored_encounter(request, req.encounterId)
+    b = stored.bundle
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,
             "transcript": b.transcript, "signedNote": b.signed_note,
-            "placeOfService": b.place_of_service}
+            "placeOfService": b.place_of_service,
+            **_encounter_data_policy(stored)}
 
 
-@router.post("/api/encounters/{encounter_id}/billing")
-def bill_stored(request: Request, encounter_id: str) -> dict[str, Any]:
-    bundle = _get_stored_encounter(request, encounter_id).bundle
+@router.post("/api/encounters/billing")
+def bill_stored(request: Request, req: EncounterRequest) -> dict[str, Any]:
+    stored = _get_stored_encounter(request, req.encounterId)
+    bundle = stored.bundle
     principal = _request_principal(request)
     result = _request_orchestrator(request).process(
         bundle, user_id=principal.user_id
     )
-    return _billing_json(bundle, result)
+    return {**_billing_json(bundle, result), **_encounter_data_policy(stored)}
 
 
 @router.post("/api/billing")
@@ -597,9 +657,9 @@ def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
     return _billing_json(bundle, result)
 
 
-@router.get("/api/encounters/{encounter_id}/coder-view")
-def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
-    stored = _get_stored_encounter(request, encounter_id)
+@router.post("/api/encounters/coder-view")
+def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
+    stored = _get_stored_encounter(request, req.encounterId)
     bundle = stored.bundle
     orch = _request_orchestrator(request)
     uid = _request_principal(request).user_id
@@ -609,6 +669,7 @@ def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
     view["reviewContext"] = _issue_review_context(
         stored, _request_principal(request),
     )
+    view.update(_encounter_data_policy(stored))
     # attach learned-history hints so the reviewer sees why a code was
     # refined or held ("you've declined this 3x")
     prefs = orch.preferences.for_user(uid)
@@ -621,17 +682,22 @@ def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
     return view
 
 
-@router.get("/api/encounters/{encounter_id}/billing-tab")
-def billing_tab(request: Request, encounter_id: str,
-                generated_at: str = "") -> dict[str, Any]:
+@router.post("/api/encounters/billing-tab")
+def billing_tab(request: Request, req: BillingTabRequest) -> dict[str, Any]:
     """The provider billing tab (F1): the same visit reorganised as a billing
     reference. The clinical note is never altered — this is a view over it."""
-    bundle = _get_stored_encounter(request, encounter_id).bundle
+    stored = _get_stored_encounter(request, req.encounterId)
+    bundle = stored.bundle
     result = _request_orchestrator(request).process(
         bundle, user_id=_request_principal(request).user_id
     )
-    return build_billing_tab_view(
-        bundle, result, engine_version=_ENGINE_VERSION, generated_at=generated_at)
+    return {
+        **build_billing_tab_view(
+            bundle, result, engine_version=_ENGINE_VERSION,
+            generated_at=req.generatedAt,
+        ),
+        **_encounter_data_policy(stored),
+    }
 
 
 @router.post("/api/completeness")
@@ -706,15 +772,16 @@ def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
     return {"ok": True, "reviewId": str(fb.review_id), "replayed": not created}
 
 
-@router.get("/api/benchmarks/em")
-def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[str, Any]:
+@router.post("/api/benchmarks/em")
+def em_benchmarks(req: EMBenchmarkRequest) -> dict[str, Any]:
     """State + national E/M mix and allowed amounts — population benchmarks for
     opportunity-sizing only, never an input to coding an encounter."""
     from .benchmarks.em_benchmark import EMBenchmark, StateEMBenchmark
     nh = StateEMBenchmark()
-    if state.upper() != nh.state:
-        raise HTTPException(status_code=404, detail=f"no bundled benchmark for state '{state}'")
+    if req.state.upper() != nh.state:
+        raise HTTPException(status_code=404, detail="no bundled benchmark for state")
     nat = EMBenchmark()
+    specialty = req.specialty
     spec = specialty if specialty in (nh.specialties() if specialty else []) or specialty else None
     return {
         "state": nh.state,
@@ -727,14 +794,14 @@ def em_benchmarks(specialty: Optional[str] = None, state: str = "NH") -> dict[st
     }
 
 
-@router.get("/api/benchmarks/payer-denials")
-def payer_denials(state: str = "NH") -> dict[str, Any]:
+@router.post("/api/benchmarks/payer-denials")
+def payer_denials(req: PayerDenialRequest) -> dict[str, Any]:
     """Issuer-level Marketplace denial rates (CMS TC-PUF PY2026) — the
     'how tough is this payer' prior."""
     from .knowledge.denial_stats import PayerDenialRates
     rates = PayerDenialRates()
-    rows = rates.for_state(state)
-    return {"state": state.upper(), "source": "CMS Marketplace TC-PUF PY2026 (2024 claims)",
+    rows = rates.for_state(req.state)
+    return {"state": req.state.upper(), "source": "CMS Marketplace TC-PUF PY2026 (2024 claims)",
             "issuers": [{
                 "name": r.issuer_name, "claimsReceived": r.claims_received,
                 "denialRate": r.denial_rate, "topReason": r.top_reason or None,
@@ -869,9 +936,10 @@ def _approval_record_json(record) -> dict[str, Any]:
     }
 
 
-@router.get("/api/chase/worklist")
-def chase_worklist(request: Request, bucket: str = "", assignee: str = "",
-                   needs_person: bool = False) -> dict[str, Any]:
+@router.post("/api/chase/worklist")
+def chase_worklist(
+    request: Request, req: ChaseWorklistRequest,
+) -> dict[str, Any]:
     """The master list: one integrated view over missing, expired and eligibility."""
     _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
@@ -894,8 +962,11 @@ def chase_worklist(request: Request, bucket: str = "", assignee: str = "",
             "durable_status": durable,
         })
     return {
-        **ctx["store"].to_dict(bucket=bucket, assignee=assignee,
-                               needs_person=needs_person),
+        **ctx["store"].to_dict(
+            bucket=req.bucket,
+            assignee=req.assignee,
+            needs_person=req.needsPerson,
+        ),
         "policy": policy_view,
     }
 
@@ -1097,26 +1168,26 @@ def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
     return {"checked": len(snapshots), "detected": len(found), **worklist}
 
 
-@router.get("/api/chase/metrics")
-def chase_metrics(request: Request,
-                  baseline_minutes_per_card: Optional[float] = None,
-                  baseline_claims_held_monthly: Optional[int] = None) -> dict[str, Any]:
+@router.post("/api/chase/metrics")
+def chase_metrics(
+    request: Request, req: ChaseMetricsRequest,
+) -> dict[str, Any]:
     from .chase.metrics import baseline_comparison
 
     _require_roles(request, "BillingStaff", "Admin")
     return baseline_comparison(
         _request_chase_context(request)["store"].all_items(),
-        baseline_minutes_per_card=baseline_minutes_per_card,
-        baseline_claims_held_monthly=baseline_claims_held_monthly)
+        baseline_minutes_per_card=req.baselineMinutesPerCard,
+        baseline_claims_held_monthly=req.baselineClaimsHeldMonthly)
 
 
-@router.post("/api/chase/{chase_id}/release-message")
+@router.post("/api/chase/release-message")
 def chase_release_message(
     request: Request,
-    chase_id: str,
     req: ChaseMessageReleaseRequest,
 ) -> dict[str, Any]:
     """Admin release of the current exact per-message cadence rung."""
+    chase_id = req.chaseId
     principal = _require_roles(request, "Admin")
     context, scheduler = _scheduler_context(request)
     store = context["store"]
@@ -1151,9 +1222,8 @@ def chase_release_message(
         _raise_scheduler_http(exc)
 
 
-@router.post("/api/chase/{chase_id}/action")
-def chase_action(request: Request, chase_id: str,
-                 req: ChaseActionRequest) -> dict[str, Any]:
+@router.post("/api/chase/action")
+def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
     """Staff actions on one row.
 
     `release` and `suppress` are the human decisions; `log_attempt` is how a
@@ -1162,6 +1232,7 @@ def chase_action(request: Request, chase_id: str,
     """
     from .chase import Channel
 
+    chase_id = req.chaseId
     principal = _require_roles(request, "BillingStaff", "Admin")
     ctx = _request_chase_context(request)
     store, runner, action = ctx["store"], ctx["runner"], req.action

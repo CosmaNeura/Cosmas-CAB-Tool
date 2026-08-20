@@ -4,8 +4,8 @@ import { api } from "./api.js";
 
 /*
   Coder review & feedback, wired to the live engine:
-    GET  /api/encounters/{id}/coder-view  -> the pre-coded claim with evidence
-    POST /api/feedback                    -> the coder's durable decisions
+    POST /api/encounters/coder-view -> the pre-coded claim with evidence
+    POST /api/feedback              -> the coder's durable decisions
   Offline (`live` false) it falls back to the demo claim so the flow stays
   walkable.
 */
@@ -156,7 +156,10 @@ export default function CoderReview({ encounterId, live }) {
       let eng = live ? null : FALLBACK_ENGINE;
       if (live) {
         try {
-          eng = await api(`/api/encounters/${encodeURIComponent(encounterId)}/coder-view`);
+          eng = await api("/api/encounters/coder-view", {
+            method: "POST",
+            body: { encounterId },
+          });
         } catch (e) {
           setError(`could not load coder view: ${e.message}`);
         }

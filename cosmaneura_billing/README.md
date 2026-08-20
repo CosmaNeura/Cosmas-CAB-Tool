@@ -85,6 +85,9 @@ final disabled-latch audit, is recorded in
 [`../docs/deployment/2026-08-19-demo-release-candidate-evidence.md`](../docs/deployment/2026-08-19-demo-release-candidate-evidence.md).
 The Entra trust boundary, role matrix, request controls, audit event contract,
 and local-development exception are in `docs/ACCESS_CONTROL.md`.
+The read-first Athena sandbox architecture, including why it uses a private
+outbound sync job rather than a second public API, is in
+`docs/ATHENA_SANDBOX_INTEGRATION.md`.
 
 Staging and production are PostgreSQL-only: set both
 `COSMANEURA_STATE_STORE=postgres` and `COSMANEURA_CHASE_STORE=postgres`, and use
@@ -96,11 +99,12 @@ membership changes use the reviewed owner-only CLI documented in
 
 The durable encounter store is also empty by default; production never imports
 the local `ENC-100237` fixture. A synthetic-only release demo may load exactly
-`cosmaneura-demo-rc-v1` case `SYN-RC-0001` with
+the four cases in `cosmaneura-demo-rc-v1` with
 `python -m cosmaneura_billing.seed_demo_release_candidate` through the private
 migration job, following the bounded procedure in `../infra/README.md`. The
-command accepts no payload, verifies the packaged case digest and practice
-binding, is an exact-replay no-op, and refuses to overwrite a conflicting row.
+command accepts no payload, verifies the packaged whole-pack and per-case
+digests plus the practice binding, inserts the pack atomically, is an
+exact-replay no-op, and rolls back without overwriting if any case conflicts.
 
 **Offline mode covers one encounter.** Unless
 `COSMANEURA_AZURE_OPENAI_ENABLED=true` and the complete Azure endpoint,
@@ -145,9 +149,16 @@ creation or parameter enablement is not evidence that those gates are complete.
 ## Provider billing tab and note completeness
 
 ```
-GET  /api/encounters/{id}/billing-tab   the provider-facing billing view (F1)
-POST /api/completeness                  run a note rule pack pre-submission (F2)
+POST /api/encounters/billing-tab   provider-facing view; `encounterId` is JSON (F1)
+POST /api/completeness             run a note rule pack pre-submission (F2)
 ```
+
+All protected stored-encounter operations use fixed POST paths and carry the
+validated `encounterId` in JSON; chart identifiers never appear in request
+targets. Stored-encounter responses expose server-derived `dataClass` and
+`readOnly` fields. Only persisted provenance equal to
+`synthetic_demo_release_candidate` marks a fixture read-only; external ID
+prefixes have no authority over that policy.
 
 The **billing tab** reshapes one pipeline result into a billing reference over
 the same visit: E/M with its MDM facts and pathway, ICD and CPT candidates each
@@ -297,26 +308,28 @@ python demo_chase.py    # end-to-end, synthetic patients, nothing leaves the bui
 ```
 
 ```
-GET  /api/chase/worklist                 master list (filter by bucket/assignee/needs_person)
+POST /api/chase/worklist                 master list; filters are strict JSON body fields
 POST /api/chase/detect                   detect and durably merge coverage snapshots
-GET  /api/chase/metrics                  outstanding, touches/card, minutes/card, time-to-card
+POST /api/chase/metrics                  metrics; baselines are strict JSON body fields
 GET  /api/chase/policy/status            configured policy's PHI-free lifecycle status (Admin)
 POST /api/chase/policy/create            create the server-configured revision (Admin)
 POST /api/chase/policy/approve           append an exact approval event (Admin)
 POST /api/chase/policy/activate          activate the latest exact approval (Admin)
 POST /api/chase/policy/revoke            append revocation and retire queued work (Admin)
-POST /api/chase/{id}/release-message     release one exact per-message cadence step (Admin)
-POST /api/chase/{id}/action              release | suppress | assign | log_attempt | submitted | verify
+POST /api/chase/release-message          release one exact per-message cadence step (Admin)
+POST /api/chase/action                   release | suppress | assign | log_attempt | submitted | verify
 ```
 
-Each staff action carries a client-generated UUID `action_id`. An exact retry
-is replayed without adding another contact or minute count; reuse with a
-different action payload returns 409.
+Protected resource identifiers are carried in strict JSON bodies rather than
+request targets, so platform access logs cannot capture them from URLs. Each
+staff action carries `chaseId` plus a client-generated UUID `action_id`. An
+exact retry is replayed without adding another contact or minute count; reuse
+with a different action payload returns 409.
 
 In durable PostgreSQL mode, `POST /api/chase/detect` commits its detection,
 contact snapshots, and audit completion as one batch and returns only
 `checked` and `detected` counts. Fetch the resulting rows with
-`GET /api/chase/worklist`; the detect response deliberately does not duplicate
+`POST /api/chase/worklist`; the detect response deliberately does not duplicate
 the worklist or expose partial writes.
 
 Policy cadence, templates, upload URL, transport, ACS endpoint, sender, and

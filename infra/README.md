@@ -238,17 +238,19 @@ az containerapp job start \
   --args "-m" "cosmaneura_billing.seed_demo_release_candidate"
 ```
 
-The command accepts no chart, file, or identifier argument. It loads only
-`cosmaneura-demo-rc-v1` case `SYN-RC-0001` from the installed package, checks a
-pinned SHA-256 digest, proves the configured practice/tenant binding inside the
-database transaction, and inserts source
+The command accepts no chart, file, or identifier argument. It loads only the
+four cases in `cosmaneura-demo-rc-v1` from the installed package, checks the
+pinned whole-pack and per-case SHA-256 digests, proves the configured
+practice/tenant binding inside the database transaction, and inserts source
 `synthetic_demo_release_candidate`. An exact retry reports `replayed`; any
-different row occupying that case ID reports `conflict` and is never updated.
-Its stdout is limited to the fixed pack ID, case ID, status, and digest.
+different row occupying one of the four case IDs reports `conflict`, rolls back
+the entire invocation, and is never updated. Its stdout is limited to the fixed
+pack ID, closed case/insert/replay counts, status, and whole-pack digest.
 
 Require a successful execution, then verify the assigned demo administrator
-can list and open `SYN-RC-0001`. With Azure OpenAI inference disabled, this case
-must display an explicit degraded/offline notice and no claim suggestions. The
+can list and open `SYN-RC-0001` through `SYN-RC-0004`. With Azure OpenAI
+inference disabled, every case must display an explicit degraded/offline notice
+and no claim suggestions. The
 tracked expectations are evaluation assertions, not engine output, and must
 never be rendered as a claim. Do not substitute `ENC-100237`, hand-edit the
 database row, or use this command for real/de-identified records.
@@ -345,10 +347,19 @@ inference:
    emit structured JSON only. Run
    `python -m cosmaneura_billing.log_scanner --self-test`, then capture a
    synthetic API/worker log sample and run the scanner against that file.
-2. Send a synthetic error request containing unique canaries in its path,
-   query, body, header, and exception text. In Log Analytics, confirm none of
-   those values appears and the request is represented only by a declared route
-   template, status, duration, exception class, and server-owned request ID.
+2. Send a synthetic error request containing unique canaries in its strict JSON
+   body, header, and exception text, and use a separate opaque synthetic
+   resource ID as the body-selected encounter/chase target. In Log Analytics,
+   confirm none of those values appears and the application request is
+   represented only by a declared fixed route, status, duration, exception
+   class, and server-owned request ID. Protected production routes must never
+   contain a path parameter: Azure Container Apps Easy Auth can emit raw request
+   targets from its `http-auth` sidecar before application middleware runs.
+   Query parameters are prohibited for protected application routes for the
+   same reason. Do not manufacture a canary-bearing URL path or query for this
+   test: the Easy Auth sidecar would persist it before application rejection.
+   CI instead proves that deployed routes declare no path or query parameters
+   and that official frontend request targets contain neither.
 3. After approval of the
    [Azure OpenAI cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md),
    redeploy the foundation first with `provisionAzureOpenAI=true` and the pinned
@@ -388,6 +399,67 @@ inference:
    identity has the metrics role, record measured p50/p95 tokens and latency for
    the cost plan, and restore `enableAzureOpenAIInference=false` until the
    contractual and operational gates are met.
+
+### Required cross-container log-scan evidence
+
+Scanning only the `api` container is insufficient. Easy Auth is outside the
+application middleware boundary, and job executions have independent console
+streams. For the exact acceptance time window and deployed digest, query both
+`ContainerAppConsoleLogs_CL` and `ContainerAppSystemLogs_CL` in Log Analytics.
+The query must account for all five logical sources below:
+
+| Count-report source | Azure rows included |
+| --- | --- |
+| `api-console` | API Container App console rows for the exact revision and `api` container |
+| `http-auth-console` | API Container App console rows for the exact revision and `http-auth` sidecar container |
+| `migration-job-console` | Migration/seed Container Apps Job console rows for the exact acceptance executions |
+| `chase-worker-job-console` | Chase-worker Container Apps Job console rows for the exact synthetic acceptance execution |
+| `platform-system` | Container Apps system rows for the exact API revision and acceptance job executions |
+
+Exercise every source so its row count is nonzero. Search every string field in
+those scoped rows for the complete set of opaque synthetic prohibited canaries.
+Perform the match and aggregation in Log Analytics; do not download, print, or
+paste raw `Log_s` values. Export only this closed count report (the numbers below
+are illustrative):
+
+```json
+{
+  "schema_version": 2,
+  "canary_count": 5,
+  "scope": {
+    "query_id": "cosmaneura-deployment-log-boundary-v1",
+    "canary_set_sha256": "<sha256 of sorted unique synthetic canaries>",
+    "image_digest": "sha256:<64 lowercase hex characters>",
+    "api_revision": "<exact revision name>",
+    "window_start": "2026-08-20T17:00:00Z",
+    "window_end": "2026-08-20T17:30:00Z",
+    "migration_execution_ids": ["<exact migration and seed execution names>"],
+    "chase_worker_execution_ids": ["<exact worker execution name>"]
+  },
+  "streams": [
+    {"source": "api-console", "row_count": 12, "prohibited_match_count": 0},
+    {"source": "chase-worker-job-console", "row_count": 1, "prohibited_match_count": 0},
+    {"source": "http-auth-console", "row_count": 4, "prohibited_match_count": 0},
+    {"source": "migration-job-console", "row_count": 1, "prohibited_match_count": 0},
+    {"source": "platform-system", "row_count": 3, "prohibited_match_count": 0}
+  ]
+}
+```
+
+Validate that report with:
+
+```bash
+python -m cosmaneura_billing.log_scanner \
+  --deployment-count-report /secure/path/deployment-log-counts.json
+```
+
+The validator fails closed for a missing, empty, duplicate, or unknown stream,
+an invalid or unbound scope, a window longer than 24 hours, or any
+nonzero prohibited-canary match. Its output is
+limited to finding codes and counts; it never repeats source rows, canaries, or
+the report path. Keep the existing raw application-event scan as a separate
+check: the count report proves cross-container coverage and canary absence, not
+that an application JSON event satisfies its closed schema.
 
 Real patient data remains prohibited until the executed Microsoft
 agreement/BAA is verified to cover Azure OpenAI and the selected US data zone,

@@ -1,10 +1,10 @@
-"""Seed the one approved synthetic release-candidate encounter.
+"""Seed the complete approved synthetic release-candidate pack.
 
-This command intentionally has no input-file or payload option.  It loads the
-validated package artifact, selects the single approved case, and writes it to
-the configured PostgreSQL practice.  An exact retry is a no-op; an existing
-row with any different persisted value is a hard conflict and is never
-updated.
+This command intentionally has no input-file or payload option. It loads and
+validates the immutable bundled pack before opening a database connection,
+then inserts all four approved cases in one transaction. An exact retry is a
+no-op; any occupied case ID with different persisted content aborts the whole
+transaction without updating or partially inserting the pack.
 """
 from __future__ import annotations
 
@@ -21,9 +21,22 @@ from .settings import Settings
 
 
 PACK_ID = "cosmaneura-demo-rc-v1"
-CASE_ID = "SYN-RC-0001"
 SOURCE = "synthetic_demo_release_candidate"
-EXPECTED_DIGEST = "c847409a34bc382634eea22a0de7c611d99effc73079c31b29fc6e9c5b970879"
+CASE_IDS = (
+    "SYN-RC-0001",
+    "SYN-RC-0002",
+    "SYN-RC-0003",
+    "SYN-RC-0004",
+)
+EXPECTED_PACK_DIGEST = (
+    "556b4913553e7fddc8063f1c6d47b64e1cdec7a9e85ab873fdb81cc4e13be68f"
+)
+EXPECTED_CASE_DIGESTS = {
+    "SYN-RC-0001": "c847409a34bc382634eea22a0de7c611d99effc73079c31b29fc6e9c5b970879",
+    "SYN-RC-0002": "a440c9e483b5b536647ccdfbeca03c5706cfecf9c22f3b05dbe549c0ff5ac96a",
+    "SYN-RC-0003": "2504ca7325d70af1911faa8fe81929654532f54db9c741a86d407f75d494bb13",
+    "SYN-RC-0004": "fdb0ed9b4f1790fbd2bf353cdd3689c2bcd150335c226f26eaca53d12ad07b2c",
+}
 
 
 class SyntheticDemoSeedError(RuntimeError):
@@ -35,45 +48,78 @@ class SyntheticDemoPracticeBindingError(SyntheticDemoSeedError):
 
 
 class SyntheticDemoConflict(SyntheticDemoSeedError):
-    """The approved case ID is already occupied by different content."""
+    """An approved case ID is already occupied by different content."""
+
+
+@dataclass(frozen=True)
+class PreparedSyntheticDemoCase:
+    """One digest-pinned case from the approved pack."""
+
+    case_id: str
+    visit: dict[str, object]
+    digest: str
 
 
 @dataclass(frozen=True)
 class PreparedSyntheticDemoSeed:
     """Validated, deterministic input for the one permitted seed operation."""
 
-    visit: dict[str, object]
+    cases: tuple[PreparedSyntheticDemoCase, ...]
     digest: str
 
 
-def prepare_synthetic_demo_seed() -> PreparedSyntheticDemoSeed:
-    """Load and digest only the bundled, validated ``SYN-RC-0001`` case."""
-    pack = load_demo_release_candidate()
-    if pack.get("pack_id") != PACK_ID:
-        raise SyntheticDemoSeedError("the bundled synthetic pack is not approved")
-    matches = [case for case in pack["cases"] if case.get("case_id") == CASE_ID]
-    if len(matches) != 1:
-        raise SyntheticDemoSeedError("the approved synthetic case is unavailable")
-    case = matches[0]
-    visit = dict(case["visit"])
-    if visit.get("encounter_id") != CASE_ID:
-        raise SyntheticDemoSeedError("the approved synthetic case is malformed")
-    digest_payload = {
-        "case_id": CASE_ID,
-        "pack_id": PACK_ID,
-        "source": SOURCE,
-        "visit": visit,
-    }
+def _canonical_digest(value: object) -> str:
     canonical = json.dumps(
-        digest_payload,
+        value,
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    digest = hashlib.sha256(canonical).hexdigest()
-    if digest != EXPECTED_DIGEST:
-        raise SyntheticDemoSeedError("the approved synthetic case digest changed")
-    return PreparedSyntheticDemoSeed(visit=visit, digest=digest)
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def prepare_synthetic_demo_seed() -> PreparedSyntheticDemoSeed:
+    """Validate and digest the complete immutable bundled pack."""
+    pack = load_demo_release_candidate()
+    if pack.get("pack_id") != PACK_ID:
+        raise SyntheticDemoSeedError("the bundled synthetic pack is not approved")
+
+    pack_digest = _canonical_digest(pack)
+    if pack_digest != EXPECTED_PACK_DIGEST:
+        raise SyntheticDemoSeedError("the approved synthetic pack digest changed")
+
+    cases = pack.get("cases")
+    if not isinstance(cases, list):
+        raise SyntheticDemoSeedError("the approved synthetic cases are unavailable")
+    case_ids = tuple(case.get("case_id") for case in cases)
+    if case_ids != CASE_IDS:
+        raise SyntheticDemoSeedError("the approved synthetic cases changed")
+
+    prepared_cases: list[PreparedSyntheticDemoCase] = []
+    for case_id, case in zip(CASE_IDS, cases):
+        visit = dict(case["visit"])
+        if visit.get("encounter_id") != case_id:
+            raise SyntheticDemoSeedError("an approved synthetic case is malformed")
+        digest = _canonical_digest({
+            "case_id": case_id,
+            "pack_id": PACK_ID,
+            "source": SOURCE,
+            "visit": visit,
+        })
+        if digest != EXPECTED_CASE_DIGESTS[case_id]:
+            raise SyntheticDemoSeedError(
+                "an approved synthetic case digest changed"
+            )
+        prepared_cases.append(PreparedSyntheticDemoCase(
+            case_id=case_id,
+            visit=visit,
+            digest=digest,
+        ))
+
+    return PreparedSyntheticDemoSeed(
+        cases=tuple(prepared_cases),
+        digest=pack_digest,
+    )
 
 
 def _validate_postgres_binding_settings(settings: Settings) -> str:
@@ -108,11 +154,11 @@ def _validate_postgres_binding_settings(settings: Settings) -> str:
 
 
 def _expected_persisted_values(
-    prepared: PreparedSyntheticDemoSeed,
+    prepared: PreparedSyntheticDemoCase,
 ) -> dict[str, object]:
     visit = prepared.visit
     return {
-        "external_id": CASE_ID,
+        "external_id": prepared.case_id,
         "patient_age": visit["patient_age"],
         "patient_sex": visit["patient_sex"],
         "encounter_type": visit["encounter_type"],
@@ -143,15 +189,60 @@ def _row_is_exact_replay(
     return normalized == expected
 
 
-def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, str]:
-    """Insert the fixed case, or return a no-op result for an exact replay."""
-    tenant_id = _validate_postgres_binding_settings(settings)
+def _insert_case(connection, settings: Settings, prepared: PreparedSyntheticDemoCase):
+    visit = prepared.visit
+    return connection.execute(
+        """INSERT INTO encounters (
+               practice_id, external_id, patient_age, patient_sex,
+               encounter_type, place_of_service, intake_text, transcript,
+               signed_note, provider_specialty, submitted_em_code,
+               submitted_icd10, source
+           ) VALUES (
+               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+           )
+           ON CONFLICT (practice_id, external_id) DO NOTHING
+           RETURNING external_id""",
+        (
+            settings.practice_id,
+            prepared.case_id,
+            visit["patient_age"],
+            visit["patient_sex"],
+            visit["encounter_type"],
+            visit["place_of_service"],
+            visit["intake_text"],
+            visit["transcript"],
+            visit["signed_note"],
+            visit["provider_specialty"],
+            visit["submitted_em_code"],
+            list(visit["submitted_icd10"]),  # type: ignore[arg-type]
+            SOURCE,
+        ),
+    ).fetchone()
+
+
+def _load_persisted_case(connection, settings: Settings, case_id: str):
+    return connection.execute(
+        """SELECT external_id, patient_age, patient_sex, encounter_type,
+                  place_of_service, intake_text, transcript, signed_note,
+                  provider_specialty, submitted_em_code, submitted_icd10,
+                  source, ingested_by_tenant_id, ingested_by_user_id, version
+             FROM encounters
+            WHERE practice_id = %s AND external_id = %s""",
+        (settings.practice_id, case_id),
+    ).fetchone()
+
+
+def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, object]:
+    """Atomically insert the fixed pack, or no-op an exact replay."""
+    # Artifact validation and all fixed digests are proven before constructing
+    # a database context or opening a connection.
     prepared = prepare_synthetic_demo_seed()
-    expected = _expected_persisted_values(prepared)
+    tenant_id = _validate_postgres_binding_settings(settings)
     context = PostgresContext(
         settings.database_url,
         practice_id=settings.practice_id,
     )
+    inserted_count = 0
     with context.connection() as connection:
         binding = connection.execute(
             """SELECT p.practice_id,
@@ -164,8 +255,7 @@ def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, str]:
                  FROM practices AS p
                 WHERE p.practice_id = %s
                   AND p.entra_tenant_id = %s::uuid
-                  AND p.active
-                FOR SHARE""",
+                  AND p.active""",
             (settings.practice_id, tenant_id),
         ).fetchone()
         if (
@@ -180,61 +270,48 @@ def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, str]:
                 "the configured practice binding was not proven"
             )
 
-        visit = prepared.visit
-        inserted = connection.execute(
-            """INSERT INTO encounters (
-                   practice_id, external_id, patient_age, patient_sex,
-                   encounter_type, place_of_service, intake_text, transcript,
-                   signed_note, provider_specialty, submitted_em_code,
-                   submitted_icd10, source
-               ) VALUES (
-                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-               )
-               ON CONFLICT (practice_id, external_id) DO NOTHING
-               RETURNING external_id""",
-            (
-                settings.practice_id,
-                CASE_ID,
-                visit["patient_age"],
-                visit["patient_sex"],
-                visit["encounter_type"],
-                visit["place_of_service"],
-                visit["intake_text"],
-                visit["transcript"],
-                visit["signed_note"],
-                visit["provider_specialty"],
-                visit["submitted_em_code"],
-                list(visit["submitted_icd10"]),  # type: ignore[arg-type]
-                SOURCE,
-            ),
-        ).fetchone()
-        stored = connection.execute(
-            """SELECT external_id, patient_age, patient_sex, encounter_type,
-                      place_of_service, intake_text, transcript, signed_note,
-                      provider_specialty, submitted_em_code, submitted_icd10,
-                      source, ingested_by_tenant_id, ingested_by_user_id, version
-                 FROM encounters
-                WHERE practice_id = %s AND external_id = %s
-                FOR SHARE""",
-            (settings.practice_id, CASE_ID),
-        ).fetchone()
-        if not _row_is_exact_replay(stored, expected):
-            raise SyntheticDemoConflict(
-                "the approved synthetic case ID has conflicting content"
+        for case in prepared.cases:
+            inserted = _insert_case(connection, settings, case)
+            if inserted is not None:
+                inserted_count += 1
+            stored = _load_persisted_case(
+                connection,
+                settings,
+                case.case_id,
             )
+            if not _row_is_exact_replay(
+                stored,
+                _expected_persisted_values(case),
+            ):
+                # Raising inside the connection context rolls back every prior
+                # insert in this invocation, including earlier pack members.
+                raise SyntheticDemoConflict(
+                    "an approved synthetic case ID has conflicting content"
+                )
 
+    case_count = len(prepared.cases)
     return {
         "pack_id": PACK_ID,
-        "case_id": CASE_ID,
-        "status": "inserted" if inserted is not None else "replayed",
+        "case_count": case_count,
+        "inserted_count": inserted_count,
+        "replayed_count": case_count - inserted_count,
+        "status": "inserted" if inserted_count else "replayed",
         "digest": prepared.digest,
     }
 
 
-def _closed_result(*, status: str, digest: str) -> dict[str, str]:
+def _closed_result(
+    *,
+    status: str,
+    digest: str,
+    inserted_count: int = 0,
+    replayed_count: int = 0,
+) -> dict[str, object]:
     return {
         "pack_id": PACK_ID,
-        "case_id": CASE_ID,
+        "case_count": len(CASE_IDS),
+        "inserted_count": inserted_count,
+        "replayed_count": replayed_count,
         "status": status,
         "digest": digest,
     }
@@ -243,7 +320,7 @@ def _closed_result(*, status: str, digest: str) -> dict[str, str]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the fixed seed without accepting or reflecting caller input."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    digest = EXPECTED_DIGEST
+    digest = EXPECTED_PACK_DIGEST
     try:
         prepared = prepare_synthetic_demo_seed()
         digest = prepared.digest
@@ -259,8 +336,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = _closed_result(status="binding_rejected", digest=digest)
         exit_code = 1
     except Exception:
-        # Never emit exception text, a DSN, or encounter content.  Operators get
-        # only the fixed artifact identity, digest, and a closed status token.
+        # Never emit exception text, a DSN, or encounter content. Operators get
+        # only fixed artifact identity, closed counts/digest, and status token.
         result = _closed_result(status="failed", digest=digest)
         exit_code = 1
     else:

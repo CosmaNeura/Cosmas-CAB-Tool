@@ -1836,7 +1836,7 @@ def test_message_release_exact_retry_survives_cadence_advance(scope):
         actor_user_id=scope.admin_id,
         actor_roles=("Admin",),
         action="chase.decide",
-        route="/api/chase/{id}/release-message",
+        route="/api/chase/release-message",
     )
     retry_target = scope.repo.message_release_target(
         release_id=release_id,

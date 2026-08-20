@@ -21,31 +21,30 @@ def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
 
 
 def test_synthetic_fixture_is_read_only_and_uses_only_the_stored_billing_route():
-    assert 'enc.encounterId === "SYN-RC-0001"' in BILLING
+    assert 'enc.dataClass === "synthetic_demo_release_candidate"' in BILLING
+    assert "enc.readOnly === true" in BILLING
+    assert 'enc.encounterId === "SYN-RC-0001"' not in BILLING
     assert 'startsWith("SYN-RC-")' not in BILLING
     assert "documentation is read-only" in BILLING
-    assert "readOnly={isSyntheticReleaseCandidate}" in BILLING
+    assert "readOnly={documentationReadOnly}" in BILLING
 
-    request_start = BILLING.index("const j = isSyntheticReleaseCandidate")
+    request_start = BILLING.index("const j = documentationReadOnly")
     request_end = BILLING.index("setResult(j);", request_start)
     request_branch = BILLING[request_start:request_end]
     stored_branch, editable_branch = request_branch.split(
         ': await api("/api/billing"', maxsplit=1
     )
 
-    assert (
-        "`/api/encounters/${encodeURIComponent(enc.encounterId)}/billing`"
-        in stored_branch
-    )
+    assert 'api("/api/encounters/billing"' in stored_branch
     assert 'method: "POST"' in stored_branch
-    assert "body:" not in stored_branch
+    assert "body: { encounterId: enc.encounterId }" in stored_branch
     assert "body:" in editable_branch
 
 
 def test_billing_and_coder_skip_requests_without_an_encounter_id():
     billing_guard = BILLING.index("if (!encounterId) { setEnc(null); return; }")
     billing_request = BILLING.index(
-        "api(`/api/encounters/${encodeURIComponent(encounterId)}`)", billing_guard
+        'api("/api/encounters/detail"', billing_guard
     )
     assert billing_guard < billing_request
 
@@ -53,10 +52,16 @@ def test_billing_and_coder_skip_requests_without_an_encounter_id():
         "if (!encounterId) { reviewId.current = null; return; }"
     )
     coder_request = CODER.index(
-        "api(`/api/encounters/${encodeURIComponent(encounterId)}/coder-view`)",
+        'api("/api/encounters/coder-view"',
         coder_guard,
     )
     assert coder_guard < coder_request
+
+
+def test_frontend_never_places_an_encounter_identifier_in_a_request_target():
+    assert "encodeURIComponent(encounterId)" not in BILLING + CODER
+    assert "encodeURIComponent(enc.encounterId)" not in BILLING + CODER
+    assert "`/api/encounters/${" not in BILLING + CODER
 
 
 def test_degraded_results_suppress_claim_cards_and_feedback_actions():

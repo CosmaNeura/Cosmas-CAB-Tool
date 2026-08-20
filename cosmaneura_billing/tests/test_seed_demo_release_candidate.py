@@ -1,4 +1,4 @@
-"""Fixed-purpose, fail-closed synthetic release-candidate seeding."""
+"""Fixed-purpose, fail-closed synthetic release-candidate pack seeding."""
 from __future__ import annotations
 
 import json
@@ -59,7 +59,8 @@ class _Connection:
             assert "ON CONFLICT (practice_id, external_id) DO NOTHING" in compact
             assert "DO UPDATE" not in compact
             self.insert_parameters.append(parameters)
-            if self.database["encounter"] is not None:
+            external_id = parameters[1]
+            if external_id in self.database["encounters"]:
                 return _Result(None)
             keys = (
                 "practice_id",
@@ -82,11 +83,12 @@ class _Connection:
                 "ingested_by_user_id": None,
                 "version": 1,
             })
-            self.database["encounter"] = created
-            return _Result({"external_id": created["external_id"]})
+            self.database["encounters"][external_id] = created
+            return _Result({"external_id": external_id})
         if "FROM encounters" in compact:
-            row = self.database["encounter"]
-            if row is None:
+            practice_id, external_id = parameters
+            row = self.database["encounters"].get(external_id)
+            if row is None or row["practice_id"] != practice_id:
                 return _Result(None)
             persisted = dict(row)
             persisted.pop("practice_id", None)
@@ -95,13 +97,20 @@ class _Connection:
 
 
 class _ConnectionScope:
-    def __init__(self, connection):
+    def __init__(self, database, connection):
+        self.database = database
         self.connection = connection
+        self.before = None
 
     def __enter__(self):
+        self.before = deepcopy(self.database["encounters"])
         return self.connection
 
-    def __exit__(self, *_args):
+    def __exit__(self, exception_type, *_args):
+        if exception_type is not None:
+            # Model psycopg's transaction context: an exception rolls back all
+            # prior statements issued by this invocation.
+            self.database["encounters"] = self.before
         return False
 
 
@@ -109,10 +118,11 @@ class _Context:
     def __init__(self, database, dsn, *, practice_id):
         assert dsn == "postgresql://cosmaneura_app:secret@db.invalid/app"
         assert practice_id == PRACTICE_ID
+        self.database = database
         self.connection_object = _Connection(database)
 
     def connection(self):
-        return _ConnectionScope(self.connection_object)
+        return _ConnectionScope(self.database, self.connection_object)
 
 
 @pytest.fixture
@@ -124,7 +134,7 @@ def fake_postgres(monkeypatch):
             "active": True,
         },
         "practice_allowed": True,
-        "encounter": None,
+        "encounters": {},
     }
     contexts = []
 
@@ -137,46 +147,99 @@ def fake_postgres(monkeypatch):
     return database, contexts
 
 
-def test_prepared_input_is_only_the_approved_bundled_case():
+def test_prepared_input_is_the_complete_digest_pinned_pack():
     first = seeder.prepare_synthetic_demo_seed()
     second = seeder.prepare_synthetic_demo_seed()
 
     assert first == second
-    assert first.visit["encounter_id"] == seeder.CASE_ID == "SYN-RC-0001"
+    assert tuple(case.case_id for case in first.cases) == seeder.CASE_IDS
+    assert tuple(case.visit["encounter_id"] for case in first.cases) == (
+        "SYN-RC-0001",
+        "SYN-RC-0002",
+        "SYN-RC-0003",
+        "SYN-RC-0004",
+    )
     assert seeder.PACK_ID == "cosmaneura-demo-rc-v1"
     assert seeder.SOURCE == "synthetic_demo_release_candidate"
-    assert first.digest == seeder.EXPECTED_DIGEST
-    assert len(first.digest) == 64
-    assert set(first.digest) <= set("0123456789abcdef")
+    assert first.digest == seeder.EXPECTED_PACK_DIGEST
+    assert {case.case_id: case.digest for case in first.cases} == (
+        seeder.EXPECTED_CASE_DIGESTS
+    )
+    for digest in (first.digest, *seeder.EXPECTED_CASE_DIGESTS.values()):
+        assert len(digest) == 64
+        assert set(digest) <= set("0123456789abcdef")
 
 
-def test_changed_bundled_case_content_fails_the_fixed_digest(monkeypatch):
-    pack = seeder.load_demo_release_candidate()
-    changed = deepcopy(pack)
-    changed["cases"][0]["visit"]["intake_text"] += " Synthetic change."
+def test_changed_pack_metadata_fails_before_database_context(monkeypatch):
+    changed = deepcopy(seeder.load_demo_release_candidate())
+    changed["synthetic_declaration"] += " Changed metadata."
     monkeypatch.setattr(seeder, "load_demo_release_candidate", lambda: changed)
 
-    with pytest.raises(seeder.SyntheticDemoSeedError, match="digest changed"):
+    def unexpected_context(*_args, **_kwargs):
+        raise AssertionError("database access must remain closed")
+
+    monkeypatch.setattr(seeder, "PostgresContext", unexpected_context)
+    with pytest.raises(seeder.SyntheticDemoSeedError, match="pack digest changed"):
+        seeder.seed_synthetic_demo_release_candidate(_settings())
+
+
+def test_changed_case_content_fails_its_fixed_digest(monkeypatch):
+    changed = deepcopy(seeder.load_demo_release_candidate())
+    changed["cases"][2]["visit"]["intake_text"] += " Synthetic change."
+    # Prove the independent per-case pin after allowing this intentionally
+    # modified whole-pack digest through the first guard in this unit test.
+    monkeypatch.setattr(seeder, "EXPECTED_PACK_DIGEST", seeder._canonical_digest(changed))
+    monkeypatch.setattr(seeder, "load_demo_release_candidate", lambda: changed)
+
+    with pytest.raises(seeder.SyntheticDemoSeedError, match="case digest changed"):
         seeder.prepare_synthetic_demo_seed()
 
 
-def test_first_seed_inserts_and_exact_replay_is_a_noop(fake_postgres):
+def test_first_seed_inserts_all_cases_and_exact_replay_is_a_noop(fake_postgres):
     database, contexts = fake_postgres
 
     inserted = seeder.seed_synthetic_demo_release_candidate(_settings())
-    snapshot = deepcopy(database["encounter"])
+    snapshot = deepcopy(database["encounters"])
     replayed = seeder.seed_synthetic_demo_release_candidate(_settings())
 
     assert inserted == {
         "pack_id": seeder.PACK_ID,
-        "case_id": seeder.CASE_ID,
+        "case_count": 4,
+        "inserted_count": 4,
+        "replayed_count": 0,
         "status": "inserted",
-        "digest": inserted["digest"],
+        "digest": seeder.EXPECTED_PACK_DIGEST,
     }
-    assert replayed == {**inserted, "status": "replayed"}
-    assert database["encounter"] == snapshot
-    assert database["encounter"]["source"] == seeder.SOURCE
-    assert contexts[0].connection_object.insert_parameters[0][-1] == seeder.SOURCE
+    assert replayed == {
+        **inserted,
+        "inserted_count": 0,
+        "replayed_count": 4,
+        "status": "replayed",
+    }
+    assert database["encounters"] == snapshot
+    assert set(database["encounters"]) == set(seeder.CASE_IDS)
+    assert all(
+        row["source"] == seeder.SOURCE
+        for row in database["encounters"].values()
+    )
+    assert [params[1] for params in contexts[0].connection_object.insert_parameters] == (
+        list(seeder.CASE_IDS)
+    )
+
+
+def test_mixed_exact_replay_and_new_cases_reports_closed_counts(fake_postgres):
+    database, _ = fake_postgres
+    seeder.seed_synthetic_demo_release_candidate(_settings())
+    del database["encounters"][seeder.CASE_IDS[1]]
+    del database["encounters"][seeder.CASE_IDS[3]]
+
+    result = seeder.seed_synthetic_demo_release_candidate(_settings())
+
+    assert result["status"] == "inserted"
+    assert result["case_count"] == 4
+    assert result["inserted_count"] == 2
+    assert result["replayed_count"] == 2
+    assert set(database["encounters"]) == set(seeder.CASE_IDS)
 
 
 @pytest.mark.parametrize(
@@ -187,18 +250,26 @@ def test_first_seed_inserts_and_exact_replay_is_a_noop(fake_postgres):
         ("version", 2),
     ],
 )
-def test_conflicting_existing_content_fails_without_overwrite(
+def test_conflict_rolls_back_prior_insert_without_overwrite(
     fake_postgres, field, replacement,
 ):
-    database, _ = fake_postgres
+    database, contexts = fake_postgres
     seeder.seed_synthetic_demo_release_candidate(_settings())
-    database["encounter"][field] = replacement
-    snapshot = deepcopy(database["encounter"])
+    # Force case 2 to be inserted before case 3 reveals its conflict. Case 4
+    # is also absent, making any accidental partial commit easy to observe.
+    del database["encounters"][seeder.CASE_IDS[1]]
+    database["encounters"][seeder.CASE_IDS[2]][field] = replacement
+    del database["encounters"][seeder.CASE_IDS[3]]
+    snapshot = deepcopy(database["encounters"])
 
     with pytest.raises(seeder.SyntheticDemoConflict):
         seeder.seed_synthetic_demo_release_candidate(_settings())
 
-    assert database["encounter"] == snapshot
+    assert database["encounters"] == snapshot
+    failed_connection = contexts[-1].connection_object
+    assert seeder.CASE_IDS[1] in [
+        parameters[1] for parameters in failed_connection.insert_parameters
+    ]
 
 
 @pytest.mark.parametrize("binding_failure", ["missing", "inactive", "denied"])
@@ -216,7 +287,7 @@ def test_unproven_practice_binding_fails_before_insert(
     with pytest.raises(seeder.SyntheticDemoPracticeBindingError):
         seeder.seed_synthetic_demo_release_candidate(_settings())
 
-    assert database["encounter"] is None
+    assert database["encounters"] == {}
     assert contexts[0].connection_object.insert_parameters == []
 
 
@@ -249,8 +320,22 @@ def test_cli_rejects_all_arguments_without_reflecting_them(capsys, monkeypatch):
     payload = json.loads(output.out)
     assert output.err == ""
     assert secret_argument not in output.out
-    assert set(payload) == {"pack_id", "case_id", "status", "digest"}
-    assert payload["status"] == "arguments_rejected"
+    assert set(payload) == {
+        "pack_id",
+        "case_count",
+        "inserted_count",
+        "replayed_count",
+        "status",
+        "digest",
+    }
+    assert payload == {
+        "pack_id": seeder.PACK_ID,
+        "case_count": 4,
+        "inserted_count": 0,
+        "replayed_count": 0,
+        "status": "arguments_rejected",
+        "digest": seeder.EXPECTED_PACK_DIGEST,
+    }
 
 
 def test_cli_failure_output_is_closed_and_phi_free(capsys, monkeypatch):
@@ -268,5 +353,14 @@ def test_cli_failure_output_is_closed_and_phi_free(capsys, monkeypatch):
     payload = json.loads(output.out)
     assert output.err == ""
     assert sensitive not in output.out
-    assert set(payload) == {"pack_id", "case_id", "status", "digest"}
+    assert set(payload) == {
+        "pack_id",
+        "case_count",
+        "inserted_count",
+        "replayed_count",
+        "status",
+        "digest",
+    }
     assert payload["status"] == "failed"
+    assert payload["case_count"] == 4
+    assert payload["inserted_count"] == payload["replayed_count"] == 0

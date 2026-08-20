@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -16,13 +15,12 @@ from .auth import AuthPrincipal
 from .security import client_ip, send_json
 from .settings import Settings
 
-_ENCOUNTER_ROUTE = re.compile(
-    r"^/api/encounters/(?P<id>[^/]+)(?P<suffix>/billing|/coder-view|/billing-tab)?$"
-)
-_CHASE_ROUTE = re.compile(r"^/api/chase/(?P<id>[^/]+)/action$")
-_CHASE_MESSAGE_RELEASE_ROUTE = re.compile(
-    r"^/api/chase/(?P<id>[^/]+)/release-message$"
-)
+_ENCOUNTER_FIXED_ROUTES = {
+    "/api/encounters/detail": "encounter.view",
+    "/api/encounters/billing": "encounter.compute",
+    "/api/encounters/coder-view": "encounter.compute",
+    "/api/encounters/billing-tab": "encounter.compute",
+}
 _CHASE_POLICY_MUTATIONS = frozenset({
     "/api/chase/policy/create",
     "/api/chase/policy/approve",
@@ -116,11 +114,8 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return None
     if path == "/api/encounters":
         return "encounter.list", "/api/encounters", ""
-    encounter = _ENCOUNTER_ROUTE.fullmatch(path)
-    if encounter:
-        suffix = encounter.group("suffix") or ""
-        action = "encounter.compute" if suffix else "encounter.view"
-        return action, f"/api/encounters/{{id}}{suffix}", ""
+    if path in _ENCOUNTER_FIXED_ROUTES:
+        return _ENCOUNTER_FIXED_ROUTES[path], path, ""
     if path == "/api/billing":
         return "encounter.compute", "/api/billing", ""
     if path == "/api/completeness":
@@ -137,11 +132,8 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "chase.policy.view", "/api/chase/policy/status", ""
     if path in _CHASE_POLICY_MUTATIONS:
         return "chase.policy.decide", path, ""
-    if _CHASE_MESSAGE_RELEASE_ROUTE.fullmatch(path):
-        return "chase.decide", "/api/chase/{id}/release-message", ""
-    chase = _CHASE_ROUTE.fullmatch(path)
-    if chase:
-        return "chase.decide", "/api/chase/{id}/action", ""
+    if path in {"/api/chase/release-message", "/api/chase/action"}:
+        return "chase.decide", path, ""
     if path.startswith("/api/"):
         return "api.access", "unmatched_api_route", ""
     return None

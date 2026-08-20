@@ -242,9 +242,10 @@ def test_telehealth_encounter_gets_the_telehealth_pack():
 # API surface
 # --------------------------------------------------------------------------- #
 def test_billing_tab_endpoint():
-    body = TestClient(app).get(
-        "/api/encounters/ENC-100237/billing-tab?generated_at=2026-08-17T00:00:00Z"
-    ).json()
+    body = TestClient(app).post("/api/encounters/billing-tab", json={
+        "encounterId": "ENC-100237",
+        "generatedAt": "2026-08-17T00:00:00Z",
+    }).json()
     assert body["visit_id"] == "ENC-100237"
     assert body["generated_at"] == "2026-08-17T00:00:00Z"
     assert body["em"]["suggested_level"] == "99214"
