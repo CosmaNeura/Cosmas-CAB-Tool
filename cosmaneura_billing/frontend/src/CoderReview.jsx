@@ -15,27 +15,24 @@ const FALLBACK_ENGINE = {
   engineVersion: "offline-demo",
   submittedEm: "99213",
   coderId: "coder_A",
-  multiEngine: true,
   em: {
     code: "99214", label: "Office visit, established · moderate MDM",
     why: "Moderate MDM: an undiagnosed problem with uncertain prognosis (problems) plus the decision to refer for diagnostic colonoscopy (risk) meets 2 of 3 at the moderate level.",
     evidence: "refer you for a colonoscopy to be safe",
   },
   dx: [
-    { id: "k625", code: "K62.5", label: "Hemorrhage of anus and rectum", primary: true, agreement: "both",
-      why: "Documented hematochezia; mapped via CCSR to the rectal-hemorrhage code. Azure Text Analytics for health independently linked “hematochezia” to K62.5.", evidence: "When I eat spicy food, I poop blood" },
-    { id: "k5900", code: "K59.00", label: "Constipation, unspecified", agreement: "both",
+    { id: "k625", code: "K62.5", label: "Hemorrhage of anus and rectum", primary: true,
+      why: "Documented hematochezia; mapped via CCSR to the rectal-hemorrhage code.", evidence: "When I eat spicy food, I poop blood" },
+    { id: "k5900", code: "K59.00", label: "Constipation, unspecified",
       why: "Constipation documented in the HPI and addressed in the plan.", evidence: "Sometimes when I have constipation" },
-    { id: "r197", code: "R19.7", label: "Diarrhea, unspecified", agreement: "both",
+    { id: "r197", code: "R19.7", label: "Diarrhea, unspecified",
       why: "Diarrhea documented in the history.", evidence: "I do have diarrhea often" },
   ],
   withheld: [
-    { id: "e668", code: "E66.8", label: "Other obesity", status: "held", agreement: "primary_only",
+    { id: "e668", code: "E66.8", label: "Other obesity", status: "held",
       why: "BMI 37.6 is in the vitals but obesity isn't addressed in the plan — the engine HELD it.", evidence: "weigh 255 pounds" },
-    { id: "z800", code: "Z80.0", label: "Family history of digestive cancer", status: "rejected", agreement: "contradicted_by_ta4h",
-      why: "The patient explicitly denied family history, so the engine REJECTED this as contradicted — and Azure Text Analytics for health read the same finding as negated.", evidence: "I do not have a family history of colon cancer" },
-    { id: "c189", code: "C18.9", label: "Malignant neoplasm of colon, unspecified", status: "rejected", agreement: "ta4h_only",
-      why: "The second engine picked up the patient's fear of colon cancer as a possible finding; it is not a diagnosis, so it was REJECTED.", evidence: "I am really scared that I have colon cancer" },
+    { id: "z800", code: "Z80.0", label: "Family history of digestive cancer", status: "rejected",
+      why: "The patient explicitly denied family history, so the engine REJECTED this as contradicted.", evidence: "I do not have a family history of colon cancer" },
   ],
 };
 
@@ -58,31 +55,8 @@ const REASONS = {
   ADD: [["dx_missed_by_engine", "Engine missed this code"]],
 };
 
-function Pill({ tone, title, children }) {
-  return <span title={title} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>{children}</span>;
-}
-
-/*
-  Agreement badge — only rendered when two extraction engines ran.
-  "Both agree" is the triage signal: clear those fast, spend your attention on
-  the single-engine and conflicting rows.
-*/
-const AGREEMENT = {
-  both: ["bg-emerald-50 text-emerald-700 ring-emerald-200", "both agree",
-    "Our engine and Azure Text Analytics for health independently found this code."],
-  primary_only: ["bg-amber-50 text-amber-700 ring-amber-200", "1 of 2 engines",
-    "Only our engine proposed this code — the second engine did not find it, so it is held for your confirmation."],
-  ta4h_only: ["bg-amber-50 text-amber-700 ring-amber-200", "2nd engine only",
-    "Only Azure Text Analytics for health found this code — held for your confirmation, never auto-billed."],
-  contradicted_by_ta4h: ["bg-red-50 text-red-700 ring-red-200", "conflict",
-    "Azure Text Analytics for health reads this finding as denied, hypothetical, or about a family member."],
-};
-
-function AgreementBadge({ agreement }) {
-  const hit = AGREEMENT[agreement];
-  if (!hit) return null;
-  const [tone, label, title] = hit;
-  return <Pill tone={tone} title={title}>{label}</Pill>;
+function Pill({ tone, children }) {
+  return <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>{children}</span>;
 }
 
 function Why({ text, evidence, history }) {
@@ -119,7 +93,6 @@ function CodeRow({ row, kind, decision, set }) {
       <div className="flex flex-wrap items-center gap-2">
         <code className="w-16 font-mono text-sm text-slate-900">{a === "modify" && decision.final ? decision.final : row.code}</code>
         <span className="flex-1 text-sm text-slate-700">{row.label}{row.primary && <span className="ml-2"><Pill tone="bg-sky-50 text-sky-700 ring-sky-200">primary</Pill></span>}</span>
-        <AgreementBadge agreement={row.agreement} />
         <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-0.5">
           <button onClick={() => set({ action: "accept", final: row.code, reason: null })} className={seg(a === "accept", "bg-emerald-100 text-emerald-700")}><Check size={13} />Accept</button>
           <button onClick={() => set({ action: "modify", final: a === "modify" ? decision.final : row.code })} className={seg(a === "modify", "bg-amber-100 text-amber-700")}><Pencil size={13} />Edit</button>
@@ -281,10 +254,7 @@ export default function CoderReview({ encounterId, live }) {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm font-medium text-slate-900">Suggested claim · {engine.encounterId}</p>
-            <p className="text-xs text-slate-500">
-              You're in control — the engine pre-coded this from the documentation. Review, correct, submit.
-              {engine.multiEngine && " Two extraction engines read this note: start with the rows they disagree on."}
-            </p>
+            <p className="text-xs text-slate-500">You're in control — the engine pre-coded this from the documentation. Review, correct, submit.</p>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-slate-500">
@@ -316,7 +286,6 @@ export default function CoderReview({ encounterId, live }) {
                 <div className="flex flex-wrap items-center gap-2">
                   <code className="w-16 font-mono text-sm text-slate-900">{w.code}</code>
                   <span className="flex-1 text-sm text-slate-700">{w.label}</span>
-                  <AgreementBadge agreement={w.agreement} />
                   <Pill tone={w.status === "held" ? "bg-amber-50 text-amber-700 ring-amber-200" : "bg-red-50 text-red-700 ring-red-200"}>{w.status}</Pill>
                   <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-0.5">
                     <button onClick={() => setWithheld((s) => ({ ...s, [w.id]: { ...s[w.id], bill: false } }))} className={seg(!withheld[w.id]?.bill, "bg-slate-200 text-slate-700")}>Don't bill</button>

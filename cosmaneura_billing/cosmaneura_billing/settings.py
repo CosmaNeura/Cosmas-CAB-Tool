@@ -162,10 +162,9 @@ def _canonicalize_acs_email_endpoint(
 def _validate_azure_language_endpoint(value: str) -> None:
     """Accept only a resource-scoped Azure AI Language HTTPS endpoint.
 
-    Cognitive Services resources are reachable on two hostname suffixes; both are
-    resource-scoped, and nothing else is accepted, so an operator cannot point
-    the second extraction engine at an arbitrary host and have it sent a
-    managed-identity bearer token.
+    Only the resource-scoped Cognitive Services hostname is accepted, so an
+    operator cannot point the second extraction engine at an arbitrary host and
+    have it sent a managed-identity bearer token.
     """
     if not isinstance(value, str) or any(
         char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
@@ -181,11 +180,11 @@ def _validate_azure_language_endpoint(value: str) -> None:
         raise SettingsError(
             "AZURE_LANGUAGE_ENDPOINT must be a valid Azure HTTPS endpoint"
         ) from None
-    suffixes = (".cognitiveservices.azure.com", ".api.cognitive.microsoft.com")
+    suffix = ".cognitiveservices.azure.com"
     if (
         endpoint.scheme.lower() != "https"
-        or not any(hostname.endswith(s) for s in suffixes)
-        or any(hostname == s for s in suffixes)
+        or not hostname.endswith(suffix)
+        or hostname == suffix
         or endpoint.username is not None
         or endpoint.password is not None
         or endpoint_port is not None
@@ -629,11 +628,19 @@ class Settings:
             raise SettingsError(
                 "AZURE_LANGUAGE_API_VERSION must be an Azure API date or preview version"
             )
-        if self.azure_language_enabled and not self.azure_client_id:
-            raise SettingsError(
-                "AZURE_CLIENT_ID must identify the API managed identity for "
-                "Azure AI Language extraction"
-            )
+        if self.azure_language_enabled:
+            try:
+                client_id = UUID(self.azure_client_id)
+            except (TypeError, ValueError, AttributeError):
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity for "
+                    "Azure AI Language extraction"
+                ) from None
+            if str(client_id) != self.azure_client_id.casefold():
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity for "
+                    "Azure AI Language extraction"
+                )
         if self.environment in {"staging", "production"} and self.openai_api_key:
             raise SettingsError(
                 "OPENAI_API_KEY is development-only; deployed inference must use "

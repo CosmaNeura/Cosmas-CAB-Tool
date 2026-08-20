@@ -1,13 +1,16 @@
 """End-to-end pipeline with the second extraction engine switched on.
 
-The contract this file pins down: turning TA4H on must change what the reviewer
-*sees* (provenance, extra held candidates, vetoes) without changing what the
-engine is willing to *bill* above what one engine alone would bill.
+The contract this file pins down: the internal active-consensus path may add
+provenance, holds, and vetoes, but must never increase what the engine is
+willing to bill above what one engine alone would bill. Reviewer surfacing is
+deferred to a separate milestone.
 """
 import pytest
 
 from cosmaneura_billing.orchestrator import BillingOrchestrator
-from cosmaneura_billing.schemas import CodeKind, Disposition
+from cosmaneura_billing.schemas import (
+    CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle,
+)
 from cosmaneura_billing.ta4h import MockTA4H
 from demo_visit import SAMPLE_VISIT
 
@@ -52,6 +55,80 @@ def test_secondary_engine_failure_degrades_to_single_engine():
     assert result.biller_worksheet.em_code.code == "99214"
 
 
+def test_secondary_evidence_cannot_replace_fabricated_primary_evidence():
+    """C2 holds across the real evidence-verification boundary."""
+    bundle = VisitBundle(
+        encounter_id="synthetic-c2-evidence",
+        patient_age=40,
+        patient_sex="unknown",
+        encounter_type="office_established",
+        place_of_service="11",
+        signed_note="Assessment: rectal bleeding. Plan: refer for colonoscopy.",
+    )
+
+    class Primary:
+        def run(self, _bundle):
+            return (
+                {"problems": [], "data_reviewed": [], "risk": {}},
+                [CodeSuggestion(
+                    kind=CodeKind.ICD10,
+                    code="K62.5",
+                    label="Hemorrhage of anus and rectum",
+                    evidence=[Evidence("signed_note", "fabricated primary quote")],
+                )],
+            )
+
+    class Secondary:
+        def run(self, _bundle):
+            return (
+                {
+                    "ta4h_problems": [],
+                    "ta4h_data_reviewed": [],
+                    "ta4h_contradictions": {},
+                    "ta4h_entity_count": 1,
+                },
+                [CodeSuggestion(
+                    kind=CodeKind.ICD10,
+                    code="K62.5",
+                    label="Hemorrhage of anus and rectum",
+                    evidence=[Evidence("signed_note", "rectal bleeding")],
+                    source_engine="ta4h",
+                )],
+            )
+
+    single = BillingOrchestrator(coding=Primary(), ta4h=None).process(bundle)
+    dual = BillingOrchestrator(
+        coding=Primary(), secondary_coding=Secondary(), ta4h=None,
+    ).process(bundle)
+
+    captured_single = {s.code for s in single.provider_card.captured_codes}
+    captured_dual = {s.code for s in dual.provider_card.captured_codes}
+    assert captured_dual <= captured_single
+    assert "K62.5" not in captured_dual
+    held = next(s for s in dual.provider_card.declined_codes if s.code == "K62.5")
+    assert held.disposition == Disposition.REVIEW
+    assert "ta4h_evidence_withheld: primary engine found no span" in held.notes
+    assert any(
+        line.startswith("EVIDENCE-REMOVED K62.5")
+        for line in dual.biller_worksheet.audit_trail
+    )
+
+
+def test_secondary_failure_audit_never_includes_exception_text():
+    canary = "Jane Doe MRN-123"
+
+    class BrokenSecondary:
+        def run(self, _bundle):
+            raise RuntimeError(canary)
+
+    result = BillingOrchestrator(
+        secondary_coding=BrokenSecondary(), ta4h=None,
+    ).process(SAMPLE_VISIT)
+    rendered = "\n".join(result.biller_worksheet.audit_trail)
+    assert "secondary extraction engine unavailable" in rendered
+    assert canary not in rendered
+
+
 # --------------------------------------------------------------------------- #
 # The no-upcode invariant holds with two engines
 # --------------------------------------------------------------------------- #
@@ -86,14 +163,14 @@ def test_every_captured_code_still_has_evidence(dual):
 
 
 # --------------------------------------------------------------------------- #
-# What the reviewer gains
+# Internal consensus provenance (not yet reviewer-facing)
 # --------------------------------------------------------------------------- #
 def test_audit_trail_opens_with_the_engine_split(dual):
     first = dual.biller_worksheet.audit_trail[0]
     assert first.startswith("CONSENSUS two extraction engines ran")
 
 
-def test_agreed_codes_are_tagged_for_the_reviewer(dual):
+def test_agreed_codes_are_tagged_internally(dual):
     all_codes = dual.provider_card.captured_codes + dual.provider_card.declined_codes
     dx = [s for s in all_codes if s.kind == CodeKind.ICD10]
     assert dx, "expected diagnosis suggestions"

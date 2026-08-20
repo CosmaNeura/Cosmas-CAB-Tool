@@ -65,7 +65,6 @@ from .security import (
     RequestBodyLimitMiddleware, StrictOriginMiddleware,
 )
 from .settings import Settings, get_settings
-from .ta4h import describe_ta4h_client
 
 router = APIRouter()
 
@@ -255,10 +254,6 @@ def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None) -> dict[st
     }
     if "primary_candidate" in s.notes:
         out["primary"] = True
-    if s.agreement:
-        out["agreement"] = s.agreement
-    if s.source_engine:
-        out["sourceEngine"] = s.source_engine
     if s.disposition != Disposition.CAPTURED and s.rationale:
         out["reason"] = s.rationale
     if (s.kind == CodeKind.EM and s.disposition == Disposition.CAPTURED
@@ -323,7 +318,6 @@ def _degraded_json(result: BillingResult) -> Optional[dict[str, str]]:
 
 def _coder_view_json(
     bundle: VisitBundle, result: BillingResult, coder_id: str,
-    *, multi_engine: bool = False,
 ) -> dict[str, Any]:
     card = result.provider_card
 
@@ -334,9 +328,6 @@ def _coder_view_json(
             "primary": "primary_candidate" in s.notes or None,
             "why": s.rationale,
             "evidence": s.evidence[0].quote if s.evidence else "",
-            # multi-engine provenance; absent when only one engine ran
-            "agreement": s.agreement or None,
-            "sourceEngine": s.source_engine or None,
         }
 
     em = next((s for s in card.captured_codes if s.kind == CodeKind.EM), None)
@@ -348,7 +339,6 @@ def _coder_view_json(
         "engineVersion": _ENGINE_VERSION,
         "submittedEm": bundle.submitted_em_code,
         "coderId": coder_id,
-        "multiEngine": multi_engine,
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
@@ -491,23 +481,6 @@ def _cpt_status(cpt, settings: Settings | None = None) -> str:
             "generic labels in use")
 
 
-def _ta4h_status(orch) -> str:
-    """One human-readable line for the second-engine pill tooltip.
-
-    Deliberately names no endpoint: which resource is configured is deployment
-    detail, not something a browser response needs to carry.
-    """
-    if orch.ta4h is None:
-        return ("second extraction engine off — enable "
-                "COSMANEURA_AZURE_LANGUAGE_ENABLED with a Language endpoint and the "
-                "API managed identity; single-engine coding in use")
-    if getattr(orch.ta4h, "mode", None) == "mock":
-        return ("Azure Text Analytics for health: offline mock, demo encounter only "
-                "— not engine output")
-    return ("Azure Text Analytics for health: live via managed identity, "
-            "input logging opted out")
-
-
 @router.get("/api/health")
 def health(request: Request) -> dict[str, Any]:
     orch = _request_orchestrator(request)
@@ -524,9 +497,6 @@ def health(request: Request) -> dict[str, Any]:
         "cptStatus": _cpt_status(orch.cpt, settings),
         "denialPriors": orch.denial_priors.size,
         "encounters": len(_request_encounter_store(request).all()),
-        **describe_ta4h_client(orch.ta4h),
-        "multiEngine": orch.multi_engine,
-        "ta4hStatus": _ta4h_status(orch),
     }
 
 
@@ -634,8 +604,7 @@ def coder_view(request: Request, encounter_id: str) -> dict[str, Any]:
     orch = _request_orchestrator(request)
     uid = _request_principal(request).user_id
     result = orch.process(bundle, user_id=uid)
-    view = _coder_view_json(bundle, result, uid,
-                            multi_engine=orch.multi_engine)
+    view = _coder_view_json(bundle, result, uid)
     view["encounterVersion"] = stored.version
     view["reviewContext"] = _issue_review_context(
         stored, _request_principal(request),

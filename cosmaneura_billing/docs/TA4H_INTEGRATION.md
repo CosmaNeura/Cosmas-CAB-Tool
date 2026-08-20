@@ -8,8 +8,8 @@ For *why* we integrated it (value, HIPAA posture, cost, alternatives), see
 
 The second engine is **off by default**, on the same terms as Azure OpenAI
 inference: a deployment opts in, it never drifts on. With nothing configured the
-pipeline is byte-for-byte the single-engine pipeline it has always been — no
-agreement tags, no extra audit lines, no behaviour change.
+externally visible pipeline is the single-engine pipeline it has always been —
+no reviewer agreement fields, no extra audit lines, no behavior change.
 
 | Setting | Effect |
 |---|---|
@@ -27,30 +27,27 @@ start rather than quietly honouring a secret. Azure AI Language shares the
 the API's existing user-assigned identity needs only a role assignment on the
 Language resource — **no new secret enters the deployment**.
 
-`Settings` also validates that the endpoint is a resource-scoped Azure hostname,
-and `AzureLanguageTA4H` re-validates its own effective values at construction, so
-a caller cannot swap a reviewed endpoint for another host and have a
-managed-identity bearer token sent to it.
+`Settings` validates the configured resource endpoint. Before attaching a
+managed-identity bearer token, `AzureLanguageTA4H` also validates every
+service-returned `operation-location` URL against that exact resource endpoint
+and refuses redirects.
 
-```bash
-# Provision the Language resource and grant the API identity read access.
-az cognitiveservices account create \
-  --name cosmaneura-language --resource-group <rg> \
-  --kind TextAnalytics --sku F0 --location eastus --yes
+Provision Azure AI Language only through `infra/app.bicep`. The account must
+disable public network access and local authentication, use the existing private
+network/DNS pattern, and grant only the API user-assigned identity the
+account-scoped *Cognitive Services Language Reader* role. Provisioning the
+account does not enable extraction; every deployed parameter set keeps
+`COSMANEURA_AZURE_LANGUAGE_ENABLED=false`.
 
-az role assignment create \
-  --assignee <api-managed-identity-principal-id> \
-  --role "Cognitive Services Language Reader" \
-  --scope $(az cognitiveservices account show --name cosmaneura-language \
-              --resource-group <rg> --query id -o tsv)
-```
+The following is future operator reference only. Do not enable this
+configuration until Azure OpenAI inference is enabled and the shadow milestone
+is approved.
 
 ```bash
 export COSMANEURA_AZURE_LANGUAGE_ENABLED=1
 export AZURE_LANGUAGE_ENDPOINT="https://cosmaneura-language.cognitiveservices.azure.com"
 export AZURE_CLIENT_ID="<api-managed-identity-client-id>"
 uvicorn cosmaneura_billing.api:app --reload
-# GET /api/health -> "multiEngine": true, "extractionEngines": 2, plus "ta4hStatus"
 ```
 
 The F0 (free) tier gives 5,000 text records/month — a text record is 1,000
@@ -61,21 +58,23 @@ whole shadow-mode validation before any spend. Use `--sku S` for volume.
 same stance as the AMA CPT fetcher, so no SDK is added; only `azure-identity`
 (already required for inference) is needed, declared as the `language` extra.
 
-The engine needs the *primary* engine running to have anything to reconcile
-against. With `COSMANEURA_AZURE_OPENAI_ENABLED` false the primary path is the
-offline mock, which only codes the bundled demo encounter — so a two-engine
-demo is only meaningful on that encounter until inference is enabled.
+The engine needs the *primary* engine running to have anything meaningful to
+reconcile against. Do not run the shadow study while
+`COSMANEURA_AZURE_OPENAI_ENABLED=false`. The offline primary model only covers
+the bundled demonstration encounter, so any two-engine agreement measurement
+would be meaningless.
 
 ## PHI posture
 
 * Azure AI Language is HIPAA-eligible under the Microsoft BAA, which is included
   by default via the Product Terms / DPA — no separate signature.
-* **`loggingOptOut: true` is sent on every request, and is not configurable.**
+* **`loggingOptOut: true` is sent on every analysis submission, and is not configurable.**
   Azure otherwise retains input text for up to 48 hours for troubleshooting;
   with chart text in the payload that retention is a HIPAA consideration.
-* Processing is stateless; inputs are not retained and not used to train models.
-* Managed identity is the only auth path (see above). Prefer a private endpoint
-  / VNet-scoped Language resource as well.
+* With input logging opted out, processing is stateless; inputs are not retained
+  and are not used to train models.
+* Managed identity is the only auth path (see above). The deployed resource must
+  use the reviewed private endpoint and VNet-scoped DNS path.
 
 ## What each engine contributes
 
@@ -129,11 +128,17 @@ on the merged output, alongside the original guardrail fuzz.
 A hold for a clinical reason ("documented but not addressed in plan") outranks
 the engine-split explanation, so coders still get the useful reason.
 
-## What the reviewer sees
+## Deferred reviewer surface
 
-`/api/encounters/{id}/coder-view` and `/api/billing` gain per-code
-`agreement` and `sourceEngine`, and `multiEngine` at the top level. The coder UI
-renders an agreement badge per row:
+After the shadow study clears its acceptance criteria, reviewer endpoints may
+expose `agreement`, `sourceEngine`, and `multiEngine`, and the coder UI may
+render agreement badges. None of these fields or badges is reviewer-visible
+during shadow mode. The proposed future meanings are:
+
+The current `COSMANEURA_AZURE_LANGUAGE_ENABLED` path performs active,
+conservative consensus and can change held/rejected outcomes and audit text. It
+is **not** the shadow seam. Do not enable it on a reviewer-serving deployment
+until an out-of-band comparison path exists that cannot change any response.
 
 | Badge | Meaning | Coder action |
 |---|---|---|
@@ -157,16 +162,18 @@ entities", never to a broken encounter.
 
 ## Rollout
 
-1. **Shadow** — run with `COSMANEURA_TA4H=mock` in dev, then a live F0 resource
-   against the frozen gold set. Measure agreement rate, TA4H-only finds, and
-   veto precision per `VALIDATION_PROTOCOL.md` §11/§13. Expect the review queue
-   to *grow* at first: that is the second engine finding things, which is the
-   point.
-2. **Surface** — turn on the agreement badges for coders. Collect their
-   adjudications through the existing feedback loop.
-3. **Gate** — only once the shadow metrics clear the protocol, consider letting
-   agreement influence capture. Nothing in the current policy does this: today
-   agreement never captures a code on its own.
+1. **Development verification** — use
+   `COSMANEURA_AZURE_LANGUAGE_MOCK=1` only for deterministic local tests. Mock
+   results are not shadow evidence.
+2. **Shadow** — after Azure OpenAI inference is enabled, run the live F0 resource
+   against the frozen 40–60-case gold set. Record agreement rate, each direction
+   of single-engine finds, veto precision, and added latency; expose nothing to
+   reviewers. This requires a future isolated comparison seam; the current
+   active-consensus setting does not satisfy this step.
+3. **Surface** — only after shadow acceptance, enable reviewer agreement badges
+   and collect adjudications.
+4. **Policy** — only after those stages consider whether agreement should
+   promote capture; the default remains no.
 
 ## Files
 

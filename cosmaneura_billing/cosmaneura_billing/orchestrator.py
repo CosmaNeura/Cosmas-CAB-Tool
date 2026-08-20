@@ -93,14 +93,31 @@ class BillingOrchestrator:
             facts, suggestions = primary_future.result()
             try:
                 secondary = secondary_future.result()
-            except Exception as exc:                      # noqa: BLE001 - degrade, don't fail
+            except Exception:                             # noqa: BLE001 - degrade, don't fail
                 return facts, suggestions, [
-                    f"CONSENSUS secondary extraction engine unavailable "
-                    f"[{type(exc).__name__}] {exc} — single-engine result.",
+                    "CONSENSUS secondary extraction engine unavailable "
+                    "[secondary_error] — single-engine result.",
                 ]
 
-        return self.consensus.run(
-            (facts, suggestions), secondary, new_patient=new_patient)
+        # C2 depends on this ordering: the primary engine's evidence must be
+        # authenticated before consensus decides whether a secondary span is
+        # merely additive. Otherwise a fabricated primary quote could make the
+        # secondary engine supply the first valid span and grow the captured set.
+        primary_evidence_audit = verify_suggestion_evidence(bundle, suggestions)
+        secondary_facts, secondary_suggestions = secondary
+        secondary_evidence_audit = verify_suggestion_evidence(
+            bundle, secondary_suggestions,
+        )
+        merged_facts, merged_suggestions, consensus_audit = self.consensus.run(
+            (facts, suggestions),
+            (secondary_facts, secondary_suggestions),
+            new_patient=new_patient,
+        )
+        return (
+            merged_facts,
+            merged_suggestions,
+            consensus_audit + primary_evidence_audit + secondary_evidence_audit,
+        )
 
     def process(self, bundle: VisitBundle, user_id: str | None = None) -> BillingResult:
         new_patient = "new" in bundle.encounter_type

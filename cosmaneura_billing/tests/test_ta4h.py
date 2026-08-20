@@ -1,5 +1,7 @@
 """Azure Text Analytics for health client + secondary coding agent."""
 import json
+import time
+import urllib.error
 
 import pytest
 
@@ -9,8 +11,8 @@ from cosmaneura_billing.knowledge.icd10_ccsr import ICD10CCSR
 from cosmaneura_billing.schemas import CodeKind, Disposition
 from cosmaneura_billing.settings import Settings, SettingsError
 from cosmaneura_billing.ta4h import (
-    AzureLanguageTA4H, MockTA4H, describe_ta4h_client, get_default_ta4h_client,
-    parse_entities,
+    AzureLanguageTA4H, MockTA4H, TA4HServiceError, describe_ta4h_client,
+    get_default_ta4h_client, parse_entities,
 )
 from demo_visit import SAMPLE_VISIT
 
@@ -35,6 +37,7 @@ def _client(**over) -> AzureLanguageTA4H:
 # Response parsing
 # --------------------------------------------------------------------------- #
 def test_parse_entities_reads_assertions_and_links():
+    source_text = "0123456789hematochezia" + " " * 28 + "colorectal cancer"
     doc = {
         "id": "signed_note",
         "entities": [
@@ -48,7 +51,7 @@ def test_parse_entities_reads_assertions_and_links():
              "links": [{"dataSource": "ICD10CM", "id": "C18.9"}]},
         ],
     }
-    ents = parse_entities(doc, "signed_note")
+    ents = parse_entities(doc, "signed_note", source_text)
     assert len(ents) == 2
 
     first = ents[0]
@@ -69,7 +72,7 @@ def test_parse_entities_drops_offshape_rows_instead_of_raising():
         {"text": "y", "category": "Diagnosis", "offset": "0", "length": 1},
         {"text": "z", "category": "Diagnosis", "offset": 0, "length": 1},
     ]}
-    ents = parse_entities(doc, "signed_note")
+    ents = parse_entities(doc, "signed_note", "z")
     assert [e.text for e in ents] == ["z"]
 
 
@@ -79,7 +82,38 @@ def test_first_link_per_vocabulary_wins():
         "links": [{"dataSource": "ICD10CM", "id": "E11.9"},
                   {"dataSource": "ICD10CM", "id": "E11.8"}],
     }]}
-    assert parse_entities(doc, "s")[0].icd10 == "E11.9"
+    assert parse_entities(doc, "s", "a")[0].icd10 == "E11.9"
+
+
+@pytest.mark.parametrize("offset,length", [(-1, 8), (0, 0), (100, 8)])
+def test_parse_entities_rejects_invalid_bounds(offset, length):
+    doc = {"entities": [{
+        "text": "diabetes", "category": "Diagnosis", "offset": offset,
+        "length": length, "links": [{"dataSource": "ICD10CM", "id": "E11.9"}],
+    }]}
+    assert parse_entities(doc, "signed_note", "Assessment: hypertension") == []
+
+
+def test_parse_entities_rejects_a_concept_that_does_not_match_its_source_span():
+    source = "Assessment: hypertension"
+    offset = source.index("hypertension")
+    doc = {"entities": [{
+        "text": "diabetes", "category": "Diagnosis", "offset": offset,
+        "length": len("hypertension"),
+        "links": [{"dataSource": "ICD10CM", "id": "E11.9"}],
+    }]}
+    assert parse_entities(doc, "signed_note", source) == []
+
+
+def test_unicode_code_point_offsets_match_python_source_indices():
+    source = "Patient " + chr(0x1F642) + " has diabètes"
+    text = "diabètes"
+    offset = source.index(text)
+    doc = {"entities": [{
+        "text": text, "category": "Diagnosis", "offset": offset,
+        "length": len(text), "confidenceScore": 0.8,
+    }]}
+    assert parse_entities(doc, "signed_note", source)[0].text == text
 
 
 # --------------------------------------------------------------------------- #
@@ -90,11 +124,13 @@ def test_submit_body_opts_out_of_input_logging(monkeypatch):
     client = _client()
     seen: dict = {}
 
-    def fake_request(url, *, data=None, method="GET"):
+    def fake_request(url, *, data=None, method="GET", deadline=None):
         if method == "POST":
             seen["body"] = json.loads(data)
             seen["url"] = url
-            return {}, {"operation-location": "https://example/jobs/1"}
+            return {}, {"operation-location": (
+                _ENDPOINT + "/language/analyze-text/jobs/1?api-version=2023-04-01"
+            )}
         return {"status": "succeeded", "tasks": {"items": [
             {"results": {"documents": [{"id": "signed_note", "entities": []}]}}]}}, {}
 
@@ -104,6 +140,7 @@ def test_submit_body_opts_out_of_input_logging(monkeypatch):
     task = seen["body"]["tasks"][0]
     assert task["kind"] == "Healthcare"
     assert task["parameters"]["loggingOptOut"] is True
+    assert task["parameters"]["stringIndexType"] == "UnicodeCodePoint"
     assert seen["url"].startswith(_ENDPOINT + "/language/analyze-text/jobs")
 
 
@@ -112,7 +149,7 @@ def test_requests_carry_a_managed_identity_bearer_token(monkeypatch):
     captured: dict = {}
 
     class FakeResponse:
-        headers = {"operation-location": "https://example/jobs/1"}
+        headers = {}
 
         def read(self):
             return b"{}"
@@ -127,9 +164,75 @@ def test_requests_carry_a_managed_identity_bearer_token(monkeypatch):
         captured["auth"] = req.headers.get("Authorization")
         return FakeResponse()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    client._request("https://example/x", data=b"{}", method="POST")
+    monkeypatch.setattr(client, "_urlopen", fake_urlopen)
+    client._request(
+        _ENDPOINT + "/language/analyze-text/jobs?api-version=2023-04-01",
+        data=b"{}", method="POST",
+    )
     assert captured["auth"] == "Bearer stub-token"
+
+
+def test_redirect_response_is_terminal_and_never_followed():
+    calls = {"count": 0}
+
+    def refusing_urlopen(req, timeout=None):
+        calls["count"] += 1
+        raise urllib.error.HTTPError(
+            req.full_url, 302, "Jane Doe MRN-123",
+            {"Location": "https://attacker.example"}, None,
+        )
+
+    client = AzureLanguageTA4H(
+        _enabled_settings(), token_provider=lambda: ("stub-token", 2**40),
+        urlopen=refusing_urlopen,
+    )
+    with pytest.raises(TA4HServiceError, match="request was rejected") as caught:
+        client._request(
+            _ENDPOINT + "/language/analyze-text/jobs?api-version=2023-04-01",
+            data=b"{}", method="POST",
+        )
+    assert calls["count"] == 1
+    assert "Jane" not in str(caught.value)
+
+
+def test_request_timeout_is_bounded_by_the_poll_deadline():
+    seen = {}
+
+    def timing_out(req, timeout=None):
+        seen["timeout"] = timeout
+        raise TimeoutError("synthetic timeout")
+
+    client = AzureLanguageTA4H(
+        _enabled_settings(), token_provider=lambda: ("stub-token", 2**40),
+        urlopen=timing_out, max_retries=0, timeout=60,
+    )
+    with pytest.raises(TA4HServiceError):
+        client._request(
+            _ENDPOINT + "/language/analyze-text/jobs/1",
+            deadline=time.monotonic() + 0.05,
+        )
+    assert 0 < seen["timeout"] <= 0.05
+
+
+def test_cross_host_operation_location_is_rejected_before_token_lookup(monkeypatch):
+    token_calls = {"count": 0}
+
+    def token_provider():
+        token_calls["count"] += 1
+        return "should-not-leave", 2**40
+
+    client = AzureLanguageTA4H(_enabled_settings(), token_provider=token_provider)
+
+    def fake_request(url, *, data=None, method="GET", deadline=None):
+        assert method == "POST"
+        return {}, {"operation-location": "https://attacker.example/steal"}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    with pytest.raises(TA4HServiceError, match="untrusted service URL"):
+        client.analyze({"signed_note": "synthetic text"})
+    # The injected request seam bypasses the normal submit token on purpose;
+    # validation must still reject the returned URL before any poll bearer.
+    assert token_calls["count"] == 0
 
 
 def test_bearer_token_is_cached_until_it_nears_expiry():
@@ -165,6 +268,12 @@ def test_api_key_in_the_environment_is_refused(monkeypatch):
         AzureLanguageTA4H._build_token_provider(_CLIENT_ID)
 
 
+def test_injected_token_provider_cannot_bypass_prohibited_credentials(monkeypatch):
+    monkeypatch.setenv("AZURE_LANGUAGE_KEY", "should-not-be-used")
+    with pytest.raises(SettingsError, match="prohibited"):
+        _client()
+
+
 def test_settings_reject_a_key_when_the_engine_is_enabled():
     with pytest.raises(SettingsError, match="prohibited"):
         Settings.from_env({
@@ -188,6 +297,14 @@ def test_settings_require_an_endpoint_when_enabled():
 def test_settings_require_the_managed_identity_when_enabled():
     with pytest.raises(SettingsError, match="AZURE_CLIENT_ID"):
         Settings(azure_language_enabled=True, azure_language_endpoint=_ENDPOINT)
+
+
+@pytest.mark.parametrize("client_id", [
+    "not-a-uuid", "{6f9619ff-8b86-d011-b42d-00cf4fc964ff}",
+])
+def test_settings_require_a_canonical_managed_identity_uuid(client_id):
+    with pytest.raises(SettingsError, match="AZURE_CLIENT_ID"):
+        _enabled_settings(azure_client_id=client_id)
 
 
 def test_mock_is_refused_in_deployed_environments():
@@ -230,14 +347,67 @@ def test_missing_operation_location_raises(monkeypatch):
 def test_failed_job_raises(monkeypatch):
     client = _client()
 
-    def fake_request(url, *, data=None, method="GET"):
+    def fake_request(url, *, data=None, method="GET", deadline=None):
         if method == "POST":
-            return {}, {"operation-location": "https://example/jobs/1"}
-        return {"status": "failed", "errors": [{"code": "InternalServerError"}]}, {}
+            return {}, {"operation-location": (
+                _ENDPOINT + "/language/analyze-text/jobs/1?api-version=2023-04-01"
+            )}
+        return {"status": "failed", "errors": [{"message": "Jane Doe MRN-123"}]}, {}
 
     monkeypatch.setattr(client, "_request", fake_request)
-    with pytest.raises(RuntimeError, match="failed"):
+    with pytest.raises(TA4HServiceError, match="job failed") as caught:
         client.analyze({"signed_note": "text"})
+    assert "Jane" not in str(caught.value)
+
+
+@pytest.mark.parametrize("error_location", ["task", "document"])
+def test_partial_service_errors_fail_closed_without_raw_provider_text(error_location):
+    canary = "Jane Doe MRN-123"
+    if error_location == "task":
+        payload = {"status": "succeeded", "tasks": {"items": [{
+            "error": {"message": canary},
+        }]}}
+    else:
+        payload = {"status": "succeeded", "tasks": {"items": [{
+            "results": {"documents": [], "errors": [{"message": canary}]},
+        }]}}
+    with pytest.raises(TA4HServiceError) as caught:
+        AzureLanguageTA4H._collect(payload, {"signed_note": "synthetic"})
+    assert canary not in str(caught.value)
+
+
+def test_malformed_task_container_fails_with_a_sanitized_error():
+    with pytest.raises(TA4HServiceError, match="malformed response"):
+        AzureLanguageTA4H._collect(
+            {"status": "succeeded", "tasks": ["bad"]},
+            {"signed_note": "synthetic"},
+        )
+
+
+def test_success_response_must_return_every_submitted_document():
+    payload = {"status": "succeeded", "tasks": {"items": [{
+        "results": {"documents": [], "errors": []},
+    }]}}
+    with pytest.raises(TA4HServiceError, match="incomplete document results"):
+        AzureLanguageTA4H._collect(
+            payload, {"signed_note": "synthetic patient text"},
+        )
+
+
+@pytest.mark.parametrize("returned_id", ["unknown", "signed_note"])
+def test_success_response_rejects_unknown_or_duplicate_document_ids(returned_id):
+    documents = [{"id": "signed_note", "entities": []}]
+    if returned_id == "unknown":
+        documents = [{"id": "unknown", "entities": []}]
+    else:
+        documents.append({"id": "signed_note", "entities": []})
+    payload = {"status": "succeeded", "tasks": {"items": [{
+        "results": {"documents": documents, "errors": []},
+    }]}}
+    with pytest.raises(TA4HServiceError, match="mismatched document results"):
+        AzureLanguageTA4H._collect(
+            payload, {"signed_note": "synthetic patient text"},
+        )
 
 
 # --------------------------------------------------------------------------- #

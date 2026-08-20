@@ -37,15 +37,25 @@ import random
 from .agents.coding import _facts_to_em
 from .agents.compliance_guardrail import ComplianceGuardrailAgent
 from .agents.consensus import ConsensusAgent
+from .evidence import verify_suggestion_evidence
 from .guardrail_fuzz import (
     _DX_CODES, _EM_CODES, check_invariants, em_level, generate_case,
 )
-from .schemas import CodeKind, CodeSuggestion, Disposition, Evidence
+from .schemas import CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle
 
 _VETO_REASONS = (
     "documentation states this finding is absent/denied",
     "finding is attributed to a family member, not the patient",
     "finding is hypothetical, not an active diagnosis",
+)
+
+_EVIDENCE_BUNDLE = VisitBundle(
+    encounter_id="consensus-fuzz",
+    patient_age=40,
+    patient_sex="unknown",
+    encounter_type="office_established",
+    place_of_service="11",
+    signed_note="Synthetic documentation: refer for colonoscopy.",
 )
 
 
@@ -148,21 +158,86 @@ def run_consensus_fuzz(cases: int = 2000, seed: int = 20260819) -> list[str]:
     consensus = ConsensusAgent()
     violations: list[str] = []
 
+    # Deterministic C2 preflight for the exact evidence-boundary bug found in
+    # review: a fabricated primary quote must not let a valid secondary quote
+    # become the first authenticated span and create a captured code.
+    c2_primary = [CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="K62.5",
+        label="Hemorrhage of anus and rectum",
+        disposition=Disposition.CAPTURED,
+        evidence=[Evidence("signed_note", "fabricated quote absent from chart")],
+    )]
+    c2_secondary = [CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="K62.5",
+        label="Hemorrhage of anus and rectum",
+        disposition=Disposition.CAPTURED,
+        evidence=[Evidence("signed_note", "refer for colonoscopy")],
+        source_engine="ta4h",
+    )]
+    c2_single = [_clone(s) for s in c2_primary]
+    c2_dual_primary = [_clone(s) for s in c2_primary]
+    c2_dual_secondary = [_clone(s) for s in c2_secondary]
+    verify_suggestion_evidence(_EVIDENCE_BUNDLE, c2_single)
+    verify_suggestion_evidence(_EVIDENCE_BUNDLE, c2_dual_primary)
+    verify_suggestion_evidence(_EVIDENCE_BUNDLE, c2_dual_secondary)
+    c2_facts = {"problems": [], "data_reviewed": [], "risk": {}}
+    c2_secondary_facts = {
+        "ta4h_problems": [],
+        "ta4h_data_reviewed": [],
+        "ta4h_contradictions": {},
+        "ta4h_entity_count": 1,
+    }
+    c2_single_out, _ = guardrail.run(
+        c2_facts, c2_single, new_patient=False,
+    )
+    c2_merged_facts, c2_merged, _ = consensus.run(
+        (c2_facts, c2_dual_primary),
+        (c2_secondary_facts, c2_dual_secondary),
+        new_patient=False,
+    )
+    c2_dual_out, _ = guardrail.run(
+        c2_merged_facts, c2_merged, new_patient=False,
+    )
+    c2_single_captured = {
+        s.code for s in c2_single_out if s.disposition == Disposition.CAPTURED
+    }
+    c2_dual_captured = {
+        s.code for s in c2_dual_out if s.disposition == Disposition.CAPTURED
+    }
+    if not c2_dual_captured <= c2_single_captured:
+        violations.append(
+            "preflight: C2 secondary evidence replaced fabricated primary evidence"
+        )
+
     for i in range(cases):
         primary_facts, primary, new_patient = generate_case(rng)
         secondary_facts, secondary = generate_secondary(rng, primary)
 
+        # Exercise the same evidence boundary as the real orchestrator. Some
+        # primary quotes are deliberately fabricated while secondary quotes are
+        # valid, which is the adversarial shape that previously broke C2.
+        for suggestion in primary:
+            if suggestion.evidence and rng.random() < 0.25:
+                suggestion.evidence[0].quote = "fabricated quote absent from chart"
+
         # Baseline: what the primary engine alone would have captured.
+        single_in = [_clone(s) for s in primary]
+        verify_suggestion_evidence(_EVIDENCE_BUNDLE, single_in)
         single_out, _ = guardrail.run(
-            primary_facts, [_clone(s) for s in primary], new_patient=new_patient)
+            primary_facts, single_in, new_patient=new_patient)
         captured_single = {s.code for s in single_out
                            if s.disposition == Disposition.CAPTURED}
 
         # The two-engine path, from the same primary input.
         dual_in = [_clone(s) for s in primary]
+        secondary_in = [_clone(s) for s in secondary]
+        verify_suggestion_evidence(_EVIDENCE_BUNDLE, dual_in)
+        verify_suggestion_evidence(_EVIDENCE_BUNDLE, secondary_in)
         before = [(s.kind, s.code, s.disposition, len(s.evidence)) for s in dual_in]
         merged_facts, merged, _audit = consensus.run(
-            (primary_facts, dual_in), (secondary_facts, [_clone(s) for s in secondary]),
+            (primary_facts, dual_in), (secondary_facts, secondary_in),
             new_patient=new_patient)
         dual_out, _ = guardrail.run(merged_facts, merged, new_patient=new_patient)
         captured_dual = {s.code for s in dual_out

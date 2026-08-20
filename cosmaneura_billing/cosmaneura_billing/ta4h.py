@@ -48,6 +48,7 @@ not used to train models.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import urllib.error
@@ -140,7 +141,20 @@ class TA4HClient(Protocol):
         ...
 
 
-def parse_entities(doc: dict[str, Any], source: str) -> list[HealthEntity]:
+class TA4HServiceError(RuntimeError):
+    """A sanitized Azure AI Language service or response failure."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never forward a managed-identity bearer token through a redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def parse_entities(
+    doc: dict[str, Any], source: str, source_text: str,
+) -> list[HealthEntity]:
     """Parse one result document's entities. Defensive: unknown or off-shape
     fields are dropped rather than raising, so a service-side response change
     degrades to "fewer entities", never to a failed encounter."""
@@ -156,6 +170,22 @@ def parse_entities(doc: dict[str, Any], source: str) -> list[HealthEntity]:
             continue
         if isinstance(offset, bool) or isinstance(length, bool):
             continue
+        if offset < 0 or length < 1 or offset + length > len(source_text):
+            continue
+        # Requests pin UnicodeCodePoint indexing, which matches Python string
+        # indices. A service-returned entity must name the exact source slice;
+        # otherwise a mismatched offset could manufacture valid-looking chart
+        # evidence for a different concept.
+        if source_text[offset:offset + length] != text:
+            continue
+        confidence_raw = e.get("confidenceScore", 0.0)
+        if isinstance(confidence_raw, bool) or not isinstance(
+            confidence_raw, (int, float),
+        ):
+            continue
+        confidence = float(confidence_raw)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            continue
         assertion = e.get("assertion") if isinstance(e.get("assertion"), dict) else {}
         links: dict[str, str] = {}
         for link in e.get("links") or []:
@@ -165,7 +195,7 @@ def parse_entities(doc: dict[str, Any], source: str) -> list[HealthEntity]:
         out.append(HealthEntity(
             text=text, category=category, offset=offset, length=length,
             source=source,
-            confidence=float(e.get("confidenceScore") or 0.0),
+            confidence=confidence,
             name=str(e.get("name") or ""),
             certainty=str(assertion.get("certainty") or ""),
             conditionality=str(assertion.get("conditionality") or ""),
@@ -193,7 +223,8 @@ class AzureLanguageTA4H:
     def __init__(self, settings: Settings | None = None, *,
                  token_provider=None, language: str = "en",
                  max_retries: int = 3, timeout: int = 60,
-                 poll_interval: float = 1.0, max_poll_seconds: float = 120.0):
+                 poll_interval: float = 1.0, max_poll_seconds: float = 120.0,
+                 urlopen=None):
         config = settings or Settings.from_env()
         self.endpoint = config.azure_language_endpoint.rstrip("/")
         self.api_version = config.azure_language_api_version
@@ -203,16 +234,26 @@ class AzureLanguageTA4H:
         self.poll_interval = poll_interval
         self.max_poll_seconds = max_poll_seconds
         self._token: tuple[str, float] | None = None
+        self._urlopen = urlopen or urllib.request.build_opener(
+            _NoRedirectHandler(),
+        ).open
 
-        if token_provider is None:
-            # Validate the effective values, so a caller cannot swap a reviewed
-            # Language endpoint for another host and send it a bearer token.
-            Settings(
-                azure_language_enabled=True,
-                azure_language_endpoint=self.endpoint,
-                azure_language_api_version=self.api_version,
-                azure_client_id=config.azure_client_id,
+        if any(os.environ.get(name)
+               for name in _PROHIBITED_AZURE_LANGUAGE_CREDENTIAL_ENV):
+            raise SettingsError(
+                "direct Azure AI Language credentials are prohibited; managed "
+                "identity is required"
             )
+
+        # Validate effective values even when tests inject a token provider.
+        # No caller may swap the reviewed endpoint before a bearer is attached.
+        Settings(
+            azure_language_enabled=True,
+            azure_language_endpoint=self.endpoint,
+            azure_language_api_version=self.api_version,
+            azure_client_id=config.azure_client_id,
+        )
+        if token_provider is None:
             token_provider = self._build_token_provider(config.azure_client_id)
         self._token_provider = token_provider
 
@@ -247,30 +288,76 @@ class AzureLanguageTA4H:
         return token
 
     # -- HTTP --------------------------------------------------------------- #
-    def _request(self, url: str, *, data: bytes | None = None,
-                 method: str = "GET") -> tuple[dict[str, Any], dict[str, str]]:
+    def _validated_service_url(self, value: str) -> str:
+        try:
+            base = urllib.parse.urlsplit(self.endpoint)
+            target = urllib.parse.urlsplit(value)
+            target_port = target.port
+        except (TypeError, ValueError):
+            raise TA4HServiceError(
+                "AzureLanguageTA4H returned an invalid service URL"
+            ) from None
+        if (
+            target.scheme.lower() != "https"
+            or (target.hostname or "").lower() != (base.hostname or "").lower()
+            or target_port is not None
+            or target.username is not None
+            or target.password is not None
+            or target.fragment
+            or not target.path.startswith("/language/analyze-text/jobs")
+        ):
+            raise TA4HServiceError(
+                "AzureLanguageTA4H returned an untrusted service URL"
+            )
+        return value
+
+    def _request(
+        self,
+        url: str,
+        *,
+        data: bytes | None = None,
+        method: str = "GET",
+        deadline: float | None = None,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        url = self._validated_service_url(url)
         headers = {"content-type": "application/json",
                    "Authorization": f"Bearer {self._bearer()}"}
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        last_err: Exception | None = None
         for attempt in range(self.max_retries + 1):
             if attempt:
-                time.sleep(min(2 ** attempt, 15))
+                delay = min(2 ** attempt, 15)
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "AzureLanguageTA4H polling deadline expired"
+                        ) from None
+                    delay = min(delay, remaining)
+                time.sleep(delay)
+            request_timeout = self.timeout
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "AzureLanguageTA4H polling deadline expired"
+                    ) from None
+                request_timeout = min(request_timeout, remaining)
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                with self._urlopen(req, timeout=request_timeout) as resp:
                     raw = resp.read()
                     resp_headers = {k.lower(): v for k, v in resp.headers.items()}
                     body = json.loads(raw) if raw else {}
                     return (body if isinstance(body, dict) else {}), resp_headers
             except urllib.error.HTTPError as e:
                 if e.code not in self.RETRYABLE:
-                    raise
-                last_err = e
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-                last_err = e
-        raise RuntimeError(
+                    raise TA4HServiceError(
+                        "AzureLanguageTA4H request was rejected"
+                    ) from None
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+                pass
+        raise TA4HServiceError(
             f"AzureLanguageTA4H: {method} failed after {self.max_retries + 1} attempts"
-        ) from last_err
+        ) from None
 
     def analyze(self, documents: dict[str, str]) -> dict[str, list[HealthEntity]]:
         docs = [{"id": doc_id, "language": self.language, "text": text}
@@ -287,7 +374,10 @@ class AzureLanguageTA4H:
                 "taskName": "cosmaneura-ta4h",
                 # Not configurable: chart text must not enter the provider's
                 # 48-hour troubleshooting log. See the PHI note above.
-                "parameters": {"loggingOptOut": True},
+                "parameters": {
+                    "loggingOptOut": True,
+                    "stringIndexType": "UnicodeCodePoint",
+                },
             }],
         }
         submit_url = (f"{self.endpoint}/language/analyze-text/jobs"
@@ -296,33 +386,71 @@ class AzureLanguageTA4H:
             submit_url, data=json.dumps(body).encode(), method="POST")
         job_url = headers.get("operation-location")
         if not job_url:
-            raise RuntimeError(
+            raise TA4HServiceError(
                 "AzureLanguageTA4H: submit returned no operation-location header")
+        job_url = self._validated_service_url(job_url)
 
         deadline = time.monotonic() + self.max_poll_seconds
         while True:
-            payload, _ = self._request(job_url)
+            payload, _ = self._request(job_url, deadline=deadline)
             status = str(payload.get("status", "")).lower()
             if status == "succeeded":
                 return self._collect(payload, documents)
             if status in ("failed", "cancelled", "rejected"):
-                raise RuntimeError(
-                    f"AzureLanguageTA4H: job {status}: {payload.get('errors')}")
+                raise TA4HServiceError(
+                    f"AzureLanguageTA4H job {status}"
+                )
             if time.monotonic() >= deadline:
                 raise TimeoutError(
-                    f"AzureLanguageTA4H: job still '{status}' after "
-                    f"{self.max_poll_seconds:.0f}s")
+                    "AzureLanguageTA4H polling deadline expired")
             time.sleep(self.poll_interval)
 
     @staticmethod
     def _collect(payload: dict[str, Any],
                  documents: dict[str, str]) -> dict[str, list[HealthEntity]]:
         out: dict[str, list[HealthEntity]] = {}
-        for item in (payload.get("tasks") or {}).get("items") or []:
-            for doc in ((item or {}).get("results") or {}).get("documents") or []:
+        expected_ids = {
+            doc_id for doc_id, text in documents.items()
+            if isinstance(text, str) and text.strip()
+        }
+        seen_ids: set[str] = set()
+        if payload.get("errors"):
+            raise TA4HServiceError("AzureLanguageTA4H returned task errors")
+        tasks = payload.get("tasks") or {}
+        if not isinstance(tasks, dict):
+            raise TA4HServiceError("AzureLanguageTA4H returned a malformed response")
+        items = tasks.get("items") or []
+        if not isinstance(items, list):
+            raise TA4HServiceError("AzureLanguageTA4H returned a malformed response")
+        for item in items:
+            if not isinstance(item, dict) or item.get("error") or item.get("errors"):
+                raise TA4HServiceError("AzureLanguageTA4H returned task errors")
+            results = item.get("results")
+            if not isinstance(results, dict) or results.get("errors"):
+                raise TA4HServiceError("AzureLanguageTA4H returned document errors")
+            result_documents = results.get("documents") or []
+            if not isinstance(result_documents, list):
+                raise TA4HServiceError(
+                    "AzureLanguageTA4H returned a malformed response"
+                )
+            for doc in result_documents:
+                if not isinstance(doc, dict):
+                    raise TA4HServiceError(
+                        "AzureLanguageTA4H returned a malformed response"
+                    )
                 doc_id = str(doc.get("id", ""))
-                if doc_id in documents:
-                    out.setdefault(doc_id, []).extend(parse_entities(doc, doc_id))
+                if doc_id not in expected_ids or doc_id in seen_ids:
+                    raise TA4HServiceError(
+                        "AzureLanguageTA4H returned mismatched document results"
+                    )
+                seen_ids.add(doc_id)
+                out.setdefault(doc_id, []).extend(
+                    parse_entities(doc, doc_id, documents[doc_id])
+                )
+        if seen_ids != expected_ids:
+            raise TA4HServiceError(
+                "AzureLanguageTA4H returned incomplete document results"
+            )
         return out
 
 
@@ -401,10 +529,10 @@ def get_default_ta4h_client(settings: Settings | None = None) -> TA4HClient | No
 
 
 def describe_ta4h_client(client: TA4HClient | None) -> dict[str, Any]:
-    """Which extraction path is live, for /api/health and pipeline responses.
+    """Describe the extraction path for internal diagnostics and future shadowing.
 
-    A stored claim has to be able to say what produced it: a single-engine run
-    and a two-engine consensus run are not the same evidence.
+    Reviewer-facing serialization is deliberately deferred until the approved
+    surface milestone.
     """
     return {
         "extractionEngines": 1 if client is None else 2,

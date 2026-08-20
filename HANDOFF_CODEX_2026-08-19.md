@@ -2,8 +2,10 @@
 
 **Date:** 2026-08-19
 
-**Scope:** extraction/consensus lane. No coding-policy, E/M-rule, discovery-contract,
-or UI/UX-behaviour change. No infrastructure change.
+**Scope:** extraction/consensus lane. No coding-policy, E/M-rule,
+discovery-contract, or currently enabled reviewer-facing UI change. Agreement
+surfacing remains deferred to the inference-on milestone. No infrastructure
+change is included in this pull request.
 
 **Pull request:** [#4](https://github.com/CosmaNeura/Cosmas-CAB-Tool/pull/4) —
 `claude/billing-analysis-multi-model-3k99ke`, merged from and reconciled against
@@ -22,8 +24,9 @@ the platform order wins: the release-candidate slice ships first.
 ## Current position
 
 - A second extraction engine exists in the tree and is **off by default**. With
-  nothing configured the pipeline is byte-for-byte the single-engine pipeline —
-  no agreement tags, no extra audit lines, no behaviour change.
+  nothing configured the externally visible pipeline remains the single-engine
+  pipeline — no reviewer agreement fields, no extra audit lines, and no
+  behavior change. Internal defaulted provenance fields are inert.
 - The engine is Azure AI Language *Text Analytics for health* (TA4H). It performs
   clinical NER, assertion detection (negated / hypothetical / family-member) and
   entity linking to UMLS vocabularies including ICD-10-CM. It returns character
@@ -118,17 +121,24 @@ the existing "Demo Release Candidate & Canonical Evidence" slice; defer the rest
 
 3. Provision the Language resource on F0 (5,000 text records/month, a text record
    being 1,000 characters). This covers the whole shadow-mode study at no cost.
-4. Shadow mode. Enable the engine with results logged and **nothing surfaced to a
-   reviewer**. Measure, against the 40–60 golden cases from slice item 7:
+4. Implement an isolated shadow seam before enabling the engine on any
+   reviewer-serving process. The current `azure_language_enabled` path performs
+   active conservative consensus; hiding badges alone is not shadow mode. The
+   future seam must log comparison results while leaving reviewer responses,
+   dispositions, rationales, and audit output unchanged. Then measure, against
+   the 40–60 golden cases from slice item 7:
    agreement rate, codes found only by TA4H, codes found only by the primary
    engine, veto precision against the known-correct answer, and added latency.
-   Expect the review queue to grow — that is the second engine finding things.
+   The recorded disagreement set may grow; the live review queue remains
+   unchanged until the surface milestone.
 5. Surface agreement badges to coders, and collect their adjudications through
    the existing feedback loop.
-6. Only after 4 and 5 clear, consider whether agreement should influence capture.
+6. Only after 4 and 5 clear, consider whether agreement should promote capture.
    Nothing in the current policy does this, and the default answer is no.
 
-**Do not** run step 4 before inference is enabled. Consensus requires two engines;
+**Do not** run step 4 before inference is enabled, and do not use the current
+active-consensus switch as a substitute for the isolated shadow seam. Consensus
+requires two engines;
 with the primary path on the offline model the second engine has only the bundled
 demo encounter to reconcile against, so the measurement would be meaningless.
 

@@ -8,6 +8,7 @@
 > observability) now exists. Both changes make the case for TA4H *stronger*, not weaker: the
 > second engine reuses the same tenant, the same managed identity, and the same token scope.
 > The paragraphs below are corrected; the conclusions are unchanged.
+
 **Question:** Can we synthesize Azure AI Language "Text Analytics for health" (TA4H) alongside our
 own billing-analysis engine? Is it covered under our Azure subscription, HIPAA-compliant,
 non-disruptive to what we've built, and actually valuable?
@@ -82,17 +83,17 @@ Sources: [TA4H overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azu
   ([Microsoft HIPAA offering](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us))
 - **In scope**: Azure AI Language / Cognitive Services (Text Analytics, incl. TA4H) is a
   HIPAA-eligible, in-audit-scope service under that BAA.
-- **Data handling**: processing is stateless; input text is not stored and is not used to
-  train models. **One required configuration**: the Language service logs input text for up to
-  48 hours by default for troubleshooting — set the **`loggingOptOut=true`** parameter on
-  every call (or disable at the resource) before any PHI flows. Use private
-  endpoints/VNet + managed identity when we host in Azure; the container option exists if we
-  ever need zero egress.
+- **Data handling**: with `loggingOptOut=true` fixed on every analysis
+  submission, processing is stateless; input text is not retained or used to
+  train models. The deployed account must use the reviewed private endpoint,
+  VNet DNS, and managed identity. The container option exists if we ever need
+  zero egress.
 - **Shared responsibility**: BAA eligibility ≠ compliance. Our obligations (access control,
   encryption, audit logging, minimum necessary) are unchanged and already written down in
   `VALIDATION_PROTOCOL.md` §5.
-- **Comparative note** (corrected): the pipeline no longer calls a public model API. Inference
-  is private Azure OpenAI over managed identity, disabled by default. TA4H therefore adds **no
+- **Comparative note:** ~~the pipeline calls Anthropic's public model API~~.
+  Inference now uses private Azure OpenAI over managed identity and remains
+  disabled by default. TA4H therefore adds **no
   new trust boundary at all** — same tenant, same Microsoft BAA, same managed identity, same
   `cognitiveservices.azure.com` token scope, no new subprocessor and no new secret. This is a
   stronger version of the argument used to replace Pinecone with pgvector, not a new exception
@@ -126,8 +127,10 @@ The architecture is unusually well suited to this:
    Any code only one engine found enters as `needs_review` and is held by the guardrail, never
    `captured`. `prove_no_upcode.py` now proves all three properties.
 2. **The zero-dependency core.** `pyproject.toml` deliberately keeps the engine stdlib-only.
-   Resolved by calling TA4H's REST API via `urllib`, exactly as `AnthropicLLM` and the AMA CPT
-   fetcher already do — **no new dependency, no `azure-ai-textanalytics` install**. A `MockTA4H`
+   TA4H uses stdlib `urllib`, matching the dependency-free transport stance of
+   the AMA CPT fetcher. Azure OpenAI uses the official OpenAI SDK through
+   managed identity; no public Anthropic adapter remains. There is **no
+   `azure-ai-textanalytics` install**. A `MockTA4H`
    mirrors `MockLLM` so CI stays offline and hermetic.
 
 Minor: endpoints are sync (`def`), and TA4H is an async long-running operation adding seconds
@@ -143,10 +146,11 @@ sum().
 2. **Assertion detection hardens compliance.** TA4H's negated / hypothetical / family-member
    modifiers converge with what `DocumentationIntegrityAgent` tries to do from LLM output —
    a second, independent signal against coding denied or family-history conditions.
-3. **Cross-vendor redundancy with a human-in-the-loop story.** Engine disagreement routed to
-   the existing coder-review queue (`CoderReview.jsx` reason codes + feedback loop) is exactly
-   the "two independent reads, human adjudicates" narrative payers and auditors like — and it
-   generates labeled disagreement data for our own tuning.
+3. **Cross-vendor redundancy with a human-in-the-loop story.** After the surface
+   milestone, engine disagreement can be routed to the existing coder-review
+   queue (`CoderReview.jsx` reason codes + feedback loop). That is the "two
+   independent reads, human adjudicates" narrative payers and auditors like,
+   and it generates labeled disagreement data for our own tuning.
 4. **It sidesteps the licensing wall.** `docs/CAC_DATA_SOURCES.md` surveys and rejects the
    open-source equivalents (MedCAT — Elastic License; scispaCy/QuickUMLS — UMLS/SNOMED
    licensing; PLM-ICD — MIMIC data taint). TA4H is the managed version of that entire stack
@@ -160,23 +164,27 @@ remains the coder — which is precisely why this is complementary and low-risk.
 ## 6. Recommended shape ("what success looks like")
 
 ```
-VisitBundle ──┬── CodingAgent (Claude: facts + concepts)      ──┐
-              │                                                 ├── ConsensusAgent ── existing pipeline
+VisitBundle ──┬── CodingAgent (primary Azure OpenAI when enabled; ──┐
+              │   deterministic offline model otherwise)           ├── ConsensusAgent ── existing pipeline
               └── TA4HCodingAgent (entities + assertions +     ──┘   (evidence → integrity → prefs →
                   ICD-10-CM links, offset-anchored evidence)         guardrail → denial risk → UI)
 ```
 
-- **Consensus policy**: union by normalized code; both-engines → eligible for `captured`
-  (guardrail still gates); single-engine → `needs_review` with an agreement badge in the coder
-  UI; facts merged element-wise-minimum for MDM inputs.
+- **Consensus policy**: secondary facts remain namespaced and cannot affect the
+  MDM ceiling. A single-engine diagnosis is held, either engine may veto,
+  secondary evidence never supplies a missing primary span, and agreement never
+  independently promotes capture. Shadow results remain internal until the
+  reviewer-surface milestone.
 - **Config**: `COSMANEURA_AZURE_LANGUAGE_ENABLED` + `AZURE_LANGUAGE_ENDPOINT` +
   `AZURE_CLIENT_ID`. **Managed identity only** — key-based auth is prohibited, matching the
   Azure OpenAI stance, so no new secret enters the deployment. Not enabled → engine off,
   current behavior byte-identical. `loggingOptOut` always on, not configurable.
-- **Rollout**: (1) shadow mode — TA4H runs, results logged, nothing surfaced; measure agreement
-  and lift against the frozen gold set per `VALIDATION_PROTOCOL.md` §11/§13 on the F0 free
-  tier; (2) coder-review surfacing; (3) consensus gating. Ship nothing to `captured` from TA4H
-  until the shadow metrics clear the protocol.
+- **Rollout**: (1) first add an isolated comparison seam; the current enabled
+  path performs active conservative consensus and is not shadow mode; (2) run
+  TA4H out-of-band, log results, and surface nothing while measuring agreement
+  and lift against the frozen gold set per `VALIDATION_PROTOCOL.md` §11/§13 on
+  the F0 free tier; (3) coder-review surfacing; (4) only then consider consensus
+  policy changes. Ship nothing to `captured` from TA4H because of agreement.
 
 ## 7. Status
 
@@ -191,12 +199,14 @@ Resolved during implementation:
       element-wise minimum originally proposed. Proven in `prove_no_upcode.py`.
 - [x] Offline mock so CI stays hermetic; graceful degradation on a TA4H outage.
 
-Still open, and owner-decisions rather than engineering ones:
+Still open:
 
 - [ ] Confirm exact S-tier per-record price for our region in the Azure pricing calculator
       (immaterial at pilot volume; the free F0 tier covers the whole validation study).
 - [ ] Compliance sign-off on the consensus policy as built.
+- [ ] Implement the isolated, non-influencing shadow seam before enabling TA4H
+      on any reviewer-serving process.
 - [ ] Run the shadow-mode measurement against the frozen gold set per `VALIDATION_PROTOCOL.md`
       §11/§13 before surfacing agreement badges to real coders.
-- [ ] Decide whether this triggers the broader Azure hosting build-out
-      (`STATUS_REVIEW_2026-08-06.md` items: hosting, auth, Postgres, secrets).
+- [ ] Extend the existing private Azure deployment with the Language account
+      and API-identity role assignment while keeping extraction disabled.
