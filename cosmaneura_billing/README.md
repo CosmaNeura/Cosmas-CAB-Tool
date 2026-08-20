@@ -87,7 +87,8 @@ The Entra trust boundary, role matrix, request controls, audit event contract,
 and local-development exception are in `docs/ACCESS_CONTROL.md`.
 The read-first Athena sandbox architecture, including why it uses a private
 outbound sync job rather than a second public API, is in
-`docs/ATHENA_SANDBOX_INTEGRATION.md`.
+`docs/ATHENA_SANDBOX_INTEGRATION.md`; the exact Preview, synthetic/read-only
+enrollment request is in `docs/ATHENA_SANDBOX_ACCESS_REQUEST.md`.
 
 Staging and production are PostgreSQL-only: set both
 `COSMANEURA_STATE_STORE=postgres` and `COSMANEURA_CHASE_STORE=postgres`, and use

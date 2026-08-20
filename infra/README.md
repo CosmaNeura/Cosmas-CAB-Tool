@@ -19,13 +19,16 @@ the spoof-resistance acceptance checks are deployed and verified.
   local authentication/public access disabled, a private endpoint/DNS zone,
   and API-identity-only `Cognitive Services Language Reader` RBAC; provisioning
   it does not enable the second extraction engine
-- separate user-assigned identities for the API, migration job, and chase
-  worker, each with ACR pull and only its required Key Vault secret grants
+- separate user-assigned identities for the API, migration job, chase worker,
+  and optional Athena sandbox sync lane, each with ACR pull and only its
+  required Key Vault secret grants
 - Log Analytics for closed-schema stdout events and workspace-based Application
   Insights for explicit numeric LLM metrics only
 - a manual Container Apps migration job, the same-origin API/frontend app, and
   a no-ingress chase-worker job that is manual by default and scheduled only
   when explicitly enabled
+- an optional no-ingress Athena sandbox sync job with no scheduler; both its
+  provisioning and execution gates are false by default
 
 ## Platform parameters and secret boundary
 
@@ -72,6 +75,13 @@ The app deployment owns behavior and receives these additional P4 inputs:
 - `provisionAzureLanguage` and `enableAzureLanguageExtraction` (both false by
   default), plus non-secret `azureLanguageApiVersion=2023-04-01`; enablement is
   rejected unless provisioning is also selected
+- `provisionAthenaSync` and `enableAthenaSync` (both false by default);
+  enablement is rejected unless provisioning is also selected and the exact
+  approved HTTPS base/token URLs, client ID, and synthetic/read-only scopes are
+  supplied
+- `athenaClientSecretKeyVaultSecretName`, which names an operator-created
+  dedicated sandbox OAuth secret; this template accepts no Athena secret value
+  parameter, while all live Athena endpoint/client/scope examples remain empty
 
 The two patient-messaging latches must change together. Enabling messaging also
 requires the scheduler and all ACS metadata; otherwise Bicep fails before
@@ -84,6 +94,7 @@ Secret access is intentionally partitioned:
 | API identity | `database-url`, Entra client secret, and `chase-gate-hmac-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string, any model API key |
 | Migration identity | `migration-database-url`, `database-runtime-password`, `chase-worker-database-password` | API DSN, worker DSN, gate key, ACS connection string |
 | Chase-worker identity | `chase-worker-database-url`, `chase-gate-hmac-key`, and (only when configured) `acs-email-connection-string` | API/owner DSNs, raw DB passwords, Entra client secret |
+| Athena-sync identity (optional) | only the operator-created secret named by `athenaClientSecretKeyVaultSecretName`, and only when sync is enabled | every API/migration/worker/database/Entra/chase/ACS/model secret |
 
 The gate key is the only Key Vault secret shared by API and worker. ACS
 endpoint/sender/reply values are shared non-secret fingerprint metadata; the
@@ -104,6 +115,16 @@ version environment variables are injected only when
 `enableAzureLanguageExtraction=true`; the enabled marker remains false
 otherwise. Migration and chase-worker identities receive no Language role or
 configuration.
+
+The Athena lane is more tightly dormant. With `provisionAthenaSync=false`, no
+Athena identity, role assignment, or job exists. Provisioning alone creates a
+dedicated identity, its registry-scoped `AcrPull` assignment, and a bounded
+manual Container Apps Job; it does not resolve or grant the Athena credential.
+Only `enableAthenaSync=true` adds an exact secret-scoped Key Vault reader grant
+and injects the approved non-secret live connection metadata. The job has no
+ingress and no scheduler. It receives no API, migration, or chase-worker
+credential. A separate least-privilege database import role and its acceptance
+evidence are still required before a live data import may be enabled.
 
 ## Deployment sequence
 
@@ -130,6 +151,10 @@ configuration.
    Keep both `provisionAzureLanguage=false` and
    `enableAzureLanguageExtraction=false` unless the reviewed dormant Language
    resource slice is being provisioned.
+   Keep both `provisionAthenaSync=false` and `enableAthenaSync=false`, and leave
+   `athenaBaseUrl`, `athenaTokenUrl`, `athenaClientId`, and `athenaScopes` empty
+   until Athena returns the exact synthetic/read-only sandbox contract. Never
+   place the Athena OAuth client secret in a parameter file.
    Provision Azure OpenAI only after the reviewed
    [cost-plan addendum](../docs/deployment/2026-08-18-azure-openai-cost-plan.md)
    is approved; provisioning still does not enable application inference.
@@ -165,7 +190,8 @@ configuration.
    chase worker reference `repo@digest`; a tag alone is never a deployment input.
    Deploy with `externalIngress=false`, `enableChaseScheduler=false`, both
    messaging latches false, `enableAzureOpenAIInference=false`, and
-   `enableAzureLanguageExtraction=false` only after that verification. The
+   `enableAzureLanguageExtraction=false`, `provisionAthenaSync=false`, and
+   `enableAthenaSync=false` only after that verification. The
    app deployment must not overlap a foundation deployment: private endpoint
    creation mutates the same `private-endpoints` subnet and the two deployments
    are the cross-template serialization boundary. Add the output FQDN as the Entra
@@ -254,6 +280,32 @@ and no claim suggestions. The
 tracked expectations are evaluation assertions, not engine output, and must
 never be rendered as a claim. Do not substitute `ENC-100237`, hand-edit the
 database row, or use this command for real/de-identified records.
+
+### Prepare the dormant Athena sandbox lane
+
+Request a dedicated, independently revocable Athena sandbox OAuth client for
+synthetic patients only. Ask Athena to return the exact API base URL, token URL,
+read-only scope strings, pagination/rate-limit behavior, and any outbound-IP
+allowlist requirement. Do not infer endpoint paths or broaden a scope name.
+
+After that grant is reviewed:
+
+1. Store only the dedicated client secret directly in Key Vault under the
+   reviewed `athenaClientSecretKeyVaultSecretName`; keep the value out of Bicep,
+   parameter files, shell history, logs, and application configuration.
+2. A deployment with `provisionAthenaSync=true` and
+   `enableAthenaSync=false` may create the dedicated identity and manual job for
+   infrastructure inspection. A manual start still fails closed because the
+   sync enable marker is false, and the identity has no Athena secret grant.
+3. Do not set `enableAthenaSync=true` until static egress/allowlisting is
+   resolved, the mock adapter suite passes, a separate database import role is
+   implemented, and synthetic live acceptance is approved. Enabling requires
+   exact HTTPS URLs, client ID, and synthetic/read-only scopes and adds only the
+   one secret-scoped Key Vault reader assignment.
+4. Even after enablement, execution is manual: this template defines no Athena
+   cron or event trigger. Start one reviewed execution explicitly and require
+   count-only logs, bounded pagination, idempotent replay, RLS, and credential
+   non-disclosure evidence before any further run.
 
 7. After staff assignments and the redirect URI are complete, redeploy with
    `externalIngress=true` and immediately run the acceptance checks below. If

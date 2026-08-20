@@ -1,7 +1,9 @@
 # Athena sandbox integration plan
 
-Status: planned; no Athena credential, network call, or production write path is
-implemented in this repository yet.
+Status: mock adapter and dormant job infrastructure implemented locally; no
+Athena credential, network call, imported record, or production write path is
+enabled. The exact Preview enrollment boundary is captured in
+[ATHENA_SANDBOX_ACCESS_REQUEST.md](ATHENA_SANDBOX_ACCESS_REQUEST.md).
 
 ## Deployment decision
 

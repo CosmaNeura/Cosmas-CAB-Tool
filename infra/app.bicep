@@ -82,6 +82,28 @@ param enableAzureLanguageExtraction bool = false
 @description('Azure Text Analytics for health data-plane API version.')
 param azureLanguageApiVersion string = '2023-04-01'
 
+@description('Provision a dedicated user-assigned identity and no-ingress manual job for Athena sandbox sync. This does not enable sync or make an Athena request.')
+param provisionAthenaSync bool = false
+
+@description('Enable the manually triggered Athena sandbox sync lane. Keep false until synthetic/read-only access, exact endpoints/scopes, egress, import-role, and acceptance review are complete.')
+param enableAthenaSync bool = false
+
+@description('Operator-created Key Vault secret name containing only the dedicated Athena sandbox OAuth client secret. No secret value is accepted by this template.')
+@minLength(1)
+param athenaClientSecretKeyVaultSecretName string = 'athena-sandbox-client-secret'
+
+@description('Approved Athena sandbox API base URL. Keep empty while sync is disabled; do not guess vendor paths.')
+param athenaBaseUrl string = ''
+
+@description('Approved Athena sandbox OAuth token URL. Keep empty while sync is disabled; do not guess OAuth behavior.')
+param athenaTokenUrl string = ''
+
+@description('Dedicated synthetic/read-only Athena sandbox application client ID. Keep empty while sync is disabled.')
+param athenaClientId string = ''
+
+@description('Exact approved synthetic/read-only Athena OAuth scopes. Keep empty while sync is disabled.')
+param athenaScopes string = ''
+
 @description('IANA timezone used for chase cadence and quiet-hour calculations.')
 param practiceTimezone string = 'UTC'
 
@@ -141,6 +163,7 @@ var appInsightsName = '${namePrefix}-insights-${suffix}'
 var identityName = '${namePrefix}-identity-${suffix}'
 var migrationIdentityName = '${namePrefix}-migration-identity-${suffix}'
 var chaseWorkerIdentityName = '${namePrefix}-chase-identity-${suffix}'
+var athenaSyncIdentityName = '${namePrefix}-athena-identity-${suffix}'
 var acrName = take('${compactPrefix}${suffix}', 50)
 var keyVaultName = take('${compactPrefix}${suffix}', 24)
 var azureOpenAIName = take('${compactPrefix}oai${suffix}', 64)
@@ -149,6 +172,7 @@ var vnetName = '${namePrefix}-vnet-${suffix}'
 var appName = '${containerNamePrefix}-api-${suffix}'
 var migrationJobName = '${containerNamePrefix}-mig-${suffix}'
 var chaseWorkerJobName = '${containerNamePrefix}-wrk-${suffix}'
+var athenaSyncJobName = '${containerNamePrefix}-ath-${suffix}'
 var normalizedImageDigest = toLower(imageDigest)
 var imageDigestHex = substring(normalizedImageDigest, 7, 64)
 var imageDigestNonHex = reduce([
@@ -197,6 +221,14 @@ var validatedAzureLanguageExtractionEnabled = enableAzureLanguageExtraction && !
   ? fail('enableAzureLanguageExtraction requires provisionAzureLanguage')
   : enableAzureLanguageExtraction
 var azureLanguageEnabledValue = validatedAzureLanguageExtractionEnabled ? 'true' : 'false'
+var athenaConfigurationFieldsPresent = startsWith(toLower(athenaBaseUrl), 'https://') && startsWith(toLower(athenaTokenUrl), 'https://') && !empty(athenaClientId) && !empty(athenaScopes)
+var validatedAthenaSyncEnabled = enableAthenaSync && !provisionAthenaSync
+  ? fail('enableAthenaSync requires provisionAthenaSync')
+  : enableAthenaSync && !athenaConfigurationFieldsPresent
+    ? fail('enableAthenaSync requires explicit HTTPS base/token URLs, client ID, and scope values')
+    : enableAthenaSync
+var athenaSyncEnabledValue = validatedAthenaSyncEnabled ? 'true' : 'false'
+var athenaSyncMode = validatedAthenaSyncEnabled ? 'live' : 'disabled'
 var chaseTransport = validatedPatientMessagingEnabled ? 'acs_email' : 'record_only'
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
@@ -234,12 +266,49 @@ resource chaseWorkerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2
   name: chaseWorkerIdentityName
 }
 
+resource athenaSyncIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (provisionAthenaSync) {
+  name: athenaSyncIdentityName
+  location: location
+  tags: tags
+}
+
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrName
 }
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
+}
+
+resource athenaSyncAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionAthenaSync) {
+  scope: registry
+  name: guid(registry.id, athenaSyncIdentity!.id, 'acrpull')
+  properties: {
+    principalId: athenaSyncIdentity!.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+  }
+}
+
+resource athenaClientSecretVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = if (validatedAthenaSyncEnabled) {
+  parent: keyVault
+  name: athenaClientSecretKeyVaultSecretName
+}
+
+resource athenaClientSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (validatedAthenaSyncEnabled) {
+  scope: athenaClientSecretVault
+  name: guid(athenaClientSecretVault.id, athenaSyncIdentity!.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: athenaSyncIdentity!.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
 }
 
 resource azureLanguage 'Microsoft.CognitiveServices/accounts@2024-10-01' = if (provisionAzureLanguage) {
@@ -937,6 +1006,114 @@ resource chaseWorkerJob 'Microsoft.App/jobs@2026-01-01' = {
   }
 }
 
+resource athenaSyncJob 'Microsoft.App/jobs@2026-01-01' = if (provisionAthenaSync) {
+  name: athenaSyncJobName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${athenaSyncIdentity!.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 900
+      replicaRetryLimit: 0
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: athenaSyncIdentity!.id
+        }
+      ]
+      secrets: validatedAthenaSyncEnabled ? [
+        {
+          name: 'athena-client-secret'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${athenaClientSecretKeyVaultSecretName}'
+          identity: athenaSyncIdentity!.id
+        }
+      ] : []
+    }
+    template: {
+      containers: [
+        {
+          name: 'athena-sync'
+          image: image
+          command: [
+            'python'
+          ]
+          args: [
+            '-m'
+            'cosmaneura_billing.athena_sync'
+            '--once'
+          ]
+          env: concat([
+            {
+              name: 'COSMANEURA_ENV'
+              value: 'production'
+            }
+            {
+              name: 'COSMANEURA_LOG_LEVEL'
+              value: 'INFO'
+            }
+            {
+              name: 'COSMANEURA_PRACTICE_ID'
+              value: practiceId
+            }
+            {
+              name: 'COSMANEURA_ATHENA_SYNC_ENABLED'
+              value: athenaSyncEnabledValue
+            }
+            {
+              name: 'COSMANEURA_ATHENA_MODE'
+              value: athenaSyncMode
+            }
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: athenaSyncIdentity!.properties.clientId
+            }
+          ], validatedAthenaSyncEnabled ? [
+            {
+              name: 'COSMANEURA_ATHENA_BASE_URL'
+              value: athenaBaseUrl
+            }
+            {
+              name: 'COSMANEURA_ATHENA_TOKEN_URL'
+              value: athenaTokenUrl
+            }
+            {
+              name: 'COSMANEURA_ATHENA_CLIENT_ID'
+              value: athenaClientId
+            }
+            {
+              name: 'COSMANEURA_ATHENA_SCOPES'
+              value: athenaScopes
+            }
+            {
+              name: 'COSMANEURA_ATHENA_CLIENT_SECRET'
+              secretRef: 'athena-client-secret'
+            }
+          ] : [])
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    athenaSyncAcrPull
+    athenaClientSecretReader
+  ]
+}
+
 resource applicationAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = {
   parent: application
   name: 'current'
@@ -983,3 +1160,7 @@ output azureLanguageProvisioned bool = provisionAzureLanguage
 output azureLanguageExtractionEnabled bool = validatedAzureLanguageExtractionEnabled
 output azureLanguageAccountName string = provisionAzureLanguage ? azureLanguage!.name : ''
 output azureLanguageEndpoint string = provisionAzureLanguage ? azureLanguage!.properties.endpoint : ''
+output athenaSyncProvisioned bool = provisionAthenaSync
+output athenaSyncEnabled bool = validatedAthenaSyncEnabled
+output athenaSyncIdentityName string = provisionAthenaSync ? athenaSyncIdentity!.name : ''
+output athenaSyncJobName string = provisionAthenaSync ? athenaSyncJob!.name : ''
