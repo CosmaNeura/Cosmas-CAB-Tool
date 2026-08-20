@@ -27,6 +27,11 @@ inference = [
     "openai>=1.109,<3",
     "azure-identity>=1.17,<2",
 ]
+# Second extraction engine: Azure AI Language (Text Analytics for health),
+# authenticated with the API's user-assigned managed identity. The transport is
+# stdlib urllib, so only the credential library is required. No API-key auth is
+# supported.
+language = ["azure-identity>=1.17,<2"]
 # Patient email delivery from the P4 scheduler. The API remains transport-inert.
 messaging = ["azure-communication-email>=1.1,<2"]
 # Explicit numeric metrics only.  No Azure/OpenTelemetry auto-instrumentation is

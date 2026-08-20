@@ -81,6 +81,10 @@ class CodeSuggestion:
     necessity_supported: bool = False
     denial_risk: str = "unknown"                # "low" | "medium" | "high"
     notes: list[str] = field(default_factory=list)
+    # Multi-engine provenance (set by the consensus agent; empty when only the
+    # primary engine ran, so single-engine output is unchanged).
+    source_engine: str = ""                     # "primary" | "ta4h" | "both"
+    agreement: str = ""                         # "both" | "primary_only" | "ta4h_only"
 
     @property
     def has_evidence(self) -> bool:

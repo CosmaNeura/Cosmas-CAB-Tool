@@ -1,9 +1,11 @@
 """Orchestrator: runs the agents in order and assembles the two role-scoped views."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from .agents import (
-    CodingAgent, ComplianceGuardrailAgent, DenialRiskAgent,
-    DocumentationIntegrityAgent, FeedbackAgent,
+    CodingAgent, ComplianceGuardrailAgent, ConsensusAgent, DenialRiskAgent,
+    DocumentationIntegrityAgent, FeedbackAgent, TA4HCodingAgent,
 )
 from .evidence import verify_suggestion_evidence
 from .knowledge.coverage import CoverageDB
@@ -20,13 +22,23 @@ from .schemas import (
     Disposition, FeedbackKind, ProviderCard, VisitBundle,
 )
 from .settings import Settings
+from .ta4h import TA4HClient, get_default_ta4h_client
 
 
 class BillingOrchestrator:
+    """Runs the agents in order and assembles the two role-scoped views.
+
+    Every collaborator is injectable. ``coding`` and ``secondary_coding`` are
+    the multi-engine seam: with no secondary engine configured (the default)
+    the pipeline is exactly the single-engine one, byte for byte.
+    """
+
     def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None,
                  ncci=None, coverage=None, pos=None, cpt=None, preferences=None,
-                 settings: Settings | None = None):
+                 settings: Settings | None = None,
+                 coding=None, secondary_coding=None, ta4h: TA4HClient | None = None):
         config = settings or Settings.from_env()
+        self.settings = config
         self.llm = llm or get_default_client(config)
         self.icd10 = icd10 or ICD10CCSR(settings=config)
         # NCCI / MCD coverage: explicit instance wins; otherwise auto-load from
@@ -41,20 +53,81 @@ class BillingOrchestrator:
         self.denial_priors = DenialPriors()
         # deterministic procedure / add-on candidates (99058 and friends)
         self.procedures = ProcedureRules()
-        self.coding = CodingAgent(self.llm, self.icd10)
+        self.coding = coding or CodingAgent(self.llm, self.icd10)
+        # Optional second extraction engine (Azure Text Analytics for health).
+        # Disabled unless the azure_language settings are enabled, exactly like
+        # Azure OpenAI inference, or a client is injected for tests.
+        self.ta4h = ta4h if ta4h is not None else get_default_ta4h_client(config)
+        if secondary_coding is not None:
+            self.secondary_coding = secondary_coding
+        elif self.ta4h is not None:
+            self.secondary_coding = TA4HCodingAgent(self.ta4h, self.icd10)
+        else:
+            self.secondary_coding = None
+        self.consensus = ConsensusAgent()
         self.integrity = DocumentationIntegrityAgent()
         self.guardrail = ComplianceGuardrailAgent()
         self.denial = DenialRiskAgent()
         self.feedback = FeedbackAgent()
 
+    @property
+    def multi_engine(self) -> bool:
+        return self.secondary_coding is not None
+
+    def _extract(self, bundle: VisitBundle, new_patient: bool
+                 ) -> tuple[dict, list[CodeSuggestion], list[str]]:
+        """Run the extraction engine(s) and return merged facts + candidates.
+
+        With a secondary engine configured both run concurrently, so the added
+        latency is the slower of the two rather than their sum. A secondary-engine
+        failure degrades to single-engine operation and is recorded in the audit
+        trail — it never fails the encounter.
+        """
+        if self.secondary_coding is None:
+            facts, suggestions = self.coding.run(bundle)
+            return facts, suggestions, []
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            primary_future = pool.submit(self.coding.run, bundle)
+            secondary_future = pool.submit(self.secondary_coding.run, bundle)
+            facts, suggestions = primary_future.result()
+            try:
+                secondary = secondary_future.result()
+            except Exception:                             # noqa: BLE001 - degrade, don't fail
+                return facts, suggestions, [
+                    "CONSENSUS secondary extraction engine unavailable "
+                    "[secondary_error] — single-engine result.",
+                ]
+
+        # C2 depends on this ordering: the primary engine's evidence must be
+        # authenticated before consensus decides whether a secondary span is
+        # merely additive. Otherwise a fabricated primary quote could make the
+        # secondary engine supply the first valid span and grow the captured set.
+        primary_evidence_audit = verify_suggestion_evidence(bundle, suggestions)
+        secondary_facts, secondary_suggestions = secondary
+        secondary_evidence_audit = verify_suggestion_evidence(
+            bundle, secondary_suggestions,
+        )
+        merged_facts, merged_suggestions, consensus_audit = self.consensus.run(
+            (facts, suggestions),
+            (secondary_facts, secondary_suggestions),
+            new_patient=new_patient,
+        )
+        return (
+            merged_facts,
+            merged_suggestions,
+            consensus_audit + primary_evidence_audit + secondary_evidence_audit,
+        )
+
     def process(self, bundle: VisitBundle, user_id: str | None = None) -> BillingResult:
         new_patient = "new" in bundle.encounter_type
 
-        facts, suggestions = self.coding.run(bundle)
+        facts, suggestions, consensus_audit = self._extract(bundle, new_patient)
         # Procedure / add-on candidates come from documented language rather than
         # clinical inference, so they are proposed deterministically here — and
         # then go through exactly the same evidence, integrity, guardrail and
-        # denial gates as everything else.
+        # denial gates as everything else. They are not part of the consensus
+        # merge: TA4H proposes no CPT, so there is nothing to reconcile.
         proc, proc_audit = self.procedures.propose(
             bundle, has_em=any(s.kind == CodeKind.EM for s in suggestions))
         suggestions += proc
@@ -69,7 +142,7 @@ class BillingOrchestrator:
         pref_audit = apply_preferences(
             suggestions, self.preferences.for_user(user_id), icd10=self.icd10)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
-        audit = proc_audit + ver_audit + pref_audit + audit
+        audit = consensus_audit + proc_audit + ver_audit + pref_audit + audit
         suggestions, denial_flags = self.denial.run(
             suggestions, ncci=self.ncci, coverage=self.coverage,
             icd10=self.icd10, pos=self.pos, denial_priors=self.denial_priors,

@@ -56,6 +56,16 @@ _PROHIBITED_AZURE_OPENAI_CREDENTIAL_ENV = (
     "AZURE_OPENAI_API_KEY",
     "AZURE_OPENAI_AD_TOKEN",
 )
+# The second extraction engine (Azure AI Language / Text Analytics for health)
+# takes the same stance: managed identity only, no key-based auth path.
+_PROHIBITED_AZURE_LANGUAGE_CREDENTIAL_ENV = (
+    "AZURE_LANGUAGE_KEY",
+    "AZURE_LANGUAGE_AD_TOKEN",
+    "AZURE_AI_LANGUAGE_KEY",
+)
+_AZURE_LANGUAGE_API_VERSION = re.compile(
+    r"20[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])(?:-preview)?\Z"
+)
 
 
 def _parse_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
@@ -147,6 +157,44 @@ def _canonicalize_acs_email_endpoint(
     ):
         raise SettingsError(f"{setting} must be a valid ACS HTTPS endpoint")
     return f"https://{hostname}"
+
+
+def _validate_azure_language_endpoint(value: str) -> None:
+    """Accept only a resource-scoped Azure AI Language HTTPS endpoint.
+
+    Only the resource-scoped Cognitive Services hostname is accepted, so an
+    operator cannot point the second extraction engine at an arbitrary host and
+    have it sent a managed-identity bearer token.
+    """
+    if not isinstance(value, str) or any(
+        char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
+    ):
+        raise SettingsError(
+            "AZURE_LANGUAGE_ENDPOINT must be a valid Azure HTTPS endpoint"
+        )
+    try:
+        endpoint = urlsplit(value)
+        endpoint_port = endpoint.port
+        hostname = (endpoint.hostname or "").lower()
+    except (TypeError, ValueError):
+        raise SettingsError(
+            "AZURE_LANGUAGE_ENDPOINT must be a valid Azure HTTPS endpoint"
+        ) from None
+    suffix = ".cognitiveservices.azure.com"
+    if (
+        endpoint.scheme.lower() != "https"
+        or not hostname.endswith(suffix)
+        or hostname == suffix
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or endpoint_port is not None
+        or endpoint.query
+        or endpoint.fragment
+        or endpoint.path.strip("/")
+    ):
+        raise SettingsError(
+            "AZURE_LANGUAGE_ENDPOINT must be a valid Azure HTTPS endpoint"
+        )
 
 
 def _validate_azure_openai_endpoint(value: str) -> None:
@@ -392,6 +440,14 @@ class Settings:
     azure_openai_deployment: str = ""
     azure_openai_model: str = ""
     azure_openai_api_version: str = "2025-04-01-preview"
+    # Second extraction engine (Text Analytics for health). Off by default, on
+    # the same terms as inference: a deployment opts in, it never drifts on.
+    azure_language_enabled: bool = False
+    azure_language_endpoint: str = ""
+    azure_language_api_version: str = "2023-04-01"
+    # Offline deterministic stand-in, for demos and tests only. Never valid in a
+    # deployed environment, where it would present mock output as engine output.
+    azure_language_mock: bool = False
 
     auth_mode: str = "disabled"
     entra_tenant_id: str = ""
@@ -547,6 +603,44 @@ class Settings:
             raise SettingsError(
                 "AZURE_OPENAI_API_VERSION must be an Azure API date or preview version"
             )
+        if type(self.azure_language_enabled) is not bool:
+            raise SettingsError("COSMANEURA_AZURE_LANGUAGE_ENABLED must be a boolean")
+        if type(self.azure_language_mock) is not bool:
+            raise SettingsError("COSMANEURA_AZURE_LANGUAGE_MOCK must be a boolean")
+        if self.azure_language_enabled and self.azure_language_mock:
+            raise SettingsError(
+                "COSMANEURA_AZURE_LANGUAGE_MOCK cannot be combined with enabled "
+                "Azure AI Language extraction"
+            )
+        if self.azure_language_mock and self.environment in {"staging", "production"}:
+            raise SettingsError(
+                "COSMANEURA_AZURE_LANGUAGE_MOCK is development-only; a deployed "
+                "second extraction engine must use Azure AI Language managed identity"
+            )
+        if self.azure_language_enabled and not self.azure_language_endpoint:
+            raise SettingsError(
+                "enabled Azure AI Language extraction requires "
+                "AZURE_LANGUAGE_ENDPOINT"
+            )
+        if self.azure_language_endpoint:
+            _validate_azure_language_endpoint(self.azure_language_endpoint)
+        if _AZURE_LANGUAGE_API_VERSION.fullmatch(self.azure_language_api_version) is None:
+            raise SettingsError(
+                "AZURE_LANGUAGE_API_VERSION must be an Azure API date or preview version"
+            )
+        if self.azure_language_enabled:
+            try:
+                client_id = UUID(self.azure_client_id)
+            except (TypeError, ValueError, AttributeError):
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity for "
+                    "Azure AI Language extraction"
+                ) from None
+            if str(client_id) != self.azure_client_id.casefold():
+                raise SettingsError(
+                    "AZURE_CLIENT_ID must identify the API managed identity for "
+                    "Azure AI Language extraction"
+                )
         if self.environment in {"staging", "production"} and self.openai_api_key:
             raise SettingsError(
                 "OPENAI_API_KEY is development-only; deployed inference must use "
@@ -891,6 +985,17 @@ class Settings:
                 "direct Azure OpenAI credentials are prohibited; managed identity "
                 "is required"
             )
+        azure_language_enabled = _parse_bool(
+            env, "COSMANEURA_AZURE_LANGUAGE_ENABLED", False,
+        )
+        if any(
+            (env.get(name) or "").strip()
+            for name in _PROHIBITED_AZURE_LANGUAGE_CREDENTIAL_ENV
+        ) and (azure_language_enabled or environment in {"staging", "production"}):
+            raise SettingsError(
+                "direct Azure AI Language credentials are prohibited; managed "
+                "identity is required"
+            )
         cache_value = env.get("XDG_CACHE_HOME")
         cache_home = (
             Path(cache_value) if cache_value else Path.home() / ".cache"
@@ -916,6 +1021,16 @@ class Settings:
             azure_openai_api_version=(
                 env.get("AZURE_OPENAI_API_VERSION") or "2025-04-01-preview"
             ).strip(),
+            azure_language_enabled=azure_language_enabled,
+            azure_language_endpoint=(
+                env.get("AZURE_LANGUAGE_ENDPOINT") or ""
+            ).strip(),
+            azure_language_api_version=(
+                env.get("AZURE_LANGUAGE_API_VERSION") or "2023-04-01"
+            ).strip(),
+            azure_language_mock=_parse_bool(
+                env, "COSMANEURA_AZURE_LANGUAGE_MOCK", False,
+            ),
             auth_mode=(env.get("COSMANEURA_AUTH_MODE") or "disabled").strip().lower(),
             entra_tenant_id=env.get("COSMANEURA_ENTRA_TENANT_ID", "").strip(),
             allowed_roles=_parse_csv(

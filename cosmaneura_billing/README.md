@@ -221,6 +221,42 @@ Standard Data File directory, or set `CPT_AUTO_FETCH=0` to disable fetching.
 Never commit descriptor files, the downloaded ZIP, or the AMA key/secret —
 CPT content stays under your license, outside the repository.
 
+## Second extraction engine (Azure Text Analytics for health)
+
+The repository contains an optional second extraction engine, disabled by
+default. Azure's Text Analytics for health
+contributes clinical NER, assertion detection (negated / hypothetical /
+family-member) and UMLS entity links to ICD-10-CM; it never levels E/M and never
+makes a billing decision. Its internal consensus provenance supports future
+shadow evaluation; agreement badges and reviewer-facing provenance remain
+deferred until the approved surface milestone. A code only one engine found is
+held for a human, and either engine may veto.
+
+Off by default, on the same terms as inference, and managed-identity only — there
+is no key-based path. The API's existing user-assigned identity needs a
+*Cognitive Services Language Reader* role assignment on the Language resource;
+no new secret enters the deployment.
+
+```bash
+# offline deterministic mock (development only; refused in staging/production)
+COSMANEURA_AZURE_LANGUAGE_MOCK=1 uvicorn cosmaneura_billing.api:app --port 8000
+
+# future inference-on milestone only; do not enable during provisioning
+# (the current switch runs active conservative consensus; it is not shadow mode)
+export COSMANEURA_AZURE_LANGUAGE_ENABLED=1
+export AZURE_LANGUAGE_ENDPOINT='https://<resource>.cognitiveservices.azure.com'
+export AZURE_CLIENT_ID='<api-managed-identity-client-id>'
+uvicorn cosmaneura_billing.api:app --port 8000
+```
+
+Input logging is opted out on every analysis submission (PHI), the transport is stdlib
+`urllib` so no HTTP/SDK dependency is added, and a TA4H outage degrades to
+single-engine operation rather than failing an encounter.
+`prove_no_upcode.py` proves that adding the engine cannot
+raise a level or grow the captured set, across 2,000 adversarial cases. See
+`docs/TA4H_INTEGRATION.md` for the consensus policy and rollout gates, and
+`docs/TA4H_MULTI_MODEL_ASSESSMENT.md` for the cost/HIPAA/value assessment.
+
 ## Insurance-data chase (F9)
 
 The billers' #1 stated pain: 300–500 claims a month held for missing insurance
@@ -367,17 +403,20 @@ Both fail closed: a missing or unreadable list makes every answer "unknown", and
 unknown blocks. Point it at the practice's list with
 `COSMANEURA_DIRECT_CONTRACT_LIST` (CSV with a `patient_ref` column, or JSON).
 
+
 ## What's in the box
 
 ```
 cosmaneura_billing/
   schemas.py                 dataclasses; the "evidence-or-it-isn't-billable" rule lives here
   llm.py                     LLMClient protocol + offline MockLLM + AzureOpenAILLM adapter
+  ta4h.py                    Azure Text Analytics for health client + offline MockTA4H
   orchestrator.py            runs the agents and assembles both role views
   billing_tab.py             provider billing-tab adapter (F1) — a view, never a second engine
   completeness.py            note rule packs + attestation block (F2)
   direct_contract.py         the F3 gate: hard-stop for charges, review for chases
   guardrail_fuzz.py          adversarial cases behind the anti-inflation invariant
+  consensus_fuzz.py          the same, with a second extraction engine in the loop
   chase/                     insurance-data chase (F9)
     models.py                CoverageSnapshot (the athenaNet boundary), ChaseItem, states
     detector.py              F9a triggers + appointment-proximity priority
@@ -391,6 +430,8 @@ cosmaneura_billing/
     icd10_ccsr.py            ICD-10 <-> CCSR lookup on the AHRQ data (+ ported embedding search)
   agents/
     coding.py                proposes E/M + ICD-10, always with a documentation span
+    ta4h_coding.py           optional 2nd extractor: UMLS-linked ICD-10 + assertion vetoes
+    consensus.py             reconciles the two extractors; only ever more conservative
     documentation_integrity.py   rejects contradicted codes, flags documentation gaps
     compliance_guardrail.py  the hard gate: can only downgrade or remove, never inflate
     denial_risk.py           specificity / linkage / modifier checks
@@ -399,8 +440,9 @@ cosmaneura_billing/
 demo_visit.py                the GI-bleed sample encounter
 run_demo.py                  end-to-end billing demo
 demo_chase.py                end-to-end insurance-chase demo (for the staff interview)
-prove_no_upcode.py           guardrail invariant test
+prove_no_upcode.py           anti-inflation invariant proof (one engine and two)
 DESIGN.md                    architecture + the design decisions and why
+docs/TA4H_INTEGRATION.md     the multi-engine path: config, policy, rollout
 ```
 
 See `DESIGN.md` for the architecture, the compliance stance, one design change
