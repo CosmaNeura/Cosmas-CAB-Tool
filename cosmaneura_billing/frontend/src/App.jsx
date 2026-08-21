@@ -20,6 +20,7 @@ const tab = (active) =>
 export default function App() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
+  const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
   const [health, setHealth] = useState(null);           // null = probing, false = offline
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
   const [serviceError, setServiceError] = useState(null);
@@ -36,6 +37,7 @@ export default function App() {
         ]);
         setHealth(h);
         setViews(session.views);
+        setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
         setView((current) => (
           session.views.includes(current) ? current : session.defaultView
         ));
@@ -153,7 +155,7 @@ export default function App() {
         ) : view === null ? (
           <p>Loading your assigned workspace…</p>
         ) : view === "chase" ? (
-          <CardChase live={Boolean(health)} />
+          <CardChase live={Boolean(health)} demoSeed={chaseDemoSeed} />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>
         ) : !selected ? (

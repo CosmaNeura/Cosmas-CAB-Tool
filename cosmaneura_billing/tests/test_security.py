@@ -430,19 +430,40 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     )
     provider_coder = _auth_headers(roles=("Provider", "Coder"))
     coder_billing_staff = _auth_headers(roles=("Coder", "BillingStaff"))
+    admin_coder = _auth_headers(roles=("Admin", "Coder"))
 
-    assert client.get("/api/session", headers=provider).json()["views"] == [
+    provider_session = client.get("/api/session", headers=provider).json()
+    billing_staff_session = client.get(
+        "/api/session", headers=billing_staff,
+    ).json()
+    coder_session = client.get("/api/session", headers=coder).json()
+    admin_session = client.get("/api/session", headers=admin).json()
+
+    assert provider_session["views"] == [
         "provider",
     ]
-    assert client.get("/api/session", headers=billing_staff).json()["views"] == [
+    assert billing_staff_session["views"] == [
         "chase",
     ]
-    assert client.get("/api/session", headers=coder).json()["views"] == [
+    assert coder_session["views"] == [
         "provider", "coder", "chase",
     ]
-    assert client.get("/api/session", headers=admin).json()["views"] == [
+    assert admin_session["views"] == [
         "provider", "coder", "chase",
     ]
+    assert all(
+        "actions" not in session
+        for session in (provider_session, billing_staff_session, coder_session)
+    )
+    assert admin_session["actions"] == {
+        "seedSyntheticChase": {
+            "seedDigest": EXPECTED_PACK_DIGEST,
+            "caseCount": 4,
+        },
+    }
+    assert client.get(
+        "/api/session", headers=admin_coder,
+    ).json()["actions"] == admin_session["actions"]
     assert client.get(
         "/api/session", headers=provider_with_extra_staff,
     ).json()["views"] == ["provider"]
