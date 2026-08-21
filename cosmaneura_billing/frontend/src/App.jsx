@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { ShieldCheck, Stethoscope, ClipboardCheck, Info, Wifi, WifiOff } from "lucide-react";
+import { ShieldCheck, Stethoscope, ClipboardCheck, CreditCard, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import BillingReview from "./BillingReview.jsx";
+import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
 
 function Pill({ tone, title, children }) {
@@ -17,7 +18,8 @@ const tab = (active) =>
     active ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`;
 
 export default function App() {
-  const [view, setView] = useState("billing");          // billing | coder
+  const [view, setView] = useState(null);               // provider | coder | chase
+  const [views, setViews] = useState([]);               // server-owned capabilities
   const [health, setHealth] = useState(null);           // null = probing, false = offline
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
   const [serviceError, setServiceError] = useState(null);
@@ -28,13 +30,22 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const h = await api("/api/health");
+        const [h, session] = await Promise.all([
+          api("/api/health"),
+          api("/api/session"),
+        ]);
         setHealth(h);
-        const encs = await api("/api/encounters");
-        setEncounters(encs);
-        setSelected((current) => (
-          encs.some((e) => e.id === current) ? current : (encs[0]?.id || null)
+        setViews(session.views);
+        setView((current) => (
+          session.views.includes(current) ? current : session.defaultView
         ));
+        if (session.views.includes("provider") || session.views.includes("coder")) {
+          const encs = await api("/api/encounters");
+          setEncounters(encs);
+          setSelected((current) => (
+            encs.some((e) => e.id === current) ? current : (encs[0]?.id || null)
+          ));
+        }
       } catch (error) {
         if (error?.status === 401 || error?.status === 403) {
           setAuthStatus(error.status);
@@ -48,6 +59,8 @@ export default function App() {
       }
     })();
   }, []);
+
+  const encounterView = view === "provider" || view === "coder";
 
   // UI SEAM (P2): Container Apps owns the Entra session. Keep this state
   // deliberately minimal so the separate UI work can replace its presentation
@@ -102,14 +115,23 @@ export default function App() {
 
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-slate-200">
-            <button className={tab(view === "billing")} onClick={() => setView("billing")}>
-              <Stethoscope size={15} />Provider &amp; biller
-            </button>
-            <button className={tab(view === "coder")} onClick={() => setView("coder")}>
-              <ClipboardCheck size={15} />Coder review
-            </button>
+            {views.includes("provider") && (
+              <button className={tab(view === "provider")} onClick={() => setView("provider")}>
+                <Stethoscope size={15} />Provider
+              </button>
+            )}
+            {views.includes("coder") && (
+              <button className={tab(view === "coder")} onClick={() => setView("coder")}>
+                <ClipboardCheck size={15} />Coder review
+              </button>
+            )}
+            {views.includes("chase") && (
+              <button className={tab(view === "chase")} onClick={() => setView("chase")}>
+                <CreditCard size={15} />Card chase
+              </button>
+            )}
           </div>
-          {encounters.length > 0 && (
+          {encounterView && encounters.length > 0 && (
             <label className="flex items-center gap-2 text-sm text-slate-600">
               Encounter
               <select value={selected || ""} onChange={(e) => setSelected(e.target.value)}
@@ -126,6 +148,12 @@ export default function App() {
 
         {health === null ? (
           <p>Connecting to the billing service…</p>
+        ) : health === false && view === null ? (
+          <p>The billing service is offline. No mock claim or patient task was loaded.</p>
+        ) : view === null ? (
+          <p>Loading your assigned workspace…</p>
+        ) : view === "chase" ? (
+          <CardChase live={Boolean(health)} />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>
         ) : !selected ? (
@@ -136,7 +164,7 @@ export default function App() {
               No mock claim or expected code has been substituted.
             </p>
           </div>
-        ) : view === "billing" ? (
+        ) : view === "provider" ? (
           <BillingReview encounterId={selected} live={Boolean(health)} />
         ) : (
           <CoderReview encounterId={selected} live={Boolean(health)} />

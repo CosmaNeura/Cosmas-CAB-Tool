@@ -440,9 +440,18 @@ class Settings:
     azure_openai_deployment: str = ""
     azure_openai_model: str = ""
     azure_openai_api_version: str = "2025-04-01-preview"
+    # Deployment-time safety latch for a public synthetic demo. When enabled,
+    # model-backed API routes accept only encounters whose server-owned stored
+    # provenance is the reserved release-candidate source. It never trusts an
+    # encounter ID prefix or caller-provided classification.
+    azure_openai_synthetic_only: bool = False
     # Second extraction engine (Text Analytics for health). Off by default, on
     # the same terms as inference: a deployment opts in, it never drifts on.
     azure_language_enabled: bool = False
+    # Isolated observation-only lane. Unlike ``azure_language_enabled`` this
+    # mode may collect only aggregate comparison metrics and can never feed
+    # TA4H output into reviewer responses or claim decisions.
+    azure_language_shadow_enabled: bool = False
     azure_language_endpoint: str = ""
     azure_language_api_version: str = "2023-04-01"
     # Offline deterministic stand-in, for demos and tests only. Never valid in a
@@ -566,6 +575,15 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_AZURE_OPENAI_ENABLED must be a boolean"
             )
+        if type(self.azure_openai_synthetic_only) is not bool:
+            raise SettingsError(
+                "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY must be a boolean"
+            )
+        if self.azure_openai_synthetic_only and not self.azure_openai_enabled:
+            raise SettingsError(
+                "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY requires "
+                "COSMANEURA_AZURE_OPENAI_ENABLED=true"
+            )
         if self.azure_openai_enabled and not all(azure_openai_fields.values()):
             missing = ", ".join(
                 name
@@ -605,8 +623,34 @@ class Settings:
             )
         if type(self.azure_language_enabled) is not bool:
             raise SettingsError("COSMANEURA_AZURE_LANGUAGE_ENABLED must be a boolean")
+        if type(self.azure_language_shadow_enabled) is not bool:
+            raise SettingsError(
+                "COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED must be a boolean"
+            )
+        if self.azure_language_enabled and not self.azure_openai_enabled:
+            raise SettingsError(
+                "COSMANEURA_AZURE_LANGUAGE_ENABLED requires "
+                "COSMANEURA_AZURE_OPENAI_ENABLED=true"
+            )
+        if self.azure_language_shadow_enabled and not self.azure_openai_enabled:
+            raise SettingsError(
+                "TA4H shadow mode requires primary Azure OpenAI inference"
+            )
+        if (
+            self.azure_language_shadow_enabled
+            and not self.azure_openai_synthetic_only
+        ):
+            raise SettingsError(
+                "TA4H shadow mode requires the reserved synthetic-only "
+                "inference policy"
+            )
         if type(self.azure_language_mock) is not bool:
             raise SettingsError("COSMANEURA_AZURE_LANGUAGE_MOCK must be a boolean")
+        if self.azure_language_enabled and self.azure_language_shadow_enabled:
+            raise SettingsError(
+                "Azure AI Language active consensus and shadow modes are mutually "
+                "exclusive"
+            )
         if self.azure_language_enabled and self.azure_language_mock:
             raise SettingsError(
                 "COSMANEURA_AZURE_LANGUAGE_MOCK cannot be combined with enabled "
@@ -617,7 +661,9 @@ class Settings:
                 "COSMANEURA_AZURE_LANGUAGE_MOCK is development-only; a deployed "
                 "second extraction engine must use Azure AI Language managed identity"
             )
-        if self.azure_language_enabled and not self.azure_language_endpoint:
+        if (
+            self.azure_language_enabled or self.azure_language_shadow_enabled
+        ) and not self.azure_language_endpoint:
             raise SettingsError(
                 "enabled Azure AI Language extraction requires "
                 "AZURE_LANGUAGE_ENDPOINT"
@@ -628,7 +674,7 @@ class Settings:
             raise SettingsError(
                 "AZURE_LANGUAGE_API_VERSION must be an Azure API date or preview version"
             )
-        if self.azure_language_enabled:
+        if self.azure_language_enabled or self.azure_language_shadow_enabled:
             try:
                 client_id = UUID(self.azure_client_id)
             except (TypeError, ValueError, AttributeError):
@@ -974,6 +1020,9 @@ class Settings:
         azure_openai_enabled = _parse_bool(
             env, "COSMANEURA_AZURE_OPENAI_ENABLED", False,
         )
+        azure_openai_synthetic_only = _parse_bool(
+            env, "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY", False,
+        )
         direct_azure_credential_present = any(
             (env.get(name) or "").strip()
             for name in _PROHIBITED_AZURE_OPENAI_CREDENTIAL_ENV
@@ -988,10 +1037,17 @@ class Settings:
         azure_language_enabled = _parse_bool(
             env, "COSMANEURA_AZURE_LANGUAGE_ENABLED", False,
         )
+        azure_language_shadow_enabled = _parse_bool(
+            env, "COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED", False,
+        )
         if any(
             (env.get(name) or "").strip()
             for name in _PROHIBITED_AZURE_LANGUAGE_CREDENTIAL_ENV
-        ) and (azure_language_enabled or environment in {"staging", "production"}):
+        ) and (
+            azure_language_enabled
+            or azure_language_shadow_enabled
+            or environment in {"staging", "production"}
+        ):
             raise SettingsError(
                 "direct Azure AI Language credentials are prohibited; managed "
                 "identity is required"
@@ -1021,7 +1077,9 @@ class Settings:
             azure_openai_api_version=(
                 env.get("AZURE_OPENAI_API_VERSION") or "2025-04-01-preview"
             ).strip(),
+            azure_openai_synthetic_only=azure_openai_synthetic_only,
             azure_language_enabled=azure_language_enabled,
+            azure_language_shadow_enabled=azure_language_shadow_enabled,
             azure_language_endpoint=(
                 env.get("AZURE_LANGUAGE_ENDPOINT") or ""
             ).strip(),

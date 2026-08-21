@@ -18,6 +18,7 @@ gate, not a legal opinion. No bulk dataset was downloaded during this audit.
 | **MTS-Dialog** | [Repository](https://github.com/abachaa/MTS-Dialog) is CC BY 4.0 and describes 1,700 conversation/note pairs. The [paper landing page](https://aclanthology.org/2023.eacl-main.168/) reviewed in this audit does not establish whether every source dialogue is wholly synthetic. | **Unresolved for the synthetic-only gate.** A permissive copyright license does not establish absence of real or deidentified patient content. | **Quarantined from release demos and training** until a source-method record proves the patient-data lineage. Existing bundled files may remain for legacy tests but must not be represented as wholly synthetic on this audit alone. |
 | **`cosmaneura-demo-rc-v1`** | Authored in-repository solely for this release candidate; validated by `cosmaneura_billing.corpus.demo_release_candidate`. | Wholly synthetic; no real or deidentified record was used or adapted; direct-identifier-shaped values are prohibited. | **Demo and evaluation only; training prohibited.** The expected captures are billable ICD-10-CM codes explicitly written in exact signed-note evidence. No CPT expectation or proprietary descriptor is present. |
 | **`cosmaneura-demo-source-extension-v1`** | Authored in-repository as a separately digest-pinned extension; validated by `cosmaneura_billing.corpus.demo_source_extension`. | Wholly synthetic; no real or deidentified record was used or adapted. URL, IP, ZIP, address, long-identifier, control/bidirectional-character, and direct-identifier-shaped values are prohibited. | **Demo and blinded evaluation only; training prohibited.** The packaged artifact contains source encounters only: no coding tokens, expected outputs, labels, CPT/E/M expectations, or submitted codes. The blinded review workflow is kept outside the installed package and image. |
+| **`cosmaneura-synthetic-chase-v1`** | Authored in-repository for the insurance follow-up demo; exact canonical digest `fc207ef1…59d23ff` is enforced by `chase.synthetic_demo`. | Wholly synthetic. The four contact destinations are restricted to the NANP fictional `+1 202-555-0101`–`0104` range and are never accepted from a request. | **Demo only; training prohibited.** Covers missing-card, expired-plan, inactive-eligibility, and direct-contract human-review states. Installation is Admin-only and refused unless all outbound latches are dormant and transport is `record_only`. |
 
 ## Tracked-repository audit
 
@@ -31,6 +32,9 @@ gate, not a legal opinion. No bulk dataset was downloaded during this audit.
   claims.
 - `cosmaneura_billing/cosmaneura_billing/data/{icd10cm_ccsr_full.csv.gz,ncci/,mcd/}`
   are knowledge/policy assets. They are never clinical training examples.
+- `cosmaneura_billing/cosmaneura_billing/data/synthetic_chase/pack.v1.json`
+  is the fixed four-case F9 demo pack. Exact pack/case provenance is persisted
+  server-side before a fictional destination can be rendered.
 - Root-level `iCliniq.feather`, `GenMedGPT-5k.feather`, `combined.feather`, and
   `med_chat_QA_data.csv` lack a complete tracked source/license/PHI manifest.
   The existing loader itself says commercial terms must be confirmed. They are
@@ -58,4 +62,5 @@ cd cosmaneura_billing
 python -m cosmaneura_billing.corpus.demo_release_candidate
 python -m cosmaneura_billing.corpus.demo_source_extension
 pytest tests/test_demo_release_candidate_pack.py tests/test_demo_source_extension_pack.py
+pytest tests/test_synthetic_chase_demo.py
 ```

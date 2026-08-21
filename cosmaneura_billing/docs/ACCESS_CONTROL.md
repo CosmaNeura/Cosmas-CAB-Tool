@@ -25,12 +25,37 @@ email addresses are never authoritative.
 
 | Surface | Roles |
 |---|---|
-| View encounters and run billing/completeness | `Admin`, `BillingStaff`, `Coder`, `Provider` |
-| Submit coder feedback | `Admin`, `Coder` |
+| View encounters and run provider billing/completeness | `Admin`, `Coder`, `Provider` |
+| View coder review and submit coder feedback | `Admin`, `Coder` |
 | View aggregate feedback | `Admin` |
-| View or act on the chase worklist | `Admin`, `BillingStaff` |
+| View the chase worklist/contact-task projection | `Admin`, `BillingStaff`, `Coder` |
+| Detect, assign, or record chase state transitions | `Admin`, `BillingStaff` |
 | Register, approve, activate, or revoke a chase policy | `Admin` |
 | Release an exact direct-contract review or per-message touch | `Admin` |
+
+The same rules drive navigation, but navigation is not the security boundary.
+`GET /api/session` returns server-derived view capabilities, and every data
+route independently enforces the corresponding role set:
+
+| App role | Visible tabs |
+|---|---|
+| `Provider` | Provider only |
+| `BillingStaff` | Insurance follow-up (Card Chase) only |
+| `Coder` | Provider, Coder review, and Insurance follow-up |
+| `Admin` | Provider, Coder review, and Insurance follow-up |
+
+The frontend never interprets raw role names. A provider or billing-staff user
+cannot reveal a hidden surface by modifying browser state because the denied
+backend route returns 403. Actual user-to-role assignment remains an Entra and
+practice-membership administration operation; login never creates or expands a
+membership.
+If a Provider token is mistakenly also assigned `BillingStaff`, Provider remains
+the restrictive effective persona and still receives only the Provider surface.
+Only `Coder` or `Admin` intentionally expands a login to all three views.
+Effective roles otherwise compose: `Coder` plus `BillingStaff` receives all
+three views and the BillingStaff transition authority, while Admin-only policy
+and release operations remain Admin-only. Pilot identities should normally hold
+one persona role so this composition is deliberate rather than accidental.
 
 Configure the Entra enterprise application with **Assignment required = Yes**,
 define exactly those app roles, and assign only pilot staff or controlled staff
@@ -180,6 +205,24 @@ commits the entire batch and its audit completion atomically, returns counts
 only, and leaves row retrieval to the authenticated worklist. Logging a
 scheduler-created phone attempt completes the exact durable staff task and
 advances its cadence in the same audited transaction.
+
+The user-facing worklist is a minimum-necessary projection: it omits patient
+references, gate payloads, assignee identifiers, attempt notes, and contact
+destinations. `POST /api/chase/task` accepts an opaque chase ID only in its JSON
+body and returns either a fixed digest-pinned synthetic manual-call destination
+or an athenaNet system-of-record placeholder. A direct-contract review withholds
+even the synthetic destination until the human gate is resolved. No identifier
+is accepted in a chase URL.
+
+`POST /api/chase/demo-seed` is an authenticated Admin operator action, not an
+anonymous/public seed path. It requires the exact bundled pack digest, writes
+all four cases and contact snapshots atomically in the durable topology, and
+records the Admin access completion in that same transaction. Exact replay is
+a no-op; partial or lookalike state conflicts. It refuses to run unless the
+scheduler, patient-messaging, and operational-activation latches are all off and
+the configured transport is `record_only`. Synthetic contact disclosure also
+requires server-owned persisted seed provenance containing the exact pack and
+case digests; matching a patient reference or chase ID is insufficient.
 
 The one-shot worker is invoked with
 `python -m cosmaneura_billing.chase.worker --once`. `record_only` is the default:

@@ -248,6 +248,11 @@ class AzureLanguageTA4H:
         # Validate effective values even when tests inject a token provider.
         # No caller may swap the reviewed endpoint before a bearer is attached.
         Settings(
+            azure_openai_enabled=config.azure_openai_enabled,
+            azure_openai_endpoint=config.azure_openai_endpoint,
+            azure_openai_deployment=config.azure_openai_deployment,
+            azure_openai_model=config.azure_openai_model,
+            azure_openai_api_version=config.azure_openai_api_version,
             azure_language_enabled=True,
             azure_language_endpoint=self.endpoint,
             azure_language_api_version=self.api_version,
@@ -523,7 +528,7 @@ def get_default_ta4h_client(settings: Settings | None = None) -> TA4HClient | No
     config = settings or Settings.from_env()
     if config.azure_language_mock:
         return MockTA4H()
-    if config.azure_language_enabled:
+    if config.azure_language_enabled or config.azure_language_shadow_enabled:
         return AzureLanguageTA4H(settings=config)
     return None
 

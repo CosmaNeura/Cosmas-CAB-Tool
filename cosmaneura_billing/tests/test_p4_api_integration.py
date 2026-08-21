@@ -41,6 +41,24 @@ _CONTACT_SNAPSHOT_ID = "22222222-2222-4222-8222-222222222222"
     [
         (
             "GET",
+            "/api/session",
+            "session.view",
+            "/api/session",
+        ),
+        (
+            "POST",
+            "/api/chase/task",
+            "chase.view",
+            "/api/chase/task",
+        ),
+        (
+            "POST",
+            "/api/chase/demo-seed",
+            "chase.decide",
+            "/api/chase/demo-seed",
+        ),
+        (
+            "GET",
             "/api/chase/policy/status",
             "chase.policy.view",
             "/api/chase/policy/status",

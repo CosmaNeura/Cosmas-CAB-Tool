@@ -69,12 +69,16 @@ The app deployment owns behavior and receives these additional P4 inputs:
   `chaseWorkerCronExpression`
 - `uploadUrl`, `directContractListPath`, and `chaseApprovalMode`, which are also
   part of the server-configured policy/evidence boundary
-- `enableAzureOpenAIInference` (false by default), plus non-secret
+- `enableAzureOpenAIInference` and
+  `restrictAzureOpenAIToSyntheticDemo` (both false by default), plus non-secret
   `azureOpenAIDeploymentName`, `azureOpenAIModelName`, and
-  `azureOpenAIApiVersion=2025-04-01-preview`
-- `provisionAzureLanguage` and `enableAzureLanguageExtraction` (both false by
-  default), plus non-secret `azureLanguageApiVersion=2023-04-01`; enablement is
-  rejected unless provisioning is also selected
+  `azureOpenAIApiVersion=2025-04-01-preview`; external ingress and OpenAI may
+  coexist only when the synthetic restriction is true
+- `provisionAzureLanguage`, `enableAzureLanguageExtraction`, and
+  `enableAzureLanguageShadow` (all false by default), plus non-secret
+  `azureLanguageApiVersion=2023-04-01`; both runtime modes require provisioning,
+  are mutually exclusive, and both require primary Azure OpenAI inference;
+  shadow additionally requires the reserved synthetic-only restriction
 - `provisionAthenaSync` and `enableAthenaSync` (both false by default);
   enablement is rejected unless provisioning is also selected and the exact
   approved HTTPS base/token URLs, client ID, and synthetic/read-only scopes are
@@ -105,16 +109,21 @@ Azure OpenAI authorization is resource-scoped RBAC, not Key Vault access. The
 API's Azure OpenAI endpoint, deployment, model label, and API version are
 non-secret configuration and are injected only when inference is explicitly
 enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
+For an externally reachable synthetic demo,
+`restrictAzureOpenAIToSyntheticDemo=true` injects a second application latch.
+The API and engine then accept model input only from a stored row whose
+server-owned provenance is the reserved release-candidate value. Ad-hoc input
+and operational rows fail before outbound inference; an ID prefix or request
+field cannot satisfy the gate.
 
 Azure AI Language follows the same boundary without sharing the OpenAI role.
 `provisionAzureLanguage=true` creates a `TextAnalytics` F0 account, its
 `privatelink.cognitiveservices.azure.com` private DNS zone/link, one private
 endpoint, and one account-scoped `Cognitive Services Language Reader` assignment
 for the API identity. It creates no key or Key Vault secret. Endpoint and API
-version environment variables are injected only when
-`enableAzureLanguageExtraction=true`; the enabled marker remains false
-otherwise. Migration and chase-worker identities receive no Language role or
-configuration.
+version environment variables are injected only when active extraction or the
+isolated shadow lane is enabled; both mode markers remain false otherwise.
+Migration and chase-worker identities receive no Language role or configuration.
 
 The Athena lane is more tightly dormant. With `provisionAthenaSync=false`, no
 Athena identity, role assignment, or job exists. Provisioning alone creates a
@@ -148,8 +157,8 @@ evidence are still required before a live data import may be enabled.
    first pilot administrator—not an email address or display name. Keep
    `acsEmailConnectionString` empty, `provisionAzureOpenAI=false`, and the app's
    messaging/inference enable flags false for the initial platform deployment.
-   Keep both `provisionAzureLanguage=false` and
-   `enableAzureLanguageExtraction=false` unless the reviewed dormant Language
+   Keep `provisionAzureLanguage=false`, `enableAzureLanguageExtraction=false`,
+   and `enableAzureLanguageShadow=false` unless the reviewed dormant Language
    resource slice is being provisioned.
    Keep both `provisionAthenaSync=false` and `enableAthenaSync=false`, and leave
    `athenaBaseUrl`, `athenaTokenUrl`, `athenaClientId`, and `athenaScopes` empty
@@ -190,7 +199,8 @@ evidence are still required before a live data import may be enabled.
    chase worker reference `repo@digest`; a tag alone is never a deployment input.
    Deploy with `externalIngress=false`, `enableChaseScheduler=false`, both
    messaging latches false, `enableAzureOpenAIInference=false`, and
-   `enableAzureLanguageExtraction=false`, `provisionAthenaSync=false`, and
+   `enableAzureLanguageExtraction=false`, `enableAzureLanguageShadow=false`,
+   `provisionAthenaSync=false`, and
    `enableAthenaSync=false` only after that verification. The
    app deployment must not overlap a foundation deployment: private endpoint
    creation mutates the same `private-endpoints` subnet and the two deployments
@@ -439,16 +449,19 @@ inference:
    Container Apps environment and prove the public path is unavailable.
    When the dormant Language slice is approved, deploy the app with
    `provisionAzureLanguage=true` but keep
-   `enableAzureLanguageExtraction=false`. Verify the `TextAnalytics` account is
+   `enableAzureLanguageExtraction=false` and `enableAzureLanguageShadow=false`.
+   Verify the `TextAnalytics` account is
    F0, local authentication and public network access are disabled/default
    deny, private DNS resolves only through the VNet path, and only the API UAMI
    has role `7628b7b8-a8b2-4cdc-b46f-e9b35248918e`. The worker and migration
    jobs must have no Language role, endpoint, API version, or enable marker.
-   Do not run a Language shadow study before Azure OpenAI inference is enabled
-   and the isolated shadow seam is approved.
+   Do not run a Language shadow study before Azure OpenAI inference and the
+   reserved synthetic-only input restriction are enabled.
 5. Redeploy the app with the reviewed deployment/model/API version and
-   `enableAzureOpenAIInference=true`, then submit only synthetic/de-identified
-   encounters. The acceptance run must exercise both strict `text.format` JSON
+   `enableAzureOpenAIInference=true` and
+   `restrictAzureOpenAIToSyntheticDemo=true`, then submit only the stored,
+   reserved synthetic encounters. The acceptance run must exercise both strict
+   `text.format` JSON
    Schema output and the locally selected JSON-object compatibility path through
    data-plane API `2025-04-01-preview`, plus refusals, content filtering,
    incomplete/truncated output, retries, the 8,000-token output ceiling, and
@@ -459,6 +472,14 @@ inference:
    failure. Startup does not prove token issuance, private DNS, RBAC, the model
    deployment, or a data-plane response; the first controlled synthetic request
    and the acceptance checks above prove those separately.
+   Only after that primary acceptance may a closed-ingress deployment set
+   `enableAzureLanguageShadow=true` while retaining
+   `restrictAzureOpenAIToSyntheticDemo=true`. Keep
+   `enableAzureLanguageExtraction=false`, run
+   `python -m cosmaneura_billing.ta4h_shadow_acceptance`, scan the captured logs,
+   and reopen ingress only if every fixed synthetic check passes. The external
+   40–60-case coder-labelled gold set remains pending; health aggregates are
+   operational evidence, not an accuracy study.
 6. Verify Application Insights reports the `cosmaneura.llm.requests`,
    `cosmaneura.llm.latency`, input/output token, and cache-token metrics with
    only provider/model/status/attempt dimensions. Confirm no worker or migration

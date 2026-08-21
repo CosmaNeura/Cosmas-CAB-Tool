@@ -3,6 +3,7 @@
 Endpoints (shapes match the documented contracts in frontend/*.jsx):
 
   GET  /api/health                        engine + knowledge-base status
+  GET  /api/session                       server-owned view capabilities
   GET  /api/encounters                    encounters available to demo
   POST /api/encounters/detail             one encounter's documentation
   POST /api/encounters/billing            run the pipeline on a stored encounter
@@ -10,6 +11,8 @@ Endpoints (shapes match the documented contracts in frontend/*.jsx):
   POST /api/encounters/coder-view         pre-coded claim for the coder review UI
   POST /api/feedback                      persist a coder's reviewed decisions
   GET  /api/feedback/summary              accuracy metrics + tuning backlog
+  POST /api/chase/worklist                minimum-necessary insurance worklist
+  POST /api/chase/task                    audited manual contact task
 
 Run:  uvicorn cosmaneura_billing.api:app --reload
 The orchestrator and its regulatory knowledge bases are warmed during process
@@ -29,7 +32,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Optional
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,6 +75,9 @@ _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
          CodeKind.PROCEDURE: "PROCEDURE", CodeKind.MODIFIER: "MODIFIER"}
 _ENGINE_VERSION = "cpt2026u4;icd10-FY2026;ncci-2026Q3-v32.2;mcd-NGS-2026-07-20"
 _REQUEST_RESOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_SYNTHETIC_INFERENCE_ONLY_DETAIL = (
+    "model inference is restricted to reserved synthetic demo encounters"
+)
 
 
 def _review_context_binding(
@@ -233,6 +239,38 @@ def _completion_event(request: Request, *, status: int = 200, outcome: str = "al
 def _require_roles(request: Request, *roles: str) -> AuthPrincipal:
     principal = _request_principal(request)
     if not principal.has_any_role(roles):
+        raise HTTPException(status_code=403, detail="access is not permitted")
+    return principal
+
+
+def _permitted_views(principal: AuthPrincipal) -> list[str]:
+    """Return server-owned UI capabilities in stable navigation order.
+
+    The frontend consumes capabilities rather than interpreting role names.
+    Route authorization below remains the enforcement boundary.
+    """
+    if principal.has_any_role(("Admin", "Coder")):
+        return ["provider", "coder", "chase"]
+    if principal.has_any_role(("Provider",)):
+        # Provider is deliberately the restrictive persona when a mistaken
+        # extra BillingStaff assignment is present. Admin/Coder above are the
+        # only roles that intentionally expand this login beyond one tab.
+        return ["provider"]
+    if principal.has_any_role(("BillingStaff",)):
+        return ["chase"]
+    return []
+
+
+def _require_view(request: Request, view: str) -> AuthPrincipal:
+    principal = _request_principal(request)
+    if view not in _permitted_views(principal):
+        raise HTTPException(status_code=403, detail="access is not permitted")
+    return principal
+
+
+def _require_chase_staff(request: Request) -> AuthPrincipal:
+    principal = _require_view(request, "chase")
+    if not principal.has_any_role(("BillingStaff", "Admin")):
         raise HTTPException(status_code=403, detail="access is not permitted")
     return principal
 
@@ -429,6 +467,10 @@ class ChaseTargetRequest(StrictRequest):
         return value
 
 
+class ChaseDemoSeedRequest(StrictRequest):
+    seedDigest: str = Field(min_length=64, max_length=64, pattern=r"[0-9a-f]{64}")
+
+
 class ChaseActionRequest(ChaseTargetRequest):
     action_id: UUID
     action: str = Field(min_length=1, max_length=32)
@@ -539,6 +581,12 @@ def health(request: Request) -> dict[str, Any]:
         "status": "ok",
         "engineVersion": _ENGINE_VERSION,
         **describe_client(orch.llm),
+        "inferenceInputPolicy": (
+            "reserved_synthetic_only"
+            if settings.azure_openai_synthetic_only
+            else "standard"
+        ),
+        "multiEngineEnabled": orch.multi_engine,
         "icd10Codes": orch.icd10.size,
         "currentFyLoaded": orch.icd10.has_current_fy,
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),
@@ -547,7 +595,19 @@ def health(request: Request) -> dict[str, Any]:
         "cptStatus": _cpt_status(orch.cpt, settings),
         "denialPriors": orch.denial_priors.size,
         "encounters": len(_request_encounter_store(request).all()),
+        "ta4h": orch.ta4h_observability(),
     }
+
+
+@router.get("/api/session")
+def session_capabilities(request: Request) -> dict[str, Any]:
+    """Return the authenticated principal's server-derived navigation views."""
+    views = _permitted_views(_request_principal(request))
+    if not views:
+        # Authentication already rejects principals without an allowed app
+        # role. Keep this defensive branch fail-closed if that contract drifts.
+        raise HTTPException(status_code=403, detail="access is not permitted")
+    return {"views": views, "defaultView": views[0]}
 
 
 @router.get("/api/ready")
@@ -595,6 +655,7 @@ def liveness() -> dict[str, str]:
 
 @router.get("/api/encounters")
 def list_encounters(request: Request) -> list[dict[str, Any]]:
+    _require_view(request, "provider")
     _request_orchestrator(request)
     return [{
         "id": b.encounter_id,
@@ -622,8 +683,22 @@ def _get_stored_encounter(request: Request, encounter_id: str):
     return stored
 
 
+def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
+    """Enforce the deployment's model-input policy before pipeline execution.
+
+    The public-demo latch trusts only the server-owned provenance persisted with
+    a stored encounter. A caller cannot opt an ad-hoc payload into the synthetic
+    class and an encounter ID prefix has no authority over this decision.
+    """
+    if not _request_settings(request).azure_openai_synthetic_only:
+        return
+    if stored is None or stored.source != SYNTHETIC_DEMO_SOURCE:
+        raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
+
+
 @router.post("/api/encounters/detail")
 def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
+    _require_view(request, "provider")
     stored = _get_stored_encounter(request, req.encounterId)
     b = stored.bundle
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
@@ -635,17 +710,21 @@ def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
 
 @router.post("/api/encounters/billing")
 def bill_stored(request: Request, req: EncounterRequest) -> dict[str, Any]:
+    _require_view(request, "provider")
     stored = _get_stored_encounter(request, req.encounterId)
+    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     principal = _request_principal(request)
     result = _request_orchestrator(request).process(
-        bundle, user_id=principal.user_id
+        bundle, user_id=principal.user_id, input_provenance=stored.source,
     )
     return {**_billing_json(bundle, result), **_encounter_data_policy(stored)}
 
 
 @router.post("/api/billing")
 def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
+    _require_view(request, "provider")
+    _require_inference_input_allowed(request)
     principal = _request_principal(request)
     bundle = VisitBundle(
         encounter_id=req.encounterId, patient_age=req.patientAge,
@@ -662,11 +741,15 @@ def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
 
 @router.post("/api/encounters/coder-view")
 def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
+    _require_view(request, "coder")
     stored = _get_stored_encounter(request, req.encounterId)
+    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     orch = _request_orchestrator(request)
     uid = _request_principal(request).user_id
-    result = orch.process(bundle, user_id=uid)
+    result = orch.process(
+        bundle, user_id=uid, input_provenance=stored.source,
+    )
     view = _coder_view_json(bundle, result, uid)
     view["encounterVersion"] = stored.version
     view["reviewContext"] = _issue_review_context(
@@ -689,10 +772,14 @@ def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
 def billing_tab(request: Request, req: BillingTabRequest) -> dict[str, Any]:
     """The provider billing tab (F1): the same visit reorganised as a billing
     reference. The clinical note is never altered — this is a view over it."""
+    _require_view(request, "provider")
     stored = _get_stored_encounter(request, req.encounterId)
+    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     result = _request_orchestrator(request).process(
-        bundle, user_id=_request_principal(request).user_id
+        bundle,
+        user_id=_request_principal(request).user_id,
+        input_provenance=stored.source,
     )
     return {
         **build_billing_tab_view(
@@ -704,12 +791,13 @@ def billing_tab(request: Request, req: BillingTabRequest) -> dict[str, Any]:
 
 
 @router.post("/api/completeness")
-def completeness(req: CompletenessRequest) -> dict[str, Any]:
+def completeness(request: Request, req: CompletenessRequest) -> dict[str, Any]:
     """Run a note-completeness rule pack before the claim reaches a coder.
 
     This is the pre-submission check: fixing a gap here means it never becomes a
     denial, and never costs a coder a review minute.
     """
+    _require_view(request, "provider")
     pack = req.rulepack or applicable_rulepack(req.placeOfService, req.encounterType)
     if pack is None:
         return {"rulepack": None, "complete": None, "results": [],
@@ -776,9 +864,10 @@ def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
 
 
 @router.post("/api/benchmarks/em")
-def em_benchmarks(req: EMBenchmarkRequest) -> dict[str, Any]:
+def em_benchmarks(request: Request, req: EMBenchmarkRequest) -> dict[str, Any]:
     """State + national E/M mix and allowed amounts — population benchmarks for
     opportunity-sizing only, never an input to coding an encounter."""
+    _require_view(request, "provider")
     from .benchmarks.em_benchmark import EMBenchmark, StateEMBenchmark
     nh = StateEMBenchmark()
     if req.state.upper() != nh.state:
@@ -798,9 +887,10 @@ def em_benchmarks(req: EMBenchmarkRequest) -> dict[str, Any]:
 
 
 @router.post("/api/benchmarks/payer-denials")
-def payer_denials(req: PayerDenialRequest) -> dict[str, Any]:
+def payer_denials(request: Request, req: PayerDenialRequest) -> dict[str, Any]:
     """Issuer-level Marketplace denial rates (CMS TC-PUF PY2026) — the
     'how tough is this payer' prior."""
+    _require_view(request, "provider")
     from .knowledge.denial_stats import PayerDenialRates
     rates = PayerDenialRates()
     rows = rates.for_state(req.state)
@@ -919,6 +1009,110 @@ def _raise_scheduler_http(exc: Exception) -> None:
     raise exc
 
 
+def _chase_outbound_status(settings: Settings) -> dict[str, Any]:
+    automatic_contact = bool(
+        settings.chase_scheduler_enabled
+        and settings.patient_messaging_enabled
+        and settings.patient_messaging_operationally_activated
+        and settings.chase_transport != "record_only"
+    )
+    return {
+        "schedulerEnabled": settings.chase_scheduler_enabled,
+        "patientMessagingEnabled": settings.patient_messaging_enabled,
+        "operationallyActivated": settings.patient_messaging_operationally_activated,
+        "transport": settings.chase_transport,
+        "automaticContact": automatic_contact,
+    }
+
+
+def _chase_row_json(item) -> dict[str, Any]:
+    """Minimum-necessary worklist row; contact and internal IDs stay separate."""
+    from .chase.synthetic_demo import synthetic_case_for
+
+    synthetic = synthetic_case_for(item)
+    return {
+        "chaseId": item.chase_id,
+        "patientLabel": (
+            synthetic.display_label if synthetic is not None else "Patient record"
+        ),
+        "dataClass": "synthetic_demo" if synthetic is not None else "operational",
+        "trigger": item.trigger.value,
+        "bucket": item.bucket,
+        "detectedAt": item.detected_at,
+        "appointmentAt": item.appointment_at,
+        "state": item.state.value,
+        "priority": item.priority,
+        "reviewReason": item.review_reason,
+        "assigned": bool(item.assignee),
+        "touches": item.touches,
+        "staffMinutes": item.staff_minutes,
+        "hasPendingTask": item.pending_task is not None,
+        "open": item.is_open,
+    }
+
+
+def _chase_task_json(item, settings: Settings) -> dict[str, Any]:
+    """One audited contact task without copying operational destinations."""
+    from .chase import State
+    from .chase.synthetic_demo import synthetic_case_for
+
+    synthetic = synthetic_case_for(item)
+    needs_review = item.state is State.NEEDS_REVIEW
+    awaiting_verification = item.state is State.SUBMITTED
+    closed = not item.is_open
+    contact = None
+    if synthetic is not None and not (needs_review or awaiting_verification or closed):
+        contact = {
+            "mode": "synthetic_demo",
+            "channel": synthetic.contact.channel,
+            "destination": synthetic.contact.destination,
+        }
+    if needs_review:
+        instruction = item.review_reason
+    elif awaiting_verification:
+        instruction = "A submission is awaiting staff verification; do not contact again."
+    elif closed:
+        instruction = "This insurance follow-up task is closed."
+    elif synthetic is not None:
+        instruction = synthetic.contact.instruction
+    else:
+        instruction = (
+            "Open the approved patient record in athenaNet. The contact "
+            "destination is not copied into this application."
+        )
+    return {
+        "chaseId": item.chase_id,
+        "patientLabel": (
+            synthetic.display_label if synthetic is not None else "Patient record"
+        ),
+        "dataClass": "synthetic_demo" if synthetic is not None else "operational",
+        "instruction": instruction,
+        "contact": contact,
+        "systemOfRecord": {
+            "name": "athenaNet",
+            "deepLinkConfigured": False,
+            "instruction": (
+                "Use the approved athenaNet patient-search workflow; no patient "
+                "identifier is placed in a URL or application log."
+            ),
+        },
+        "outbound": _chase_outbound_status(settings),
+    }
+
+
+def _require_dormant_synthetic_chase(settings: Settings) -> None:
+    if (
+        settings.chase_scheduler_enabled
+        or settings.patient_messaging_enabled
+        or settings.patient_messaging_operationally_activated
+        or settings.chase_transport != "record_only"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="synthetic chase seed requires dormant record-only outreach",
+        )
+
+
 def _policy_record_json(record) -> dict[str, Any]:
     return {
         "policyRevisionId": record.policy_revision_id,
@@ -944,7 +1138,7 @@ def chase_worklist(
     request: Request, req: ChaseWorklistRequest,
 ) -> dict[str, Any]:
     """The master list: one integrated view over missing, expired and eligibility."""
-    _require_roles(request, "BillingStaff", "Admin")
+    _require_view(request, "chase")
     ctx = _request_chase_context(request)
     policy_view = ctx["policy"].to_dict()
     scheduler = ctx.get("scheduler")
@@ -964,13 +1158,113 @@ def chase_worklist(
             "approved_at": durable.get("activatedAt") or None,
             "durable_status": durable,
         })
+    rows = ctx["store"].rows(
+        bucket=req.bucket,
+        assignee=req.assignee,
+        needs_person=req.needsPerson,
+    )
     return {
-        **ctx["store"].to_dict(
-            bucket=req.bucket,
-            assignee=req.assignee,
-            needs_person=req.needsPerson,
-        ),
+        "counts": ctx["store"].counts(),
+        "rows": [_chase_row_json(item) for item in rows],
         "policy": policy_view,
+        "outbound": _chase_outbound_status(_request_settings(request)),
+    }
+
+
+@router.post("/api/chase/task")
+def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
+    """Return one audited, minimum-necessary manual contact task."""
+    _require_view(request, "chase")
+    store = _request_chase_context(request)["store"]
+    item = store.get(req.chaseId)
+    if item is None:
+        raise HTTPException(status_code=404, detail="chase task was not found")
+    if hasattr(store, "audit_resource_id"):
+        _set_audit_resource(request, store.audit_resource_id(req.chaseId))
+    return _chase_task_json(item, _request_settings(request))
+
+
+@router.post("/api/chase/demo-seed")
+def chase_demo_seed(
+    request: Request, req: ChaseDemoSeedRequest,
+) -> dict[str, Any]:
+    """Install only the fixed four-case synthetic pack while outreach is dormant."""
+    principal = _require_roles(request, "Admin")
+    settings = _request_settings(request)
+    _require_dormant_synthetic_chase(settings)
+    from .chase import Channel
+    from .chase.synthetic_demo import prepare_synthetic_chase_seed
+
+    seed = prepare_synthetic_chase_seed()
+    if not hmac.compare_digest(req.seedDigest, seed.digest):
+        raise HTTPException(status_code=409, detail="synthetic chase seed digest mismatch")
+    context = _request_chase_context(request)
+    from .chase.synthetic_demo import synthetic_case_for
+
+    existing = [context["store"].get(item.chase_id) for item in seed.items]
+    if any(item is not None for item in existing):
+        if not all(
+            item is not None and synthetic_case_for(item) is not None
+            for item in existing
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="synthetic chase seed conflicts with existing chase state",
+            )
+        return {
+            "seedId": seed.seed_id,
+            "seedDigest": seed.digest,
+            "casesReady": len(existing),
+            "replayed": True,
+            "outbound": _chase_outbound_status(settings),
+        }
+    scheduler = context.get("scheduler")
+    items = seed.items
+    if scheduler is not None:
+        from .chase.scheduler_store import ContactRouteInput, ContactSnapshotInput
+
+        observed_at = datetime.fromisoformat(seed.detected_at)
+        entries = []
+        for case, item in zip(seed.cases, items):
+            snapshot_id = str(uuid5(
+                NAMESPACE_URL,
+                ":".join((seed.digest, case.case_id)),
+            ))
+            entries.append((
+                item,
+                ContactSnapshotInput(
+                    contact_snapshot_id=snapshot_id,
+                    source_system="synthetic.digest_pinned_demo",
+                    source_version=seed.digest,
+                    observed_at=observed_at,
+                    verified_at=observed_at,
+                    verification_method="staff",
+                    routes=(ContactRouteInput(
+                        Channel.PHONE,
+                        case.contact.destination,
+                        "not_required",
+                    ),),
+                    verified_by_tenant_id=principal.tenant_id,
+                    verified_by_user_id=principal.user_id,
+                ),
+            ))
+        try:
+            results = scheduler.persist_detection_batch(
+                entries,
+                audit_event=_scheduler_audit_event(request),
+            )
+            request.state.audit_completion_committed = True
+        except Exception as exc:
+            _raise_scheduler_http(exc)
+        ready = len(results)
+    else:
+        ready = len(context["store"].extend(items))
+    return {
+        "seedId": seed.seed_id,
+        "seedDigest": seed.digest,
+        "casesReady": ready,
+        "replayed": False,
+        "outbound": _chase_outbound_status(settings),
     }
 
 
@@ -1086,7 +1380,7 @@ def chase_detect(request: Request, req: ChaseDetectRequest) -> dict[str, Any]:
     """
     from .chase import Channel, CoverageSnapshot, detect, detect_all
 
-    _require_roles(request, "BillingStaff", "Admin")
+    _require_chase_staff(request)
     ctx = _request_chase_context(request)
     if (
         ctx.get("scheduler") is not None
@@ -1177,7 +1471,7 @@ def chase_metrics(
 ) -> dict[str, Any]:
     from .chase.metrics import baseline_comparison
 
-    _require_roles(request, "BillingStaff", "Admin")
+    _require_view(request, "chase")
     return baseline_comparison(
         _request_chase_context(request)["store"].all_items(),
         baseline_minutes_per_card=req.baselineMinutesPerCard,
@@ -1236,9 +1530,14 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
     from .chase import Channel
 
     chase_id = req.chaseId
-    principal = _require_roles(request, "BillingStaff", "Admin")
+    principal = _require_chase_staff(request)
     ctx = _request_chase_context(request)
     store, runner, action = ctx["store"], ctx["runner"], req.action
+    if action == "release":
+        # Direct-contract release is Admin-only in every topology. Keep this
+        # check ahead of store access so the memory/demo path cannot be less
+        # restrictive than the durable scheduler path.
+        principal = _require_roles(request, "Admin")
     actor = principal.user_id
     existing = store.get(chase_id)
     if existing is None:
@@ -1247,7 +1546,6 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
         _set_audit_resource(request, store.audit_resource_id(chase_id))
     scheduler = ctx.get("scheduler")
     if scheduler is not None and action == "release":
-        principal = _require_roles(request, "Admin")
         gate_fingerprint = str(
             (existing.direct_contract or {}).get("gate_fingerprint") or ""
         )
@@ -1436,7 +1734,16 @@ async def _lifespan(application: FastAPI):
         yield
     finally:
         application.state.ready = False
-        llm = getattr(application.state.orchestrator, "llm", None)
+        active_orchestrator = application.state.orchestrator
+        shutdown_orchestrator = getattr(active_orchestrator, "shutdown", None)
+        if callable(shutdown_orchestrator):
+            try:
+                shutdown_orchestrator()
+            except Exception:
+                # Shadow shutdown is bounded and best effort; no secondary
+                # exception may delay or escape service termination.
+                pass
+        llm = getattr(active_orchestrator, "llm", None)
         shutdown_metrics = getattr(llm, "shutdown_metrics", None)
         if callable(shutdown_metrics):
             try:

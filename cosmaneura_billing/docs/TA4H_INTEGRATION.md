@@ -15,7 +15,8 @@ no reviewer agreement fields, no extra audit lines, no behavior change.
 |---|---|
 | *(nothing set)* | Second engine off. Single-engine coding. |
 | `COSMANEURA_AZURE_LANGUAGE_MOCK=1` | Offline deterministic mock. Development only — `Settings` refuses it in staging/production, so mock output can never be presented as engine output. |
-| `COSMANEURA_AZURE_LANGUAGE_ENABLED=1` + `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID` | Live Azure Text Analytics for health via managed identity. |
+| `COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1` + `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID` | Live observation-only TA4H. This milestone requires primary Azure OpenAI **and** `COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=1`; TA4H output can enter only aggregate health metrics. |
+| `COSMANEURA_AZURE_LANGUAGE_ENABLED=1` + `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID` | Live **active-consensus** TA4H. This separate gate may change holds, rejections, rationale, and audit text. |
 | `AZURE_LANGUAGE_API_VERSION` | Override the API version (defaults to the GA `2023-04-01`). |
 
 **Managed identity only.** There is no key-based auth path, matching the Azure
@@ -37,17 +38,23 @@ disable public network access and local authentication, use the existing private
 network/DNS pattern, and grant only the API user-assigned identity the
 account-scoped *Cognitive Services Language Reader* role. Set
 `provisionAzureLanguage=true` to create that dormant F0 account while keeping
-`enableAzureLanguageExtraction=false`. Provisioning the account does not enable
-extraction; every tracked parameter set keeps the extraction flag false. The
-template supplies `COSMANEURA_AZURE_LANGUAGE_ENABLED=false` to the API and does
-not inject the endpoint or API version until the separate enable flag is true.
+`enableAzureLanguageExtraction=false` and `enableAzureLanguageShadow=false`.
+Provisioning the account does not enable extraction; every tracked parameter
+set keeps both runtime flags false. The template supplies
+`COSMANEURA_AZURE_LANGUAGE_ENABLED=false` and
+`COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=false` to the API and does not inject
+the endpoint or API version until one mutually exclusive runtime flag is true.
 
-The following is future operator reference only. Do not enable this
-configuration until Azure OpenAI inference is enabled and the shadow milestone
-is approved.
+The observation-only lane is selected through the shadow flag. The application
+and Bicep template fail closed unless primary Azure OpenAI is enabled, the
+reserved synthetic-only inference policy is enabled, the Language account is
+provisioned, and active consensus is off.
 
 ```bash
-export COSMANEURA_AZURE_LANGUAGE_ENABLED=1
+export COSMANEURA_AZURE_OPENAI_ENABLED=1
+export COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=1
+export COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1
+export COSMANEURA_AZURE_LANGUAGE_ENABLED=0
 export AZURE_LANGUAGE_ENDPOINT="https://cosmaneura-language.cognitiveservices.azure.com"
 export AZURE_CLIENT_ID="<api-managed-identity-client-id>"
 uvicorn cosmaneura_billing.api:app --reload
@@ -140,10 +147,12 @@ expose `agreement`, `sourceEngine`, and `multiEngine`, and the coder UI may
 render agreement badges. None of these fields or badges is reviewer-visible
 during shadow mode. The proposed future meanings are:
 
-The current `COSMANEURA_AZURE_LANGUAGE_ENABLED` path performs active,
-conservative consensus and can change held/rejected outcomes and audit text. It
-is **not** the shadow seam. Do not enable it on a reviewer-serving deployment
-until an out-of-band comparison path exists that cannot change any response.
+`COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED` is the isolated seam: it returns the
+primary result byte-for-byte, including dispositions, rationales, evidence,
+audit, provider card, worksheet, and serialized API output. TA4H success or
+failure changes only the bounded aggregate `ta4h` object on `/api/health`.
+`COSMANEURA_AZURE_LANGUAGE_ENABLED` remains the separate active-consensus path;
+it is **not** a synonym for shadow mode.
 
 | Badge | Meaning | Coder action |
 |---|---|---|
@@ -155,11 +164,20 @@ Agreed codes carry **two independent evidence spans**, one from each engine.
 
 ## Failure behaviour
 
-A TA4H outage, timeout, or malformed response degrades to single-engine
-operation and writes one audit line
-(`CONSENSUS secondary extraction engine unavailable …`). It never fails an
-encounter. Both engines run concurrently, so the added latency is the slower of
-the two, not their sum.
+In shadow mode a TA4H outage, timeout, or malformed response returns the exact
+primary-only result and increments only aggregate failure/latency counters. It
+adds no response or audit line and never includes exception text in metrics.
+Active-consensus mode retains its prior single-engine fallback audit line
+(`CONSENSUS secondary extraction engine unavailable …`) and concurrent engine
+execution. Shadow work starts on a bounded daemon worker after the primary
+extraction. Its queued `VisitBundle` is a recursive detached copy, including
+mutable code lists, so a buggy secondary cannot race or mutate any value the
+primary pipeline still reads. A full queue drops the observation and a stuck
+TA4H call cannot delay reviewer output or process shutdown. Each short-lived
+task frame clears service results and the daemon deletes its task reference
+before publishing idle, so the last chart/result is not retained between runs.
+Shutdown latches before draining and a worker re-checks that latch immediately
+after dequeue, preventing a queued task from starting a new service call.
 
 Response parsing is defensive: an unrecognised or off-shape entity is dropped
 rather than raised, so a service-side schema change degrades to "fewer
@@ -170,14 +188,21 @@ entities", never to a broken encounter.
 1. **Development verification** — use
    `COSMANEURA_AZURE_LANGUAGE_MOCK=1` only for deterministic local tests. Mock
    results are not shadow evidence.
-2. **Shadow** — after Azure OpenAI inference is enabled, run the live F0 resource
-   against the frozen 40–60-case gold set. Record agreement rate, each direction
-   of single-engine finds, veto precision, and added latency; expose nothing to
-   reviewers. This requires a future isolated comparison seam; the current
-   active-consensus setting does not satisfy this step.
-3. **Surface** — only after shadow acceptance, enable reviewer agreement badges
+2. **Synthetic deployment acceptance** — with ingress closed, run
+   `python -m cosmaneura_billing.ta4h_shadow_acceptance`. It accepts no chart
+   input and checks private DNS, forbidden credentials, managed-identity
+   routing, redirect refusal, synthetic analysis, output non-influence, and the
+   closed observability schema.
+3. **Shadow study** — after Azure OpenAI inference is enabled, run the live F0
+   resource against a frozen 40–60-case coder-labelled gold set. The runtime
+   records aggregate agreement directions, veto counts, entity counts,
+   failures, and added latency; it deliberately does not retain case-level
+   codes or adjudications. **The coder-labelled gold set remains external and
+   pending**, so this step is not yet complete and aggregate counters are not
+   accuracy evidence.
+4. **Surface** — only after shadow acceptance, enable reviewer agreement badges
    and collect adjudications.
-4. **Policy** — only after those stages consider whether agreement should
+5. **Policy** — only after those stages consider whether agreement should
    promote capture; the default remains no.
 
 ## Files
@@ -187,8 +212,10 @@ entities", never to a broken encounter.
 | `cosmaneura_billing/ta4h.py` | REST client (`AzureLanguageTA4H`), `MockTA4H`, entity parsing |
 | `cosmaneura_billing/agents/ta4h_coding.py` | Secondary coder: entities → ICD-10 candidates + vetoes |
 | `cosmaneura_billing/agents/consensus.py` | Merge policy |
-| `cosmaneura_billing/orchestrator.py` | `coding=` / `secondary_coding=` / `ta4h=` injection, concurrent run |
-| `tests/test_ta4h.py`, `tests/test_consensus.py`, `tests/test_consensus_fuzz.py`, `tests/test_multi_engine_pipeline.py` | Coverage |
+| `cosmaneura_billing/orchestrator.py` | Active-consensus concurrency plus non-blocking shadow dispatch |
+| `cosmaneura_billing/ta4h_shadow.py` | Closed aggregate metrics; retains no identifiers, text, codes, evidence, responses, or exceptions |
+| `cosmaneura_billing/ta4h_shadow_acceptance.py` | Fixed synthetic deployment acceptance harness |
+| `tests/test_ta4h.py`, `tests/test_ta4h_shadow.py`, `tests/test_ta4h_shadow_acceptance.py`, `tests/test_consensus.py`, `tests/test_consensus_fuzz.py`, `tests/test_multi_engine_pipeline.py` | Coverage |
 | `cosmaneura_billing/consensus_fuzz.py` | Adversarial two-engine property tests |
 | `cosmaneura_billing/settings.py` | `azure_language_*` config + validation |
 | `prove_no_upcode.py` | The invariant proof, extended to the ensemble |

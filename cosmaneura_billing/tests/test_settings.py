@@ -39,6 +39,7 @@ def test_defaults_preserve_local_runtime_behavior():
     assert settings.application_insights_connection_string == ""
     assert settings.azure_client_id == ""
     assert settings.azure_openai_enabled is False
+    assert settings.azure_openai_synthetic_only is False
     assert settings.patient_messaging_enabled is False
     assert settings.patient_messaging_operationally_activated is False
     assert settings.chase_scheduler_enabled is False
@@ -67,6 +68,7 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
         ),
         "AZURE_CLIENT_ID": "33333333-3333-4333-8333-333333333333",
         "COSMANEURA_AZURE_OPENAI_ENABLED": "true",
+        "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY": "true",
         "AZURE_OPENAI_ENDPOINT": "https://cab-openai.openai.azure.com",
         "AZURE_OPENAI_DEPLOYMENT": "cab-gpt",
         "AZURE_OPENAI_MODEL": "gpt-5.6-sol",
@@ -112,6 +114,7 @@ def test_from_env_parses_paths_numbers_booleans_and_platform_fields(tmp_path):
     assert settings.telemetry_enabled is True
     assert settings.azure_client_id == "33333333-3333-4333-8333-333333333333"
     assert settings.azure_openai_enabled is True
+    assert settings.azure_openai_synthetic_only is True
     assert settings.azure_openai_endpoint == "https://cab-openai.openai.azure.com"
     assert settings.azure_openai_deployment == "cab-gpt"
     assert settings.azure_openai_model == "gpt-5.6-sol"
@@ -166,6 +169,7 @@ def test_boolean_true_spellings(value):
     ("COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED", "maybe"),
     ("COSMANEURA_CHASE_SCHEDULER_ENABLED", "maybe"),
     ("COSMANEURA_AZURE_OPENAI_ENABLED", "maybe"),
+    ("COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY", "maybe"),
 ])
 def test_invalid_values_raise_safe_specific_errors(name, value):
     with pytest.raises(SettingsError) as exc_info:
@@ -323,6 +327,28 @@ def test_enabled_azure_openai_settings_are_complete_and_managed_identity_only():
 
     with pytest.raises(SettingsError, match="must be a boolean"):
         Settings(azure_openai_enabled="false")
+
+
+def test_synthetic_only_inference_requires_primary_openai_enablement():
+    with pytest.raises(
+        SettingsError,
+        match="COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY requires",
+    ):
+        Settings(azure_openai_synthetic_only=True)
+
+
+def test_language_extraction_requires_primary_openai_enablement():
+    with pytest.raises(
+        SettingsError,
+        match="COSMANEURA_AZURE_LANGUAGE_ENABLED requires",
+    ):
+        Settings(
+            azure_language_enabled=True,
+            azure_language_endpoint=(
+                "https://cosmaneura-language.cognitiveservices.azure.com"
+            ),
+            azure_client_id="33333333-3333-4333-8333-333333333333",
+        )
 
 
 @pytest.mark.parametrize(

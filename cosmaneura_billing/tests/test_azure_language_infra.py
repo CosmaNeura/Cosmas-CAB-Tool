@@ -38,7 +38,16 @@ def test_language_account_is_private_f0_and_provisioning_is_default_off():
     assert "defaultAction: 'Deny'" in account
     assert "param provisionAzureLanguage bool = false" in APP
     assert "param enableAzureLanguageExtraction bool = false" in APP
+    assert "param enableAzureLanguageShadow bool = false" in APP
     assert "enableAzureLanguageExtraction requires provisionAzureLanguage" in APP
+    assert (
+        "enableAzureLanguageExtraction requires enableAzureOpenAIInference"
+        in APP
+    )
+    assert "enableAzureLanguageShadow requires provisionAzureLanguage" in APP
+    assert "enableAzureLanguageShadow requires enableAzureOpenAIInference" in APP
+    assert "enableAzureLanguageShadow requires restrictAzureOpenAIToSyntheticDemo" in APP
+    assert "enableAzureLanguageShadow and enableAzureLanguageExtraction are mutually exclusive" in APP
 
 
 def test_only_api_uami_receives_language_reader_role():
@@ -85,7 +94,9 @@ def test_language_environment_is_api_only_and_endpoint_is_enable_gated():
 
     assert "name: 'COSMANEURA_AZURE_LANGUAGE_ENABLED'" in api
     assert "value: azureLanguageEnabledValue" in api
-    assert "validatedAzureLanguageExtractionEnabled ? [" in api
+    assert "name: 'COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED'" in api
+    assert "value: azureLanguageShadowEnabledValue" in api
+    assert "validatedAzureLanguageExtractionEnabled || validatedAzureLanguageShadowEnabled ? [" in api
     assert "name: 'AZURE_LANGUAGE_ENDPOINT'" in api
     assert "value: azureLanguage!.properties.endpoint" in api
     assert "name: 'AZURE_LANGUAGE_API_VERSION'" in api
@@ -93,6 +104,7 @@ def test_language_environment_is_api_only_and_endpoint_is_enable_gated():
     assert "azureLanguagePrivateDnsGroup" in api
     for name in (
         "COSMANEURA_AZURE_LANGUAGE_ENABLED",
+        "COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED",
         "AZURE_LANGUAGE_ENDPOINT",
         "AZURE_LANGUAGE_API_VERSION",
     ):
@@ -115,8 +127,10 @@ def test_language_examples_and_outputs_preserve_dormant_state():
 
     assert parameters["provisionAzureLanguage"]["value"] is False
     assert parameters["enableAzureLanguageExtraction"]["value"] is False
+    assert parameters["enableAzureLanguageShadow"]["value"] is False
     assert parameters["azureLanguageApiVersion"]["value"] == "2023-04-01"
     assert "output azureLanguageProvisioned bool" in APP
     assert "output azureLanguageExtractionEnabled bool" in APP
+    assert "output azureLanguageShadowEnabled bool" in APP
     assert "output azureLanguageAccountName string" in APP
     assert "output azureLanguageEndpoint string" in APP

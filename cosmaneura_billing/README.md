@@ -2,7 +2,8 @@
 
 A multi-agent pipeline that turns a finished visit (intake text + transcript +
 signed note) into accurate, fully-auditable billing codes, with two role-scoped
-outputs and a feedback loop back into the rest of the platform. It is built on
+coding outputs, an insurance follow-up worklist, and a feedback loop back into
+the rest of the platform. It is built on
 top of Homen's **FluencyMed** prototype and consumes that prototype's existing
 outputs directly.
 
@@ -26,11 +27,15 @@ Two terminals:
 pip install fastapi uvicorn
 uvicorn cosmaneura_billing.api:app --port 8000
 
-# 2. the web UI (provider card, biller worksheet, coder review)
+# 2. the web UI (provider, coder review, and insurance follow-up)
 cd frontend && npm install && npm run dev     # -> http://localhost:5173
 ```
 
-The UI shows a live-engine status pill (NCCI / coverage / CPT), lets you pick
+`GET /api/session` gives the UI server-owned view capabilities. `Provider` sees
+only Provider; `BillingStaff` sees only Insurance follow-up; `Coder` and `Admin`
+see all three tabs. Every underlying route repeats that authorization check, so
+hiding a tab is never the enforcement boundary. The UI shows a live-engine
+status pill (NCCI / coverage / CPT), lets authorized users pick
 an encounter (the GI-bleed demo plus ACI-Bench visits), edit the documentation,
 run the pipeline, and — on the Coder review tab — accept/edit/reject each code
 and submit feedback. Local development uses `coder_feedback.jsonl` (override
@@ -124,6 +129,16 @@ reason, carries a `degraded` object explaining it, so an empty claim is never
 presented as a finding. Invalid enabled configuration fails startup; it never
 silently falls back to a live provider.
 
+For an externally reachable synthetic demo, also set
+`COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=true`. This is an independent,
+default-off safety latch: every model-backed API route then requires a stored
+encounter whose server-owned provenance is exactly
+`synthetic_demo_release_candidate`. Ad-hoc `/api/billing` documentation,
+operational stored rows, caller-supplied labels, and suggestive encounter-ID
+prefixes are rejected before the pipeline can call a model. The engine boundary
+rechecks the same provenance token as defense in depth. The Azure template
+refuses to combine external ingress with OpenAI unless this latch is on.
+
 P5 observability is deliberately narrower than general-purpose tracing. The API
 logs one closed-schema `http_request` event using a server-generated request ID
 and declared route template; Azure OpenAI calls log per-attempt latency and
@@ -205,6 +220,11 @@ python run_demo.py
 ICD10_CCSR_CSV=/path/to/DXCCSR_v2023-1.csv   python run_demo.py
 ```
 
+`run_demo.py` is a local direct-engine tool and therefore cannot prove stored
+server-owned provenance; do not set the synthetic-only API latch for that
+command. Exercise the deployed latch only through the fixed stored-encounter
+POST routes after the fixed seeder has established provenance.
+
 The deployment acceptance command is intentionally narrower than `run_demo.py`
 and accepts no chart/prompt input:
 
@@ -216,6 +236,13 @@ python -m cosmaneura_billing.log_scanner /tmp/azure-openai-acceptance.jsonl
 Restore the application inference latch to false immediately after the bounded
 synthetic run and verify the final revision contains no Azure OpenAI variables
 and emits no LLM events.
+
+Pipeline-result reuse across the provider, billing, and coder surfaces remains
+a follow-on. A safe cache needs practice ID, opaque encounter resource/version,
+engine configuration, and reviewer-preference revision in its key, immutable
+values, a strict bound, and no raw documentation in shared cache metadata.
+Recomputing is safer than cross-user or stale-result reuse until that contract
+is implemented and tested.
 
 The adapter selects strict Structured Outputs for locally compatible schemas
 and selects JSON-object mode up front for schemas outside the supported strict
@@ -270,11 +297,12 @@ CPT content stays under your license, outside the repository.
 The repository contains an optional second extraction engine, disabled by
 default. Azure's Text Analytics for health
 contributes clinical NER, assertion detection (negated / hypothetical /
-family-member) and UMLS entity links to ICD-10-CM; it never levels E/M and never
-makes a billing decision. Its internal consensus provenance supports future
-shadow evaluation; agreement badges and reviewer-facing provenance remain
-deferred until the approved surface milestone. A code only one engine found is
-held for a human, and either engine may veto.
+family-member) and UMLS entity links to ICD-10-CM; it never levels E/M. The
+isolated shadow mode queues TA4H on a bounded background worker, reduces its
+output to PHI-safe aggregate counts, and returns the primary result byte-for-byte
+without waiting for TA4H. Agreement badges and reviewer-facing
+provenance remain deferred. The separately gated active-consensus mode may hold
+single-engine codes or apply a TA4H veto.
 
 Off by default, on the same terms as inference, and managed-identity only — there
 is no key-based path. The API's existing user-assigned identity needs a
@@ -285,17 +313,23 @@ no new secret enters the deployment.
 # offline deterministic mock (development only; refused in staging/production)
 COSMANEURA_AZURE_LANGUAGE_MOCK=1 uvicorn cosmaneura_billing.api:app --port 8000
 
-# future inference-on milestone only; do not enable during provisioning
-# (the current switch runs active conservative consensus; it is not shadow mode)
-export COSMANEURA_AZURE_LANGUAGE_ENABLED=1
+# observation-only deployment; requires primary OpenAI + reserved synthetic input
+export COSMANEURA_AZURE_OPENAI_ENABLED=1
+export COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=1
+export COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1
+export COSMANEURA_AZURE_LANGUAGE_ENABLED=0
 export AZURE_LANGUAGE_ENDPOINT='https://<resource>.cognitiveservices.azure.com'
 export AZURE_CLIENT_ID='<api-managed-identity-client-id>'
 uvicorn cosmaneura_billing.api:app --port 8000
+
+# fixed synthetic deployment acceptance (accepts no chart input)
+python -m cosmaneura_billing.ta4h_shadow_acceptance
 ```
 
 Input logging is opted out on every analysis submission (PHI), the transport is stdlib
-`urllib` so no HTTP/SDK dependency is added, and a TA4H outage degrades to
-single-engine operation rather than failing an encounter.
+`urllib` so no HTTP/SDK dependency is added, and a TA4H outage in shadow mode
+changes only aggregate health status. The external 40–60-case coder-labelled
+gold set is still pending; runtime aggregates are not accuracy evidence.
 `prove_no_upcode.py` proves that adding the engine cannot
 raise a level or grow the captured set, across 2,000 adversarial cases. See
 `docs/TA4H_INTEGRATION.md` for the consensus policy and rollout gates, and
@@ -308,7 +342,8 @@ information. The validated finding is that the bottleneck is **patient
 submission, not OCR** — card capture already works. What was missing is the
 system that gets the card *to* capture: a master worklist, worked across ACS
 email when enabled and manual phone tasks, by the staff whose whole job this is
-(not the coders). SMS and portal delivery are not implemented in this slice.
+(while coders may view the same operational context). SMS and portal delivery
+are not implemented in this slice.
 
 ```bash
 python demo_chase.py    # end-to-end, synthetic patients, nothing leaves the building
@@ -316,6 +351,8 @@ python demo_chase.py    # end-to-end, synthetic patients, nothing leaves the bui
 
 ```
 POST /api/chase/worklist                 master list; filters are strict JSON body fields
+POST /api/chase/task                     audited minimum-necessary contact task
+POST /api/chase/demo-seed                fixed digest-pinned four-case seed (Admin)
 POST /api/chase/detect                   detect and durably merge coverage snapshots
 POST /api/chase/metrics                  metrics; baselines are strict JSON body fields
 GET  /api/chase/policy/status            configured policy's PHI-free lifecycle status (Admin)
@@ -327,11 +364,36 @@ POST /api/chase/release-message          release one exact per-message cadence s
 POST /api/chase/action                   release | suppress | assign | log_attempt | submitted | verify
 ```
 
+The visible worklist/task projection is available to `BillingStaff`, `Coder`,
+and `Admin`. Detection and state-changing staff actions remain
+`BillingStaff`/`Admin`; policy, direct-contract release, exact message release,
+and synthetic seed operations remain `Admin`.
+
 Protected resource identifiers are carried in strict JSON bodies rather than
 request targets, so platform access logs cannot capture them from URLs. Each
 staff action carries `chaseId` plus a client-generated UUID `action_id`. An
 exact retry is replayed without adding another contact or minute count; reuse
 with a different action payload returns 409.
+
+The worklist response intentionally omits patient references, gate payloads,
+assignee identities, attempt notes, and contact destinations. Opening a row uses
+`POST /api/chase/task` with the opaque `chaseId` in the JSON body. Operational
+rows point staff to the approved athenaNet patient-search workflow until a safe
+deep-link contract exists. Only an exact server-owned synthetic provenance
+marker can reveal one of the bundled fictional `+1 202-555-01xx` destinations;
+a lookalike row receives the operational placeholder.
+
+The Admin-only demo seed requires this exact body:
+
+```json
+{"seedDigest":"fc207ef1419882f48dce5b12dae05233de2f99d9ea930ee5eb84d84e659d23ff"}
+```
+
+It installs missing-card, expired-plan, inactive-eligibility, and
+direct-contract human-review cases. The durable write and its access-audit
+completion are one transaction; exact replay is a no-op and partial/lookalike
+state conflicts. Seeding refuses to run unless scheduler, patient messaging,
+and operational activation are off and transport is `record_only`.
 
 In durable PostgreSQL mode, `POST /api/chase/detect` commits its detection,
 contact snapshots, and audit completion as one batch and returns only

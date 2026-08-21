@@ -22,9 +22,11 @@ from .runtime import (
     HTTP_LOG_EVENT,
     LLM_LOG_EVENT,
     SERVICE_LOG_EVENT,
+    TA4H_SHADOW_ACCEPTANCE_LOG_EVENT,
     is_safe_http_event,
     is_safe_chase_worker_event,
     is_safe_azure_openai_acceptance_event,
+    is_safe_ta4h_shadow_acceptance_event,
     is_safe_llm_event,
 )
 
@@ -285,6 +287,9 @@ def scan_log_text(
                 findings.add(LogFinding(line_number, "invalid_worker_schema"))
         elif event == AZURE_OPENAI_ACCEPTANCE_LOG_EVENT:
             if not is_safe_azure_openai_acceptance_event(payload):
+                findings.add(LogFinding(line_number, "invalid_acceptance_schema"))
+        elif event == TA4H_SHADOW_ACCEPTANCE_LOG_EVENT:
+            if not is_safe_ta4h_shadow_acceptance_event(payload):
                 findings.add(LogFinding(line_number, "invalid_acceptance_schema"))
         elif event == SERVICE_LOG_EVENT:
             if not _is_safe_service_event(payload):

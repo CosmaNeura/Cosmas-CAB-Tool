@@ -114,6 +114,8 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return None
     if path == "/api/encounters":
         return "encounter.list", "/api/encounters", ""
+    if path == "/api/session":
+        return "session.view", "/api/session", ""
     if path in _ENCOUNTER_FIXED_ROUTES:
         return _ENCOUNTER_FIXED_ROUTES[path], path, ""
     if path == "/api/billing":
@@ -124,10 +126,10 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "encounter.decide", "/api/feedback", ""
     if path == "/api/feedback/summary":
         return "feedback.summary", "/api/feedback/summary", ""
-    if path in {"/api/chase/worklist", "/api/chase/metrics"}:
+    if path in {"/api/chase/worklist", "/api/chase/metrics", "/api/chase/task"}:
         return "chase.view", path, ""
-    if path == "/api/chase/detect":
-        return "chase.decide", "/api/chase/detect", ""
+    if path in {"/api/chase/detect", "/api/chase/demo-seed"}:
+        return "chase.decide", path, ""
     if path == "/api/chase/policy/status":
         return "chase.policy.view", "/api/chase/policy/status", ""
     if path in _CHASE_POLICY_MUTATIONS:

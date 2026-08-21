@@ -181,16 +181,19 @@ VisitBundle ──┬── CodingAgent (primary Azure OpenAI when enabled; ─�
   secondary evidence never supplies a missing primary span, and agreement never
   independently promotes capture. Shadow results remain internal until the
   reviewer-surface milestone.
-- **Config**: `COSMANEURA_AZURE_LANGUAGE_ENABLED` + `AZURE_LANGUAGE_ENDPOINT` +
-  `AZURE_CLIENT_ID`. **Managed identity only** — key-based auth is prohibited, matching the
-  Azure OpenAI stance, so no new secret enters the deployment. Not enabled → engine off,
-  current behavior byte-identical. `loggingOptOut` always on, not configurable.
-- **Rollout**: (1) first add an isolated comparison seam; the current enabled
-  path performs active conservative consensus and is not shadow mode; (2) run
-  TA4H out-of-band, log results, and surface nothing while measuring agreement
-  and lift against the frozen gold set per `VALIDATION_PROTOCOL.md` §11/§13 on
-  the F0 free tier; (3) coder-review surfacing; (4) only then consider consensus
-  policy changes. Ship nothing to `captured` from TA4H because of agreement.
+- **Config**: `COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED` selects the isolated
+  observation lane; `COSMANEURA_AZURE_LANGUAGE_ENABLED` separately selects
+  active consensus. They are mutually exclusive and both require
+  `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID`; shadow additionally requires
+  primary Azure OpenAI and the reserved synthetic-only input policy for this
+  milestone. **Managed identity only** — key-based auth is
+  prohibited. `loggingOptOut` is always on and is not configurable.
+- **Rollout**: (1) run the fixed synthetic shadow acceptance harness; (2) run
+  TA4H out-of-band and surface nothing while measuring aggregate agreement and
+  latency against the externally maintained frozen gold set per
+  `VALIDATION_PROTOCOL.md` §11/§13 on F0; (3) coder-review surfacing; (4) only
+  then consider consensus policy changes. Ship nothing to `captured` from TA4H
+  because of agreement.
 
 ## 7. Status
 
@@ -211,10 +214,12 @@ Still open:
       (immaterial at pilot volume; F0 covers the study's Language usage, while the documented
       $7.80/month private-network standing cost remains).
 - [ ] Compliance sign-off on the consensus policy as built.
-- [ ] Implement the isolated, non-influencing shadow seam before enabling TA4H
-      on any reviewer-serving process.
-- [ ] Run the shadow-mode measurement against the frozen gold set per `VALIDATION_PROTOCOL.md`
-      §11/§13 before surfacing agreement badges to real coders.
+- [x] Implement the isolated, non-influencing shadow seam, strict deployment
+      latches, closed aggregate health schema, and synthetic acceptance harness.
+- [ ] Create/freeze the external 40–60-case coder-labelled gold set and run the
+      shadow measurement per `VALIDATION_PROTOCOL.md` §11/§13 before surfacing
+      agreement badges. The gold set remains external and pending; runtime
+      aggregate counters are not a substitute for coder labels.
 - [x] Extend `infra/app.bicep` with dormant F0 Language account provisioning,
       private endpoint/DNS, and the API-identity-only reader assignment. The tracked
       deployment defaults still provision nothing and keep extraction disabled.

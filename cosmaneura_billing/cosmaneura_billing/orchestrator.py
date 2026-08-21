@@ -17,12 +17,18 @@ from .knowledge.pos import PlaceOfService
 from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
 from .llm import LLMClient, describe_client, get_default_client
+from .persistence import SYNTHETIC_DEMO_SOURCE
 from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
     Disposition, FeedbackKind, ProviderCard, VisitBundle,
 )
 from .settings import Settings
 from .ta4h import TA4HClient, get_default_ta4h_client
+from .ta4h_shadow import TA4HShadowMetrics, TA4HShadowRunner
+
+
+class InferenceInputPolicyError(PermissionError):
+    """The configured model-input boundary rejected an untrusted bundle."""
 
 
 class BillingOrchestrator:
@@ -36,7 +42,8 @@ class BillingOrchestrator:
     def __init__(self, llm: LLMClient | None = None, icd10: ICD10CCSR | None = None,
                  ncci=None, coverage=None, pos=None, cpt=None, preferences=None,
                  settings: Settings | None = None,
-                 coding=None, secondary_coding=None, ta4h: TA4HClient | None = None):
+                 coding=None, secondary_coding=None, ta4h: TA4HClient | None = None,
+                 shadow_metrics: TA4HShadowMetrics | None = None):
         config = settings or Settings.from_env()
         self.settings = config
         self.llm = llm or get_default_client(config)
@@ -57,13 +64,35 @@ class BillingOrchestrator:
         # Optional second extraction engine (Azure Text Analytics for health).
         # Disabled unless the azure_language settings are enabled, exactly like
         # Azure OpenAI inference, or a client is injected for tests.
-        self.ta4h = ta4h if ta4h is not None else get_default_ta4h_client(config)
+        if ta4h is not None:
+            self.ta4h = ta4h
+        elif secondary_coding is not None:
+            self.ta4h = None
+        else:
+            self.ta4h = get_default_ta4h_client(config)
         if secondary_coding is not None:
             self.secondary_coding = secondary_coding
         elif self.ta4h is not None:
             self.secondary_coding = TA4HCodingAgent(self.ta4h, self.icd10)
         else:
             self.secondary_coding = None
+        if config.azure_language_shadow_enabled:
+            if self.secondary_coding is None:
+                raise RuntimeError("TA4H shadow mode has no secondary extractor")
+            self.ta4h_mode = "shadow"
+        elif self.secondary_coding is not None:
+            # Explicit injection retains the pre-shadow active-consensus test
+            # seam. The deployed active lane remains separately gated by
+            # COSMANEURA_AZURE_LANGUAGE_ENABLED.
+            self.ta4h_mode = "active_consensus"
+        else:
+            self.ta4h_mode = "off"
+        self.shadow_metrics = shadow_metrics or TA4HShadowMetrics(self.ta4h_mode)
+        self.shadow_runner = (
+            TA4HShadowRunner(self.secondary_coding, self.shadow_metrics)
+            if self.ta4h_mode == "shadow"
+            else None
+        )
         self.consensus = ConsensusAgent()
         self.integrity = DocumentationIntegrityAgent()
         self.guardrail = ComplianceGuardrailAgent()
@@ -73,6 +102,22 @@ class BillingOrchestrator:
     @property
     def multi_engine(self) -> bool:
         return self.secondary_coding is not None
+
+    def ta4h_observability(self) -> dict[str, str | int]:
+        return self.shadow_metrics.snapshot()
+
+    def wait_for_shadow(self, timeout: float) -> bool:
+        """Acceptance/test synchronization; reviewer requests never call this."""
+
+        return (
+            True
+            if self.shadow_runner is None
+            else self.shadow_runner.wait_for_idle(timeout)
+        )
+
+    def shutdown(self) -> None:
+        if self.shadow_runner is not None:
+            self.shadow_runner.shutdown()
 
     def _extract(self, bundle: VisitBundle, new_patient: bool
                  ) -> tuple[dict, list[CodeSuggestion], list[str]]:
@@ -85,6 +130,13 @@ class BillingOrchestrator:
         """
         if self.secondary_coding is None:
             facts, suggestions = self.coding.run(bundle)
+            return facts, suggestions, []
+
+        if self.ta4h_mode == "shadow":
+            facts, suggestions = self.coding.run(bundle)
+            # Non-blocking and bounded: a slow, failed, or saturated TA4H lane
+            # cannot change response availability or latency.
+            self.shadow_runner.observe(bundle, suggestions)
             return facts, suggestions, []
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -119,7 +171,20 @@ class BillingOrchestrator:
             consensus_audit + primary_evidence_audit + secondary_evidence_audit,
         )
 
-    def process(self, bundle: VisitBundle, user_id: str | None = None) -> BillingResult:
+    def process(
+        self,
+        bundle: VisitBundle,
+        user_id: str | None = None,
+        *,
+        input_provenance: str | None = None,
+    ) -> BillingResult:
+        if (
+            self.settings.azure_openai_synthetic_only
+            and input_provenance != SYNTHETIC_DEMO_SOURCE
+        ):
+            raise InferenceInputPolicyError(
+                "model inference requires reserved stored synthetic provenance"
+            )
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions, consensus_audit = self._extract(bundle, new_patient)
