@@ -520,7 +520,10 @@ def _cpt_status(cpt, settings: Settings | None = None) -> str:
     if cpt.loaded:
         return f"{cpt.size} official descriptors loaded from {cpt.source}"
     if cpt.fetch_error:
-        return f"auto-fetch failed: {cpt.fetch_error}"
+        # ``fetch_error`` is deliberately not interpolated. Keep this response
+        # safe even if a legacy or injected descriptor object carries raw
+        # provider exception text.
+        return "CPT auto-fetch failed; generic labels in use"
     if (settings or get_settings()).ama_configured:
         return "AMA credentials present but no descriptors resolved"
     return ("no CPT license configured — set the four AMA_* variables "

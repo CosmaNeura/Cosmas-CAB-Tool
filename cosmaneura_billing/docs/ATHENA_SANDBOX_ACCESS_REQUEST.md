@@ -10,6 +10,7 @@ Official onboarding source:
 - [athenahealth onboarding overview](https://docs.athenahealth.com/api/guides/onboarding-overview)
 - [athenahealth Developer Portal applications](https://developer.api.athena.io/ams-portal/apps)
 - [athenahealth sandbox guidance](https://docs.athenahealth.com/api/guides/testing-sandbox)
+- [athenahealth Microsoft Technical Request Form](https://forms.office.com/r/Xzb2UpYqmT)
 
 ## Proposed application request (confirm in the authenticated portal)
 
@@ -100,3 +101,56 @@ client ID, selected scope names, creation time, owner, and expiration metadata.
 - all other workloads have zero Athena settings or secret grants; and
 - a bounded acceptance plan uses only sandbox synthetic records and emits
   count/code-only evidence.
+
+## Prepared vendor support request (not submitted)
+
+Athena's official documentation routes technical questions to the Microsoft
+Technical Request Form above. Page 1 requires the submitter's name and email,
+the Preview client ID, Practice ID, API Solutions Service/legacy Project ID,
+an optional manager, and a request category such as API Access, API Consulting,
+or Solution Validation. Practice ID is fixed to `195900`. Do not add personal
+data, a client ID, or a Service/Project ID to this repository. Those values and
+action-time user confirmation are required before submitting the form.
+
+The prepared request text is:
+
+> **Subject: Preview Practice 195900 — vendor-enforced read-only access for
+> AthenaOne billing endpoints**
+>
+> We have a dedicated 2-legged OAuth Preview app, `Cosmaneura CAB Pilot`. Its
+> Scopes page exposes AthenaOne only as the Read/Write selection
+> `athena/service/Athenanet.MDP.*`. We need system-to-system READ access only,
+> solely to athenahealth’s public synthetic Preview Practice `195900`; no
+> production/customer practice, writes, uploads, messages, subscriptions,
+> webhooks, or administrative operations.
+>
+> Please confirm whether athenahealth can provide a read-only AthenaOne scope,
+> endpoint entitlement, app policy, or server-side method/path restriction
+> narrower than `athena/service/Athenanet.MDP.*` for these candidate GET
+> operations:
+>
+> - `/v1/195900/practiceinfo` and `/v1/195900/departments`
+> - bounded reads of the documented Preview test patients
+> - patient appointments and encounter summaries/diagnoses/services
+> - appointment/patient insurance and benefit-detail reads
+> - `/v1/195900/claims`, `/v1/195900/claims/{claimid}`, and
+>   `/v1/195900/claims/{claimid}/claimtransactions`
+>
+> If the wildcard is required even for these GETs, can athenahealth bind this
+> client server-side to Practice 195900 and the approved methods/paths? Please
+> identify the exact supported endpoint paths and required query parameters for
+> appointments, encounters, documentation, insurance/coverage, claims,
+> statuses/transactions, and denial outcomes, and confirm which of those
+> datasets are populated for the documented synthetic patients.
+>
+> For the 2-legged Preview access token, please also document the guaranteed
+> token/introspection contract: expected issuer and audience, whether the
+> access token is always a JWT verifiable through `/oauth2/v1/keys` or may be
+> opaque, and whether `/oauth2/v1/introspect` always returns `active`, `exp`,
+> `scope`, and `client_id`.
+>
+> Finally, please confirm whether any selectable FHIR R4 SMART V2 read/search
+> scopes cover Appointment, Claim, ClaimResponse, or ExplanationOfBenefit in
+> Preview. The portal currently exposes Patient, Encounter, Coverage,
+> DocumentReference/Binary and other US Core resources, but not those billing
+> resources.

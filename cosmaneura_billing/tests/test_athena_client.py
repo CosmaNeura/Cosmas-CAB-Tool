@@ -5,14 +5,26 @@ import json
 import socket
 import urllib.error
 from copy import deepcopy
+from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
 
+import cosmaneura_billing.athena_client as athena_client
 from cosmaneura_billing.athena_client import (
+    ATHENA_PREVIEW_INTROSPECTION_URL,
+    ATHENA_PREVIEW_ORIGIN,
+    ATHENA_PREVIEW_PRACTICE_ID,
+    ATHENA_PREVIEW_SCOPE,
+    ATHENA_PREVIEW_TOKEN_URL,
     MAX_PAGE_RECORDS,
+    AthenaAccessToken,
     AthenaAuthenticationError,
     AthenaHTTPTransport,
+    AthenaOperationUnavailable,
     AthenaPartialResponseError,
+    AthenaPreviewOperation,
+    AthenaPreviewOperationContract,
     AthenaRequest,
     AthenaRequestRejected,
     AthenaRetryExhausted,
@@ -24,13 +36,15 @@ from cosmaneura_billing.athena_client import (
     NORMALIZED_SCHEMA_VERSION,
     parse_normalized_page,
     read_all_pages,
+    validate_athena_token_introspection,
+    validate_athena_token_response,
 )
 from cosmaneura_billing.corpus.demo_release_candidate import (
     load_demo_release_candidate,
 )
 
 
-BASE_URL = "https://reviewed-contract.invalid/api"
+NOW = 1_800_000_000
 
 
 def _valid_record() -> dict:
@@ -71,6 +85,48 @@ class _Response:
 
     def __exit__(self, *args):
         return False
+
+
+@pytest.fixture
+def confirmed_preview_operation(monkeypatch):
+    """Install a test-only spec; the production allowlist stays empty."""
+
+    spec = athena_client._AthenaPreviewOperationSpec(
+        path_template="/unit-fixture/{vendor_practice_id}/records",
+        query_keys=frozenset({"page"}),
+    )
+    monkeypatch.setattr(
+        athena_client,
+        "_ATHENA_PREVIEW_OPERATION_ALLOWLIST",
+        MappingProxyType({
+            AthenaPreviewOperation.PRACTICE_REFERENCE: spec,
+        }),
+    )
+    return AthenaPreviewOperationContract()
+
+
+def _access_token(
+    *,
+    token: str = "synthetic-token",
+    expires_at: float = NOW + 300,
+) -> AthenaAccessToken:
+    return AthenaAccessToken(
+        access_token=token,
+        scope=ATHENA_PREVIEW_SCOPE,
+        expires_at=expires_at,
+    )
+
+
+def _preview_request(
+    contract: AthenaPreviewOperationContract,
+    *,
+    page: str | None = None,
+) -> AthenaRequest:
+    query = None if page is None else {"page": page}
+    return contract.build_request(
+        AthenaPreviewOperation.PRACTICE_REFERENCE,
+        query=query,
+    )
 
 
 def test_mock_reads_all_four_cases_in_two_deterministic_pages():
@@ -254,39 +310,138 @@ def test_cursor_loop_and_page_budget_fail_closed():
         read_all_pages(Endless(), max_pages=2)
 
 
-def test_http_success_is_bounded_and_uses_injected_bearer():
+def test_production_operation_allowlist_is_empty_and_fail_closed():
+    contract = AthenaPreviewOperationContract()
+
+    with pytest.raises(AthenaOperationUnavailable) as caught:
+        contract.build_request(AthenaPreviewOperation.CLAIMS)
+
+    assert str(caught.value) == "ATHENA_OPERATION_UNAVAILABLE"
+    assert athena_client._ATHENA_PREVIEW_OPERATION_ALLOWLIST == {}
+
+
+def test_verified_preview_metadata_is_exactly_pinned():
+    assert ATHENA_PREVIEW_ORIGIN == (
+        "https://api.preview.platform.athenahealth.com"
+    )
+    assert ATHENA_PREVIEW_TOKEN_URL == (
+        "https://api.preview.platform.athenahealth.com/oauth2/v1/token"
+    )
+    assert ATHENA_PREVIEW_INTROSPECTION_URL == (
+        "https://api.preview.platform.athenahealth.com/oauth2/v1/introspect"
+    )
+    assert ATHENA_PREVIEW_PRACTICE_ID == "195900"
+    assert ATHENA_PREVIEW_SCOPE == "athena/service/Athenanet.MDP.*"
+
+
+def test_named_contract_binds_fixed_vendor_practice_and_canonical_query(
+    confirmed_preview_operation,
+):
+    request = _preview_request(confirmed_preview_operation, page="next-page")
+
+    assert confirmed_preview_operation.vendor_practice_id == (
+        ATHENA_PREVIEW_PRACTICE_ID
+    )
+    assert request.method == "GET"
+    assert request.url == (
+        ATHENA_PREVIEW_ORIGIN
+        + "/unit-fixture/195900/records?page=next-page"
+    )
+    assert request.query == (("page", "next-page"),)
+
+    with pytest.raises(AthenaSchemaError):
+        AthenaPreviewOperationContract(vendor_practice_id="195901")
+    with pytest.raises(AthenaSchemaError):
+        confirmed_preview_operation.build_request(
+            AthenaPreviewOperation.PRACTICE_REFERENCE,
+            query={"unreviewed": "value"},
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda request: replace(request, method="POST"),
+        lambda request: replace(request, method="PUT"),
+        lambda request: replace(request, url=request.url + "/../claims"),
+        lambda request: replace(request, url=request.url + "/%2e%2e/claims"),
+        lambda request: replace(
+            request,
+            url="https://attacker.invalid/unit-fixture/195900/records",
+        ),
+        lambda request: replace(request, query=(("unknown", "value"),)),
+    ],
+)
+def test_request_validation_precedes_token_and_network(
+    confirmed_preview_operation,
+    mutate,
+):
+    token_calls = 0
+    network_calls = 0
+
+    def token_provider():
+        nonlocal token_calls
+        token_calls += 1
+        return _access_token()
+
+    def urlopen(request, timeout):
+        nonlocal network_calls
+        network_calls += 1
+        return _Response({})
+
+    transport = AthenaHTTPTransport(
+        token_provider=token_provider,
+        operation_contract=confirmed_preview_operation,
+        urlopen=urlopen,
+        clock=lambda: NOW,
+    )
+    with pytest.raises(AthenaSchemaError):
+        transport.request_json(mutate(_preview_request(
+            confirmed_preview_operation,
+        )))
+
+    assert token_calls == 0
+    assert network_calls == 0
+
+
+def test_http_success_is_get_only_bodyless_and_uses_validated_bearer(
+    confirmed_preview_operation,
+):
     captured = {}
 
     def urlopen(request, timeout):
         captured["authorization"] = request.get_header("Authorization")
         captured["method"] = request.method
-        captured["body"] = json.loads(request.data)
+        captured["body"] = request.data
         captured["timeout"] = timeout
         return _Response({"ok": True})
 
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         urlopen=urlopen,
         sleep=lambda _: None,
+        clock=lambda: NOW,
     )
-    result = transport.request_json(
-        BASE_URL + "/visits",
-        method="POST",
-        body={"cursor": "synthetic-cursor"},
-    )
+    result = transport.request_json(_preview_request(
+        confirmed_preview_operation,
+        page="synthetic-cursor",
+    ))
 
     assert result == {"ok": True}
     assert captured == {
         "authorization": "Bearer synthetic-token",
-        "method": "POST",
-        "body": {"cursor": "synthetic-cursor"},
+        "method": "GET",
+        "body": None,
         "timeout": 30.0,
     }
 
 
 @pytest.mark.parametrize("status", [401, 403])
-def test_auth_failure_is_terminal_and_sanitized(status):
+def test_auth_failure_is_terminal_and_sanitized(
+    confirmed_preview_operation,
+    status,
+):
     secret = "credential-that-must-not-escape"
     calls = 0
 
@@ -296,19 +451,22 @@ def test_auth_failure_is_terminal_and_sanitized(status):
         raise urllib.error.HTTPError(request.full_url, status, secret, {}, None)
 
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: secret,
+        token_provider=lambda: _access_token(token=secret),
+        operation_contract=confirmed_preview_operation,
         urlopen=urlopen,
         sleep=lambda _: None,
+        clock=lambda: NOW,
     )
     with pytest.raises(AthenaAuthenticationError) as caught:
-        transport.request_json(BASE_URL + "/visits")
+        transport.request_json(_preview_request(confirmed_preview_operation))
     assert calls == 1
     assert str(caught.value) == "ATHENA_AUTHENTICATION_FAILED"
     assert secret not in str(caught.value)
 
 
-def test_timeout_retries_are_bounded_and_report_only_static_code():
+def test_timeout_retries_are_bounded_and_report_only_static_code(
+    confirmed_preview_operation,
+):
     calls = 0
     sleeps = []
 
@@ -318,21 +476,24 @@ def test_timeout_retries_are_bounded_and_report_only_static_code():
         raise socket.timeout("vendor-record-should-not-escape")
 
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         max_retries=2,
         urlopen=urlopen,
         sleep=sleeps.append,
+        clock=lambda: NOW,
     )
     with pytest.raises(AthenaTimeoutError) as caught:
-        transport.request_json(BASE_URL + "/visits")
+        transport.request_json(_preview_request(confirmed_preview_operation))
     assert calls == 3
     assert sleeps == [1, 2]
     assert str(caught.value) == "ATHENA_REQUEST_TIMEOUT"
     assert "vendor-record" not in str(caught.value)
 
 
-def test_retry_exhaustion_for_network_failure_is_bounded():
+def test_retry_exhaustion_for_network_failure_is_bounded(
+    confirmed_preview_operation,
+):
     calls = 0
 
     def urlopen(request, timeout):
@@ -341,50 +502,100 @@ def test_retry_exhaustion_for_network_failure_is_bounded():
         raise urllib.error.URLError("raw-vendor-error")
 
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         max_retries=1,
         urlopen=urlopen,
         sleep=lambda _: None,
+        clock=lambda: NOW,
     )
     with pytest.raises(AthenaRetryExhausted) as caught:
-        transport.request_json(BASE_URL + "/visits")
+        transport.request_json(_preview_request(confirmed_preview_operation))
     assert calls == 2
     assert str(caught.value) == "ATHENA_RETRY_EXHAUSTED"
 
 
-def test_retryable_server_error_can_recover_but_rejection_is_terminal():
+def test_retryable_server_error_can_recover_but_rejection_is_terminal(
+    confirmed_preview_operation,
+):
     calls = 0
+    request = _preview_request(confirmed_preview_operation)
 
-    def recovering(request, timeout):
+    def recovering(raw_request, timeout):
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise urllib.error.HTTPError(request.full_url, 503, "raw", {}, None)
+            raise urllib.error.HTTPError(
+                raw_request.full_url,
+                503,
+                "raw",
+                {},
+                None,
+            )
         return _Response({"ok": True})
 
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         urlopen=recovering,
         sleep=lambda _: None,
+        clock=lambda: NOW,
     )
-    assert transport.request_json(BASE_URL + "/visits") == {"ok": True}
+    assert transport.request_json(request) == {"ok": True}
     assert calls == 2
 
-    def rejected(request, timeout):
-        raise urllib.error.HTTPError(request.full_url, 400, "raw", {}, None)
+    def rejected(raw_request, timeout):
+        raise urllib.error.HTTPError(
+            raw_request.full_url,
+            400,
+            "raw",
+            {},
+            None,
+        )
 
     rejected_transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         urlopen=rejected,
+        clock=lambda: NOW,
     )
     with pytest.raises(AthenaRequestRejected):
-        rejected_transport.request_json(BASE_URL + "/visits")
+        rejected_transport.request_json(request)
 
 
-def test_default_transport_refuses_redirect_without_forwarding_token(monkeypatch):
+def test_retry_revalidates_token_after_backoff(
+    confirmed_preview_operation,
+):
+    current = [float(NOW)]
+    network_calls = 0
+
+    def retryable(request, timeout):
+        nonlocal network_calls
+        network_calls += 1
+        raise urllib.error.HTTPError(request.full_url, 503, "raw", {}, None)
+
+    def advance(seconds):
+        current[0] += seconds
+
+    token = _access_token(expires_at=NOW + 0.5)
+    transport = AthenaHTTPTransport(
+        token_provider=lambda: token,
+        operation_contract=confirmed_preview_operation,
+        max_retries=1,
+        urlopen=retryable,
+        sleep=advance,
+        clock=lambda: current[0],
+    )
+
+    with pytest.raises(AthenaAuthenticationError):
+        transport.request_json(_preview_request(confirmed_preview_operation))
+    assert network_calls == 1
+
+
+def test_default_transport_refuses_redirect_without_forwarding_again(
+    monkeypatch,
+    confirmed_preview_operation,
+):
     calls = []
 
     class Opener:
@@ -407,14 +618,16 @@ def test_default_transport_refuses_redirect_without_forwarding_token(monkeypatch
 
     monkeypatch.setattr(urllib.request, "build_opener", build_opener)
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         sleep=lambda _: None,
+        clock=lambda: NOW,
     )
+    request = _preview_request(confirmed_preview_operation)
     with pytest.raises(AthenaRequestRejected):
-        transport.request_json(BASE_URL + "/visits")
+        transport.request_json(request)
 
-    assert calls == [(BASE_URL + "/visits", "Bearer synthetic-token")]
+    assert calls == [(request.url, "Bearer synthetic-token")]
 
 
 @pytest.mark.parametrize(
@@ -426,17 +639,24 @@ def test_default_transport_refuses_redirect_without_forwarding_token(monkeypatch
         ({"ok": True}, {"Content-Length": "not-an-integer"}),
     ],
 )
-def test_invalid_or_oversized_http_response_is_schema_failure(payload, headers):
+def test_invalid_or_oversized_http_response_is_schema_failure(
+    confirmed_preview_operation,
+    payload,
+    headers,
+):
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         urlopen=lambda request, timeout: _Response(payload, headers=headers),
+        clock=lambda: NOW,
     )
     with pytest.raises(AthenaSchemaError):
-        transport.request_json(BASE_URL + "/visits")
+        transport.request_json(_preview_request(confirmed_preview_operation))
 
 
-def test_token_provider_and_target_validation_fail_without_network():
+def test_invalid_token_provider_fails_without_network(
+    confirmed_preview_operation,
+):
     calls = 0
 
     def urlopen(request, timeout):
@@ -445,30 +665,126 @@ def test_token_provider_and_target_validation_fail_without_network():
         return _Response({})
 
     failed_token = AthenaHTTPTransport(
-        base_url=BASE_URL,
         token_provider=lambda: (_ for _ in ()).throw(RuntimeError("secret")),
+        operation_contract=confirmed_preview_operation,
         urlopen=urlopen,
+        clock=lambda: NOW,
     )
     with pytest.raises(AthenaAuthenticationError):
-        failed_token.request_json(BASE_URL + "/visits")
+        failed_token.request_json(_preview_request(confirmed_preview_operation))
 
-    transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
-        urlopen=urlopen,
+    invalid_tokens = (
+        _access_token(expires_at=NOW),
+        _access_token(expires_at=NOW + 3_601),
+        "unvalidated-raw-token",
+        AthenaAccessToken(
+            access_token="synthetic-token",
+            scope="extra.scope",
+            expires_at=NOW + 300,
+        ),
     )
-    with pytest.raises(AthenaSchemaError):
-        transport.request_json("https://attacker.example/visits")
+    for invalid_token in invalid_tokens:
+        invalid_transport = AthenaHTTPTransport(
+            token_provider=lambda value=invalid_token: value,
+            operation_contract=confirmed_preview_operation,
+            urlopen=urlopen,
+            clock=lambda: NOW,
+        )
+        with pytest.raises(AthenaAuthenticationError):
+            invalid_transport.request_json(_preview_request(
+                confirmed_preview_operation,
+            ))
     assert calls == 0
 
 
-def test_live_composition_requires_explicit_contract_and_preserves_server_scope():
+def test_token_response_requires_exact_scope_and_bounded_future_expiry():
+    payload = {
+        "access_token": "credential-that-must-not-escape",
+        "token_type": "Bearer",
+        "expires_in": 300,
+        "scope": ATHENA_PREVIEW_SCOPE,
+    }
+    token = validate_athena_token_response(
+        payload,
+        requested_scope=ATHENA_PREVIEW_SCOPE,
+        now=NOW,
+    )
+    assert token.scope == ATHENA_PREVIEW_SCOPE
+    assert token.expires_at == NOW + 300
+    assert "credential-that-must-not-escape" not in repr(token)
+
+    for invalid in (
+        {**payload, "scope": ATHENA_PREVIEW_SCOPE + " extra.scope"},
+        {key: value for key, value in payload.items() if key != "scope"},
+        {**payload, "expires_in": 0},
+        {**payload, "expires_in": 3_601},
+        {**payload, "token_type": "Basic"},
+    ):
+        with pytest.raises(AthenaAuthenticationError):
+            validate_athena_token_response(
+                invalid,
+                requested_scope=ATHENA_PREVIEW_SCOPE,
+                now=NOW,
+            )
+
+
+def test_introspection_requires_active_exact_scope_expiry_and_optional_client():
+    payload = {
+        "active": True,
+        "scope": ATHENA_PREVIEW_SCOPE,
+        "exp": NOW + 300,
+        "client_id": "synthetic-client-id",
+        # Accepted but deliberately not interpreted before vendor confirmation.
+        "aud": "unreviewed-audience",
+        "iss": "unreviewed-issuer",
+    }
+    result = validate_athena_token_introspection(
+        payload,
+        requested_scope=ATHENA_PREVIEW_SCOPE,
+        expected_client_id="synthetic-client-id",
+        now=NOW,
+    )
+    assert result.active is True
+    assert result.client_id == "synthetic-client-id"
+    assert "unreviewed" not in repr(result)
+
+    without_client = dict(payload)
+    del without_client["client_id"]
+    assert validate_athena_token_introspection(
+        without_client,
+        requested_scope=ATHENA_PREVIEW_SCOPE,
+        expected_client_id="synthetic-client-id",
+        now=NOW,
+    ).client_id is None
+
+    invalid_payloads = (
+        {**payload, "active": False},
+        {**payload, "scope": ATHENA_PREVIEW_SCOPE + " extra.scope"},
+        {key: value for key, value in payload.items() if key != "scope"},
+        {**payload, "exp": NOW},
+        {**payload, "exp": NOW + 3_601},
+        {**payload, "client_id": "wrong-client"},
+    )
+    for invalid in invalid_payloads:
+        with pytest.raises(AthenaAuthenticationError):
+            validate_athena_token_introspection(
+                invalid,
+                requested_scope=ATHENA_PREVIEW_SCOPE,
+                expected_client_id="synthetic-client-id",
+                now=NOW,
+            )
+
+
+def test_live_composition_uses_named_operation_and_preserves_server_scope(
+    confirmed_preview_operation,
+):
     expected_payload = _payload([])
 
     class Contract:
-        def build_page_request(self, cursor):
-            assert cursor is None
-            return AthenaRequest(BASE_URL + "/reviewed-contract/visits")
+        operation = AthenaPreviewOperation.PRACTICE_REFERENCE
+
+        def build_page_query(self, cursor):
+            return None if cursor is None else {"page": cursor}
 
         def decode_page(self, payload, *, server_practice_id):
             assert payload == expected_payload
@@ -478,12 +794,14 @@ def test_live_composition_requires_explicit_contract_and_preserves_server_scope(
             )
 
     transport = AthenaHTTPTransport(
-        base_url=BASE_URL,
-        token_provider=lambda: "synthetic-token",
+        token_provider=lambda: _access_token(),
+        operation_contract=confirmed_preview_operation,
         urlopen=lambda request, timeout: _Response(expected_payload),
+        clock=lambda: NOW,
     )
     client = AthenaSandboxClient(
         transport=transport,
+        operation_contract=confirmed_preview_operation,
         contract=Contract(),
         server_practice_id="server-practice",
     )

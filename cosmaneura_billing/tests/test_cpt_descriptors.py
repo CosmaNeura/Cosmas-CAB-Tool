@@ -141,7 +141,27 @@ def test_auto_fetch_failure_is_non_fatal(monkeypatch, tmp_path):
     _fake_ama(monkeypatch, tmp_path, token_status=401)
     cpt = CPTDescriptors(cache_dir=tmp_path / "cache")
     assert not cpt.loaded
-    assert cpt.fetch_error and "401" in cpt.fetch_error
+    assert cpt.fetch_error == "auto_fetch_failed"
+
+
+def test_auto_fetch_does_not_retain_or_log_raw_exception_text(
+    monkeypatch, tmp_path, caplog,
+):
+    secret = "patient-Jane-Doe bearer-token-secret"
+    _fake_ama(monkeypatch, tmp_path)
+
+    def fail_without_logging(*args, **kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(
+        "cosmaneura_billing.knowledge.cpt._urlopen", fail_without_logging,
+    )
+    cpt = CPTDescriptors(cache_dir=tmp_path / "cache")
+
+    assert not cpt.loaded
+    assert cpt.fetch_error == "auto_fetch_failed"
+    assert secret not in cpt.fetch_error
+    assert secret not in caplog.text
 
 
 def test_auto_fetch_disabled_by_env(monkeypatch, tmp_path):

@@ -73,13 +73,32 @@ def test_cpt_status_lines(monkeypatch):
     assert "no CPT license configured" in api._cpt_status(unlicensed)
 
     failed = FakeCPT()
-    failed.fetch_error = "HTTPError: 401"
-    assert api._cpt_status(failed) == "auto-fetch failed: HTTPError: 401"
+    failed.fetch_error = "HTTPError: patient-Jane-Doe bearer-token-secret"
+    status = api._cpt_status(failed)
+    assert status == "CPT auto-fetch failed; generic labels in use"
+    assert "Jane" not in status
+    assert "bearer-token-secret" not in status
 
     loaded = FakeCPT()
     loaded.loaded, loaded.size, loaded.source = True, 10988, "/cache/SHORTU.txt"
     assert api._cpt_status(loaded) == \
         "10988 official descriptors loaded from /cache/SHORTU.txt"
+
+
+def test_health_does_not_expose_cpt_fetch_exception_text(client):
+    secret = "patient-Jane-Doe bearer-token-secret"
+    # TestClient calls outside its lifespan initialize the app-local
+    # orchestrator on the first request.
+    assert client.get("/api/health").status_code == 200
+    cpt = client.app.state.orchestrator.cpt
+    cpt.fetch_error = f"HTTPError: {secret}"
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json()["cptStatus"] == \
+        "CPT auto-fetch failed; generic labels in use"
+    assert secret not in response.text
 
 
 def test_list_and_get_encounter(client):
