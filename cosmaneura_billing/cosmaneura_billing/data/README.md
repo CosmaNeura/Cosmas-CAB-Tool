@@ -19,6 +19,7 @@ decisions are tracked in `cosmaneura_billing/docs/DATA_PROVENANCE_CATALOG.md`.
 | `mcd/` | CMS Medicare Coverage Database (see mcd/README.md) | NGS-jurisdiction coverage articles |
 | `corpora/` | ACI-Bench, MTS-Dialog (see corpora/README.md) | externally authored encounters, CC-BY-4.0; allowed-use posture differs by source |
 | `demo_release_candidate/` | authored in-repository; see `cosmaneura_billing/docs/DATA_PROVENANCE_CATALOG.md` | wholly synthetic demo/evaluation cases; training prohibited |
+| `demo_source_extension/` | authored in-repository; see `cosmaneura_billing/docs/DATA_PROVENANCE_CATALOG.md` | wholly synthetic source-only demo/evaluation cases; no labels; training prohibited |
 
 Also: `benchmarks/data/em_benchmark_by_specialty.csv` (national) and
 `benchmarks/data/em_nh_2024.csv` (New Hampshire, from the CMS Medicare

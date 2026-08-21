@@ -16,6 +16,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .synthetic_safety import prohibited_text_shapes
+
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _PACK_PATH = _DATA_DIR / "demo_release_candidate" / "pack.v1.json"
@@ -25,22 +27,6 @@ _CASE_ID = re.compile(r"^SYN-RC-[0-9]{4}$")
 _ICD10 = re.compile(r"^[A-Z][0-9]{2}(?:\.[A-Z0-9]{1,4})?$")
 _POS = re.compile(r"^[0-9]{2}$")
 
-# These patterns are intentionally conservative.  The pack contains no names,
-# dates, contact details, record numbers, or street addresses; a match is a
-# release-blocking error even if a future contributor says the value is fake.
-_DIRECT_IDENTIFIER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("email address", re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)),
-    ("US phone number", re.compile(r"(?<!\d)(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}(?!\d)")),
-    ("US Social Security number", re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")),
-    ("calendar date", re.compile(r"(?<!\d)(?:0?[1-9]|1[0-2])[/-](?:0?[1-9]|[12]\d|3[01])[/-](?:19|20)\d{2}(?!\d)")),
-    ("ISO calendar date", re.compile(r"(?<!\d)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?!\d)")),
-    ("written calendar date", re.compile(
-        r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+"
-        r"(?:[1-9]|[12]\d|3[01])(?:,\s*(?:19|20)\d{2})?\b",
-        re.I,
-    )),
-    ("record-number label", re.compile(r"\b(?:MRN|medical record number|patient name|date of birth|DOB|street address)\b", re.I)),
-)
 _NON_AFFIRMING_CAPTURE = re.compile(
     r"\b(?:no|not|never|denies|denied|without|negative\s+for|rule[ds]?\s+out|"
     r"differential|possible|possibly|suspected|family\s+history)\b",
@@ -249,9 +235,10 @@ def validate_demo_release_candidate(pack: Any) -> None:
             errors.append(f"{location}.visit.submitted_icd10: expected an empty list")
 
         for field, text in _free_text_values(visit):
-            for identifier_name, pattern in _DIRECT_IDENTIFIER_PATTERNS:
-                if pattern.search(text):
-                    errors.append(f"{location}.visit.{field}: contains a prohibited {identifier_name}")
+            for violation in prohibited_text_shapes(text):
+                errors.append(
+                    f"{location}.visit.{field}: contains a prohibited {violation}"
+                )
 
         expectations = case.get("expectations")
         if not isinstance(expectations, dict):

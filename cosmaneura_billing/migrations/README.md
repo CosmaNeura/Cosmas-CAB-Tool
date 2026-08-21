@@ -48,6 +48,16 @@ insert a chart or broaden any runtime privilege. The matching down migration
 restores the prior allowlist and therefore fails closed while such a seed row
 still exists.
 
+`008_synthetic_demo_encounter_immutability` installs invoker-security,
+`ENABLE ALWAYS` guards that compare `current_user` with the exact `encounters`
+table owner. Non-owner roles cannot insert the reserved source, update either
+from or to it, delete reserved rows, or truncate the table even if a future
+grant accidentally gives them that table authority. The table-owning migration
+identity retains seed and explicit cleanup authority. The provisioned runtime
+and worker roles also have no `TRIGGER` privilege, no `CREATE` on the `public`
+schema, and no `SET` privilege on `session_replication_role`. The migration
+changes no row, RLS policy, or table grant.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).
@@ -170,18 +180,22 @@ membership remains denied.
 
 ### Fixed synthetic demo seed
 
-After migration `007` is applied, a reviewed synthetic demo may load the one
-pinned release-candidate case through the same private migration execution
-environment:
+After migrations `007` and `008` are applied, a reviewed synthetic demo may
+load the twelve digest-pinned cases from the base and source-extension packs
+through the same private migration execution environment:
 
     DATABASE_URL='<migration-owner DSN>' \
     COSMANEURA_ENTRA_TENANT_ID='<tenant UUID>' \
     COSMANEURA_PRACTICE_ID='<stable practice ID>' \
     python -m cosmaneura_billing.seed_demo_release_candidate
 
-The command accepts no arguments. It validates the packaged pack, fixed case
-ID and digest, proves the practice/tenant binding, inserts without an update
-path, and treats only byte-equivalent persisted fields as an idempotent replay.
+The command accepts no arguments. It validates both packaged packs, every fixed
+case ID and digest, and the combined seed digest; proves it is using the exact
+table owner with both exact `ENABLE ALWAYS` migration-008 guard shapes and the
+expected invoker-security function owner/search path; proves the practice/tenant
+binding; inserts without an update path; and treats only byte-equivalent
+persisted fields as an idempotent replay. Direct SQL under runtime or worker
+roles cannot claim or mutate the reserved source.
 Use the Container Apps override and acceptance sequence in `../../infra/README.md`
 for Azure; never paste the owner DSN into a shell command there.
 
@@ -196,7 +210,14 @@ Plain psql:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_accepted_delivery_attempt.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_synthetic_demo_release_candidate_source.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/008_synthetic_demo_encounter_immutability.up.sql
     # rollback:
+    # PRECONDITION: close API, worker, and sync ingress/scheduling. As the exact
+    # table owner, select each bound practice via cosmaneura.practice_id, delete
+    # its reserved-source rows, and verify that practice has zero remaining.
+    # Repeat for every bound practice; forced RLS makes an unscoped count unsafe.
+    # Keep ingress closed until both 008 and 007 are down.
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/008_synthetic_demo_encounter_immutability.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_synthetic_demo_release_candidate_source.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_accepted_delivery_attempt.down.sql
@@ -206,8 +227,11 @@ Plain psql:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init_pgvector.down.sql
 
 The down migrations are destructive and are intended only for an explicitly
-selected disposable database or a reviewed rollback. `002` is safe to apply
-before `001` when the chase store is needed before the dialogue index. Direct
+selected disposable database or a reviewed rollback. Migration `008` cannot
+perform a reliable cross-practice row check through forced RLS, so its stated
+closed-ingress, per-practice owner cleanup is a mandatory operational gate, not
+an optional verification. `002` is safe to apply before `001` when the chase
+store is needed before the dialogue index. Direct
 `psql` does not provision the API/worker runtime roles or bootstrap
 administrator, so it is not a substitute for the deployment runner.
 

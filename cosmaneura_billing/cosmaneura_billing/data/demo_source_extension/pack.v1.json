@@ -1,0 +1,189 @@
+{
+  "schema_version": "1.0",
+  "pack_id": "cosmaneura-demo-source-extension-v1",
+  "extends_pack_id": "cosmaneura-demo-rc-v1",
+  "allowed_use": "demo_and_evaluation_only",
+  "training_use": "prohibited",
+  "synthetic_declaration": "Every encounter and every sentence in this extension is wholly synthetic and was authored for software demonstration and blinded evaluation. No real or deidentified patient record was used or adapted.",
+  "contains_real_patient_data": false,
+  "contains_deidentified_patient_data": false,
+  "source_only": true,
+  "cases": [
+    {
+      "case_id": "SYN-RC-0005",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0005",
+        "patient_age": 58,
+        "patient_sex": "female",
+        "encounter_type": "office_established",
+        "place_of_service": "11",
+        "provider_specialty": "Cardiology",
+        "intake_text": "Returns for routine management of blood pressure and cholesterol. Reports taking current medicines consistently and has no new symptoms.",
+        "transcript": "Provider: Your home readings are steady, and the recent lipid panel has improved.\nPatient: I have been taking both medicines every day.\nProvider: We will continue the current plan for both conditions.",
+        "signed_note": "Established cardiology follow-up. No chest discomfort, shortness of breath, or medication adverse effects. Assessment: Essential hypertension is stable on current therapy. Mixed hyperlipidemia is stable with the current plan. Continue both medicines and routine monitoring.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0006",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0006",
+        "patient_age": 46,
+        "patient_sex": "male",
+        "encounter_type": "office_established",
+        "place_of_service": "11",
+        "provider_specialty": "Endocrinology",
+        "intake_text": "Follow-up for hypothyroidism. Energy level is improved and the medicine schedule has been consistent.",
+        "transcript": "Patient: The thyroid medicine routine is going well.\nProvider: The laboratory trend supports keeping the same dose for your hypothyroidism.\nPatient: I understand.",
+        "signed_note": "Established endocrine follow-up. History: Hypothyroidism treated with stable replacement therapy. Review: Symptoms and laboratory trend are stable. Assessment: Hypothyroidism remains controlled. Continue the current dose and monitoring interval.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0007",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0007",
+        "patient_age": 33,
+        "patient_sex": "nonbinary",
+        "encounter_type": "office_new",
+        "place_of_service": "11",
+        "provider_specialty": "Pulmonology",
+        "intake_text": "New consultation for intermittent wheezing with exercise. A remote episode of pneumonia resolved fully and has not recurred.",
+        "transcript": "Provider: The current pattern supports active asthma.\nPatient: The old pneumonia cleared after treatment and has not returned.\nProvider: We will treat the asthma and keep the resolved infection in the history only.",
+        "signed_note": "New pulmonary consultation. Intermittent wheeze occurs with exercise and improves with the prescribed inhaler. Assessment: Mild persistent asthma is active. Remote pneumonia is resolved and is not an active condition. Inhaler teaching and return precautions reviewed.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0008",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0008",
+        "patient_age": 27,
+        "patient_sex": "female",
+        "encounter_type": "telehealth_established",
+        "place_of_service": "10",
+        "provider_specialty": "Gastroenterology",
+        "intake_text": "Remote follow-up for nausea that began recently. Able to drink fluids and reports no severe abdominal pain.",
+        "transcript": "Patient: The nausea is the main problem.\nProvider: A short viral illness is possible, but we do not have enough evidence to establish the cause.\nPatient: I can keep fluids down.",
+        "signed_note": "Established video follow-up. Hydration is maintained and warning signs are absent. Assessment: Nausea is confirmed. Viral gastroenteritis is a possible explanation but is not diagnosed. Supportive care and escalation guidance reviewed.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0009",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0009",
+        "patient_age": 39,
+        "patient_sex": "male",
+        "encounter_type": "office_established",
+        "place_of_service": "11",
+        "provider_specialty": "Neurology",
+        "intake_text": "Returns to discuss recurring headaches. No weakness, speech change, or loss of consciousness.",
+        "transcript": "Provider: The pattern sounds consistent with migraine without aura.\nPatient: The episodes improve when I rest in a dark room.\nProvider: I will document the symptom today while we complete the diagnostic review.",
+        "signed_note": "Established neurology follow-up. Recurrent headache episodes were reviewed. Neurologic examination is reassuring. Assessment: Recurrent headache. Diagnostic classification is deferred pending review of the symptom diary. Conservative measures and warning signs discussed.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0010",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0010",
+        "patient_age": 44,
+        "patient_sex": "female",
+        "encounter_type": "office_new",
+        "place_of_service": "11",
+        "provider_specialty": "Rheumatology",
+        "intake_text": "New consultation to review an outside medication list and a pending antinuclear antibody test. No current joint swelling or rash.",
+        "transcript": "Provider: The medication list includes hydroxychloroquine, but a medication entry alone does not establish why it was prescribed.\nPatient: I do not know the original reason.\nProvider: We will review prior records and the pending test before making a diagnosis.",
+        "signed_note": "New rheumatology consultation. Outside medication and laboratory entries were reconciled. Examination shows no synovitis or rash. No rheumatologic condition is established at this visit. Prior records and the pending laboratory result will be reviewed before diagnostic conclusions are made.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0011",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0011",
+        "patient_age": 62,
+        "patient_sex": "unknown",
+        "encounter_type": "office_established",
+        "place_of_service": "11",
+        "provider_specialty": "Orthopedics",
+        "intake_text": "Follow-up for knee discomfort. The intake response marks the right side, while the scheduling note refers to the left side.",
+        "transcript": "Provider: The side recorded before the visit is inconsistent.\nPatient: I would like to review the imaging before we settle that detail.\nProvider: I will document knee pain without assigning unsupported laterality or a more specific structural diagnosis.",
+        "signed_note": "Established orthopedic follow-up. Knee discomfort is confirmed, but available records conflict on laterality. Assessment: Knee pain with laterality not established. Imaging review is pending. No specific ligament, meniscus, or arthritis diagnosis is made today.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    },
+    {
+      "case_id": "SYN-RC-0012",
+      "provenance": {
+        "kind": "wholly_synthetic",
+        "source_dataset": null,
+        "contains_real_patient_data": false,
+        "contains_deidentified_patient_data": false
+      },
+      "visit": {
+        "encounter_id": "SYN-RC-0012",
+        "patient_age": 31,
+        "patient_sex": "nonbinary",
+        "encounter_type": "telehealth_established",
+        "place_of_service": "10",
+        "provider_specialty": "Dermatology",
+        "intake_text": "Remote routine skin check with no new concern. Reports no changing spot, bleeding, itching, or pain.",
+        "transcript": "Provider: Have you noticed any new or changing skin findings?\nPatient: No, everything appears unchanged.\nProvider: The visible screening review is reassuring, and there is no condition to diagnose today.",
+        "signed_note": "Established video screening visit. Patient reports no changing, bleeding, itching, or painful skin finding. Limited visual review is unremarkable. No skin lesion or dermatologic disorder is diagnosed. Routine observation guidance reviewed.",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      }
+    }
+  ]
+}

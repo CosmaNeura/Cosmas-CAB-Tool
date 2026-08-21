@@ -67,6 +67,7 @@ include = ["cosmaneura_billing*"]
     "data/corpora/acibench_valid.csv",
     "data/corpora/*.md",
     "data/demo_release_candidate/*.json",
+    "data/demo_source_extension/*.json",
     "data/mcd/*.csv.gz",
     "data/mcd/*.md",
     "data/ncci/*.tsv.gz",

@@ -1,10 +1,15 @@
-"""Seed the complete approved synthetic release-candidate pack.
+"""Seed the complete approved synthetic demo source set.
 
 This command intentionally has no input-file or payload option. It loads and
-validates the immutable bundled pack before opening a database connection,
-then inserts all four approved cases in one transaction. An exact retry is a
-no-op; any occupied case ID with different persisted content aborts the whole
-transaction without updating or partially inserting the pack.
+validates the immutable base and source-extension packs before opening a
+database connection, then inserts all twelve approved cases in one transaction.
+An exact retry is a no-op; any occupied case ID with different persisted
+content aborts the whole transaction without updating or partially inserting.
+
+The command is intentionally restricted to the table-owning migration identity.
+Migration 008 must install the database guards that prevent every non-owner
+from claiming, mutating, deleting, or truncating the reserved synthetic-demo
+provenance.
 """
 from __future__ import annotations
 
@@ -16,18 +21,32 @@ from typing import Sequence
 from uuid import UUID
 
 from .corpus.demo_release_candidate import load_demo_release_candidate
-from .persistence import PostgresContext
+from .corpus.demo_source_extension import load_demo_source_extension
+from .persistence import PostgresContext, SYNTHETIC_DEMO_SOURCE
 from .settings import Settings
 
 
 PACK_ID = "cosmaneura-demo-rc-v1"
-SOURCE = "synthetic_demo_release_candidate"
+EXTENSION_PACK_ID = "cosmaneura-demo-source-extension-v1"
+SEED_ID = "cosmaneura-demo-rc-v1+source-extension-v1"
+SOURCE = SYNTHETIC_DEMO_SOURCE
 CASE_IDS = (
     "SYN-RC-0001",
     "SYN-RC-0002",
     "SYN-RC-0003",
     "SYN-RC-0004",
 )
+EXTENSION_CASE_IDS = (
+    "SYN-RC-0005",
+    "SYN-RC-0006",
+    "SYN-RC-0007",
+    "SYN-RC-0008",
+    "SYN-RC-0009",
+    "SYN-RC-0010",
+    "SYN-RC-0011",
+    "SYN-RC-0012",
+)
+SEED_CASE_IDS = CASE_IDS + EXTENSION_CASE_IDS
 EXPECTED_PACK_DIGEST = (
     "556b4913553e7fddc8063f1c6d47b64e1cdec7a9e85ab873fdb81cc4e13be68f"
 )
@@ -37,6 +56,26 @@ EXPECTED_CASE_DIGESTS = {
     "SYN-RC-0003": "2504ca7325d70af1911faa8fe81929654532f54db9c741a86d407f75d494bb13",
     "SYN-RC-0004": "fdb0ed9b4f1790fbd2bf353cdd3689c2bcd150335c226f26eaca53d12ad07b2c",
 }
+EXPECTED_EXTENSION_PACK_DIGEST = (
+    "804a4b4c33d166604daacaab415a46871b97879b174beb33666e31f2b859e8bb"
+)
+EXPECTED_EXTENSION_CASE_DIGESTS = {
+    "SYN-RC-0005": "e37fea284509a38e41a7ba8b91cbad1db61b282f3238065b3d6a60dc732d4e05",
+    "SYN-RC-0006": "9408df5774f8c1f6d322c03549ab44dc923271003476845bce689c1f1de1449c",
+    "SYN-RC-0007": "d2044bb683cf9500ce52eb3075424b412790768dda2b8b039c34689f345ada1e",
+    "SYN-RC-0008": "4d73046b079b2e19e13c0bb2bede4fb879ba382d8e839dccd5b90857dede10db",
+    "SYN-RC-0009": "ece109a602a57cabd6b5b5d09718a88702e082fc617aa22493104e8fffa0d3c8",
+    "SYN-RC-0010": "116e3f36a4e5fbae152cda859a95c961893872ea5facccc5328640e2f8a2a830",
+    "SYN-RC-0011": "d46bd1ffefa39108224ec2cad0197a932b27fa3390570f71953b4ca7616a7b52",
+    "SYN-RC-0012": "e9f85fb8b20b0387b0cd1c16be95b9e08858c1faf03373f9ed7d10796e4d0095",
+}
+EXPECTED_SEED_DIGEST = (
+    "3ef6297b7a1987477b491c27393772caea3e4c41eeb3fbca39b14de3e77cc304"
+)
+IMMUTABILITY_TRIGGER = "encounters_synthetic_demo_immutability"
+IMMUTABILITY_TRUNCATE_TRIGGER = (
+    "encounters_synthetic_demo_truncate_immutability"
+)
 
 
 class SyntheticDemoSeedError(RuntimeError):
@@ -45,6 +84,10 @@ class SyntheticDemoSeedError(RuntimeError):
 
 class SyntheticDemoPracticeBindingError(SyntheticDemoSeedError):
     """The configured PostgreSQL practice binding was not proven."""
+
+
+class SyntheticDemoDatabaseAuthorityError(SyntheticDemoSeedError):
+    """The table-owner and database immutability guard were not proven."""
 
 
 class SyntheticDemoConflict(SyntheticDemoSeedError):
@@ -79,46 +122,86 @@ def _canonical_digest(value: object) -> str:
 
 
 def prepare_synthetic_demo_seed() -> PreparedSyntheticDemoSeed:
-    """Validate and digest the complete immutable bundled pack."""
-    pack = load_demo_release_candidate()
-    if pack.get("pack_id") != PACK_ID:
-        raise SyntheticDemoSeedError("the bundled synthetic pack is not approved")
-
-    pack_digest = _canonical_digest(pack)
-    if pack_digest != EXPECTED_PACK_DIGEST:
-        raise SyntheticDemoSeedError("the approved synthetic pack digest changed")
-
-    cases = pack.get("cases")
-    if not isinstance(cases, list):
-        raise SyntheticDemoSeedError("the approved synthetic cases are unavailable")
-    case_ids = tuple(case.get("case_id") for case in cases)
-    if case_ids != CASE_IDS:
-        raise SyntheticDemoSeedError("the approved synthetic cases changed")
+    """Validate and digest both immutable packs before any database access."""
+    base_pack = load_demo_release_candidate()
+    extension_pack = load_demo_source_extension()
+    pack_specs = (
+        (
+            base_pack,
+            PACK_ID,
+            CASE_IDS,
+            EXPECTED_PACK_DIGEST,
+            EXPECTED_CASE_DIGESTS,
+        ),
+        (
+            extension_pack,
+            EXTENSION_PACK_ID,
+            EXTENSION_CASE_IDS,
+            EXPECTED_EXTENSION_PACK_DIGEST,
+            EXPECTED_EXTENSION_CASE_DIGESTS,
+        ),
+    )
 
     prepared_cases: list[PreparedSyntheticDemoCase] = []
-    for case_id, case in zip(CASE_IDS, cases):
-        visit = dict(case["visit"])
-        if visit.get("encounter_id") != case_id:
-            raise SyntheticDemoSeedError("an approved synthetic case is malformed")
-        digest = _canonical_digest({
-            "case_id": case_id,
-            "pack_id": PACK_ID,
-            "source": SOURCE,
-            "visit": visit,
-        })
-        if digest != EXPECTED_CASE_DIGESTS[case_id]:
+    verified_pack_digests: list[dict[str, str]] = []
+    for (
+        pack,
+        pack_id,
+        case_ids,
+        expected_pack_digest,
+        expected_case_digests,
+    ) in pack_specs:
+        if pack.get("pack_id") != pack_id:
+            raise SyntheticDemoSeedError("a bundled synthetic pack is not approved")
+        pack_digest = _canonical_digest(pack)
+        if pack_digest != expected_pack_digest:
+            raise SyntheticDemoSeedError("an approved synthetic pack digest changed")
+        verified_pack_digests.append({"pack_id": pack_id, "digest": pack_digest})
+
+        cases = pack.get("cases")
+        if not isinstance(cases, list):
             raise SyntheticDemoSeedError(
-                "an approved synthetic case digest changed"
+                "the approved synthetic cases are unavailable"
             )
-        prepared_cases.append(PreparedSyntheticDemoCase(
-            case_id=case_id,
-            visit=visit,
-            digest=digest,
-        ))
+        if tuple(case.get("case_id") for case in cases) != case_ids:
+            raise SyntheticDemoSeedError("the approved synthetic cases changed")
+
+        for case_id, case in zip(case_ids, cases):
+            visit = dict(case["visit"])
+            if visit.get("encounter_id") != case_id:
+                raise SyntheticDemoSeedError("an approved synthetic case is malformed")
+            digest = _canonical_digest({
+                "case_id": case_id,
+                "pack_id": pack_id,
+                "source": SOURCE,
+                "visit": visit,
+            })
+            if digest != expected_case_digests[case_id]:
+                raise SyntheticDemoSeedError(
+                    "an approved synthetic case digest changed"
+                )
+            prepared_cases.append(PreparedSyntheticDemoCase(
+                case_id=case_id,
+                visit=visit,
+                digest=digest,
+            ))
+
+    seed_digest = _canonical_digest({
+        "seed_id": SEED_ID,
+        "packs": verified_pack_digests,
+        "cases": [
+            {"case_id": case.case_id, "digest": case.digest}
+            for case in prepared_cases
+        ],
+    })
+    if seed_digest != EXPECTED_SEED_DIGEST:
+        raise SyntheticDemoSeedError("the approved synthetic seed digest changed")
+    if tuple(case.case_id for case in prepared_cases) != SEED_CASE_IDS:
+        raise SyntheticDemoSeedError("the approved synthetic seed ordering changed")
 
     return PreparedSyntheticDemoSeed(
         cases=tuple(prepared_cases),
-        digest=pack_digest,
+        digest=seed_digest,
     )
 
 
@@ -174,6 +257,60 @@ def _expected_persisted_values(
         "ingested_by_user_id": None,
         "version": 1,
     }
+
+
+def _validate_database_seed_authority(connection) -> None:
+    """Require the exact table owner and exact migration-008 guard shape."""
+    authority = connection.execute(
+        """SELECT current_user::text AS current_user,
+                  pg_catalog.pg_get_userbyid(relation.relowner)::text
+                      AS table_owner,
+                  EXISTS (
+                      SELECT 1
+                        FROM pg_catalog.pg_trigger AS row_guard
+                        JOIN pg_catalog.pg_trigger AS truncate_guard
+                          ON truncate_guard.tgrelid = row_guard.tgrelid
+                        JOIN pg_catalog.pg_proc AS guard_function
+                          ON guard_function.oid = row_guard.tgfoid
+                       WHERE row_guard.tgrelid = relation.oid
+                         AND row_guard.tgname = %s
+                         AND NOT row_guard.tgisinternal
+                         AND row_guard.tgenabled = 'A'
+                         AND row_guard.tgtype = 31
+                         AND row_guard.tgqual IS NULL
+                         AND row_guard.tgattr = ''::pg_catalog.int2vector
+                         AND row_guard.tgnargs = 0
+                         AND truncate_guard.tgname = %s
+                         AND NOT truncate_guard.tgisinternal
+                         AND truncate_guard.tgenabled = 'A'
+                         AND truncate_guard.tgtype = 34
+                         AND truncate_guard.tgqual IS NULL
+                         AND truncate_guard.tgattr = ''::pg_catalog.int2vector
+                         AND truncate_guard.tgnargs = 0
+                         AND truncate_guard.tgfoid = guard_function.oid
+                         AND guard_function.oid = pg_catalog.to_regprocedure(
+                             'public.cosmaneura_guard_synthetic_demo_encounter()'
+                         )
+                         AND guard_function.proowner = relation.relowner
+                         AND NOT guard_function.prosecdef
+                         AND guard_function.proconfig =
+                             ARRAY['search_path=pg_catalog']::text[]
+                         AND guard_function.pronargs = 0
+                         AND guard_function.prorettype =
+                             pg_catalog.to_regtype('pg_catalog.trigger')
+                  ) AS immutability_guard
+             FROM pg_catalog.pg_class AS relation
+            WHERE relation.oid = pg_catalog.to_regclass('public.encounters')""",
+        (IMMUTABILITY_TRIGGER, IMMUTABILITY_TRUNCATE_TRIGGER),
+    ).fetchone()
+    if (
+        authority is None
+        or authority.get("current_user") != authority.get("table_owner")
+        or authority.get("immutability_guard") is not True
+    ):
+        raise SyntheticDemoDatabaseAuthorityError(
+            "the synthetic seed database authority was not proven"
+        )
 
 
 def _row_is_exact_replay(
@@ -233,7 +370,7 @@ def _load_persisted_case(connection, settings: Settings, case_id: str):
 
 
 def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, object]:
-    """Atomically insert the fixed pack, or no-op an exact replay."""
+    """Atomically insert both fixed packs through the table-owning identity."""
     # Artifact validation and all fixed digests are proven before constructing
     # a database context or opening a connection.
     prepared = prepare_synthetic_demo_seed()
@@ -244,6 +381,7 @@ def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, objec
     )
     inserted_count = 0
     with context.connection() as connection:
+        _validate_database_seed_authority(connection)
         binding = connection.execute(
             """SELECT p.practice_id,
                       p.entra_tenant_id::text AS tenant_id,
@@ -291,7 +429,7 @@ def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, objec
 
     case_count = len(prepared.cases)
     return {
-        "pack_id": PACK_ID,
+        "pack_id": SEED_ID,
         "case_count": case_count,
         "inserted_count": inserted_count,
         "replayed_count": case_count - inserted_count,
@@ -308,8 +446,8 @@ def _closed_result(
     replayed_count: int = 0,
 ) -> dict[str, object]:
     return {
-        "pack_id": PACK_ID,
-        "case_count": len(CASE_IDS),
+        "pack_id": SEED_ID,
+        "case_count": len(SEED_CASE_IDS),
         "inserted_count": inserted_count,
         "replayed_count": replayed_count,
         "status": status,
@@ -320,7 +458,7 @@ def _closed_result(
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the fixed seed without accepting or reflecting caller input."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    digest = EXPECTED_PACK_DIGEST
+    digest = EXPECTED_SEED_DIGEST
     try:
         prepared = prepare_synthetic_demo_seed()
         digest = prepared.digest
@@ -332,7 +470,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SyntheticDemoConflict:
         result = _closed_result(status="conflict", digest=digest)
         exit_code = 1
-    except SyntheticDemoPracticeBindingError:
+    except (
+        SyntheticDemoDatabaseAuthorityError,
+        SyntheticDemoPracticeBindingError,
+    ):
         result = _closed_result(status="binding_rejected", digest=digest)
         exit_code = 1
     except Exception:
