@@ -236,8 +236,9 @@ def test_repr_redacts_every_credential_and_database_dsn():
 
     rendered = repr(settings)
     credentials_rendered = repr(settings.ama_credentials)
-    for value in secrets.values():
-        if value.startswith("https://gateway.example"):
+    non_secret_settings = {"AMA_TOKEN_URL", "AMA_BASE_URL"}
+    for key, value in secrets.items():
+        if key in non_secret_settings:
             continue
         assert value not in rendered
         assert value not in credentials_rendered

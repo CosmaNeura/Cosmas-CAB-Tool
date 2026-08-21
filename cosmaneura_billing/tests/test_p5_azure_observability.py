@@ -84,7 +84,11 @@ def test_private_azure_openai_is_managed_identity_only_and_default_off():
     assert "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd" in reader
     assert "groupIds: [\n            'account'" in endpoint
     assert "keyVaultPrivateEndpoint" in endpoint
-    assert "privatelink.openai.azure.com" in dns
+    dns_name = next(
+        line.strip() for line in dns.splitlines()
+        if line.strip().startswith("name: ")
+    )
+    assert dns_name == "name: 'privatelink.openai.azure.com'"
     assert "enableAzureOpenAIInference bool = false" in APP
     assert "COSMANEURA_AZURE_OPENAI_ENABLED" in api
     assert "AZURE_OPENAI_ENDPOINT" in api
