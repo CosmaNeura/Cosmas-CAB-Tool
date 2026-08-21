@@ -250,7 +250,13 @@ def test_templates_can_only_substitute_three_safe_values():
     """There is no placeholder for a member id, so a template cannot carry one."""
     rendered = ChasePolicy().template("email.first").render(
         practice="MCD", upload_url="https://x.invalid")
-    assert "MCD" in rendered["body"] and "https://x.invalid" in rendered["body"]
+    assert rendered["subject"] == "MCD: we need your insurance card"
+    assert rendered["body"] == (
+        "Hi there,\n\nWe're missing current insurance information for your "
+        "upcoming visit with MCD. You can add it securely here:\n"
+        "https://x.invalid\n\nIt takes about a minute, and it means we can bill "
+        "your insurer instead of sending you a bill.\n\nThank you."
+    )
 
 
 # --------------------------------------------------------------------------- #

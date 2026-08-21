@@ -22,7 +22,7 @@ How descriptors are found, in order:
      it into the cache — so any environment carrying the credentials gets
      official descriptors with no manual step. Set ``CPT_AUTO_FETCH=0`` to
      disable. Failures are non-fatal (``loaded`` stays False and
-     ``fetch_error`` says why).
+     ``fetch_error`` contains a stable, non-sensitive failure code).
 
 Accepted file layouts (auto-detected): classic Standard Data File text
 (fixed "CODE<ws>DESCRIPTOR" lines, SHORTU/MEDU/LONGULT style) and tab- or
@@ -52,6 +52,13 @@ _CODE_RE = re.compile(r"^\s*([0-9]{4}[0-9A-Z])\s+(.+?)\s*$")
 # The AMA gateway's WAF rejects requests without an explicit User-Agent
 # (Python-urllib's default gets 403), so every request sends one.
 _UA = "cosmaneura-billing/0.1"
+
+# Auto-fetch can fail on provider responses whose exception text contains a
+# request URL, upstream payload, or credential-adjacent detail.  Keep only
+# these reviewed codes on the long-lived descriptor object; raw exception
+# messages must not cross into health responses or operational logs.
+_FETCH_ERROR_RELEASE_UNAVAILABLE = "release_unavailable"
+_FETCH_ERROR_FAILED = "auto_fetch_failed"
 
 
 def _find_descriptor_file(d: Path) -> Path | None:
@@ -117,7 +124,7 @@ class CPTDescriptors:
             releases = self._get_json(base + releases_path, token)
             release = self._pick_release(releases)
             if not release:
-                self.fetch_error = "could not determine a release id from the AMA response"
+                self.fetch_error = _FETCH_ERROR_RELEASE_UNAVAILABLE
                 return None
             file_path = self._settings.ama_file_path
             blob = self._get_bytes(
@@ -129,8 +136,10 @@ class CPTDescriptors:
                     if m.lower().endswith((".txt", ".csv")):
                         zf.extract(m, self._cache)
             return _find_descriptor_file(self._cache)
-        except Exception as e:  # never break the pipeline over descriptors
-            self.fetch_error = f"{type(e).__name__}: {e}"
+        except Exception:  # never break the pipeline over descriptors
+            # Do not retain or log the exception. Provider/HTTP exception text
+            # is untrusted and may contain sensitive response or request data.
+            self.fetch_error = _FETCH_ERROR_FAILED
             return None
 
     def _token(self) -> str:
