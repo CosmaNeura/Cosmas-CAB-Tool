@@ -39,6 +39,10 @@ def test_language_account_is_private_f0_and_provisioning_is_default_off():
     assert "param provisionAzureLanguage bool = false" in APP
     assert "param enableAzureLanguageExtraction bool = false" in APP
     assert "enableAzureLanguageExtraction requires provisionAzureLanguage" in APP
+    assert (
+        "enableAzureLanguageExtraction requires enableAzureOpenAIInference"
+        in APP
+    )
 
 
 def test_only_api_uami_receives_language_reader_role():

@@ -124,6 +124,16 @@ reason, carries a `degraded` object explaining it, so an empty claim is never
 presented as a finding. Invalid enabled configuration fails startup; it never
 silently falls back to a live provider.
 
+For an externally reachable synthetic demo, also set
+`COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=true`. This is an independent,
+default-off safety latch: every model-backed API route then requires a stored
+encounter whose server-owned provenance is exactly
+`synthetic_demo_release_candidate`. Ad-hoc `/api/billing` documentation,
+operational stored rows, caller-supplied labels, and suggestive encounter-ID
+prefixes are rejected before the pipeline can call a model. The engine boundary
+rechecks the same provenance token as defense in depth. The Azure template
+refuses to combine external ingress with OpenAI unless this latch is on.
+
 P5 observability is deliberately narrower than general-purpose tracing. The API
 logs one closed-schema `http_request` event using a server-generated request ID
 and declared route template; Azure OpenAI calls log per-attempt latency and
@@ -205,6 +215,11 @@ python run_demo.py
 ICD10_CCSR_CSV=/path/to/DXCCSR_v2023-1.csv   python run_demo.py
 ```
 
+`run_demo.py` is a local direct-engine tool and therefore cannot prove stored
+server-owned provenance; do not set the synthetic-only API latch for that
+command. Exercise the deployed latch only through the fixed stored-encounter
+POST routes after the fixed seeder has established provenance.
+
 The deployment acceptance command is intentionally narrower than `run_demo.py`
 and accepts no chart/prompt input:
 
@@ -216,6 +231,13 @@ python -m cosmaneura_billing.log_scanner /tmp/azure-openai-acceptance.jsonl
 Restore the application inference latch to false immediately after the bounded
 synthetic run and verify the final revision contains no Azure OpenAI variables
 and emits no LLM events.
+
+Pipeline-result reuse across the provider, billing, and coder surfaces remains
+a follow-on. A safe cache needs practice ID, opaque encounter resource/version,
+engine configuration, and reviewer-preference revision in its key, immutable
+values, a strict bound, and no raw documentation in shared cache metadata.
+Recomputing is safer than cross-user or stale-result reuse until that contract
+is implemented and tested.
 
 The adapter selects strict Structured Outputs for locally compatible schemas
 and selects JSON-object mode up front for schemas outside the supported strict

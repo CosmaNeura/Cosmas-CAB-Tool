@@ -72,6 +72,9 @@ _KIND = {CodeKind.EM: "EM", CodeKind.ICD10: "ICD10",
          CodeKind.PROCEDURE: "PROCEDURE", CodeKind.MODIFIER: "MODIFIER"}
 _ENGINE_VERSION = "cpt2026u4;icd10-FY2026;ncci-2026Q3-v32.2;mcd-NGS-2026-07-20"
 _REQUEST_RESOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_SYNTHETIC_INFERENCE_ONLY_DETAIL = (
+    "model inference is restricted to reserved synthetic demo encounters"
+)
 
 
 def _review_context_binding(
@@ -539,6 +542,12 @@ def health(request: Request) -> dict[str, Any]:
         "status": "ok",
         "engineVersion": _ENGINE_VERSION,
         **describe_client(orch.llm),
+        "inferenceInputPolicy": (
+            "reserved_synthetic_only"
+            if settings.azure_openai_synthetic_only
+            else "standard"
+        ),
+        "multiEngineEnabled": orch.multi_engine,
         "icd10Codes": orch.icd10.size,
         "currentFyLoaded": orch.icd10.has_current_fy,
         "ncciLoaded": bool(orch.ncci and orch.ncci.loaded),
@@ -622,6 +631,19 @@ def _get_stored_encounter(request: Request, encounter_id: str):
     return stored
 
 
+def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
+    """Enforce the deployment's model-input policy before pipeline execution.
+
+    The public-demo latch trusts only the server-owned provenance persisted with
+    a stored encounter. A caller cannot opt an ad-hoc payload into the synthetic
+    class and an encounter ID prefix has no authority over this decision.
+    """
+    if not _request_settings(request).azure_openai_synthetic_only:
+        return
+    if stored is None or stored.source != SYNTHETIC_DEMO_SOURCE:
+        raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
+
+
 @router.post("/api/encounters/detail")
 def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
     stored = _get_stored_encounter(request, req.encounterId)
@@ -636,16 +658,18 @@ def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
 @router.post("/api/encounters/billing")
 def bill_stored(request: Request, req: EncounterRequest) -> dict[str, Any]:
     stored = _get_stored_encounter(request, req.encounterId)
+    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     principal = _request_principal(request)
     result = _request_orchestrator(request).process(
-        bundle, user_id=principal.user_id
+        bundle, user_id=principal.user_id, input_provenance=stored.source,
     )
     return {**_billing_json(bundle, result), **_encounter_data_policy(stored)}
 
 
 @router.post("/api/billing")
 def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
+    _require_inference_input_allowed(request)
     principal = _request_principal(request)
     bundle = VisitBundle(
         encounter_id=req.encounterId, patient_age=req.patientAge,
@@ -663,10 +687,13 @@ def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
 @router.post("/api/encounters/coder-view")
 def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
     stored = _get_stored_encounter(request, req.encounterId)
+    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     orch = _request_orchestrator(request)
     uid = _request_principal(request).user_id
-    result = orch.process(bundle, user_id=uid)
+    result = orch.process(
+        bundle, user_id=uid, input_provenance=stored.source,
+    )
     view = _coder_view_json(bundle, result, uid)
     view["encounterVersion"] = stored.version
     view["reviewContext"] = _issue_review_context(
@@ -690,9 +717,12 @@ def billing_tab(request: Request, req: BillingTabRequest) -> dict[str, Any]:
     """The provider billing tab (F1): the same visit reorganised as a billing
     reference. The clinical note is never altered — this is a view over it."""
     stored = _get_stored_encounter(request, req.encounterId)
+    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     result = _request_orchestrator(request).process(
-        bundle, user_id=_request_principal(request).user_id
+        bundle,
+        user_id=_request_principal(request).user_id,
+        input_provenance=stored.source,
     )
     return {
         **build_billing_tab_view(

@@ -64,6 +64,9 @@ param acsEmailReplyToAddress string = ''
 @description('Enable API-only Azure OpenAI inference. Keep false until private networking, managed identity, telemetry, and synthetic model acceptance are complete.')
 param enableAzureOpenAIInference bool = false
 
+@description('Restrict model-backed API routes to stored encounters carrying the reserved server-owned synthetic demo provenance. Required whenever Azure OpenAI and external ingress are enabled together.')
+param restrictAzureOpenAIToSyntheticDemo bool = false
+
 @description('Must match the immutable deployment created by the foundation template.')
 param azureOpenAIDeploymentName string = 'gpt-5-6-sol-2026-07-09'
 
@@ -216,10 +219,19 @@ var validatedAcsEmailReplyToAddress = validatedPatientMessagingEnabled && empty(
   : acsEmailReplyToAddress
 var schedulerEnabledValue = validatedSchedulerEnabled ? 'true' : 'false'
 var patientMessagingEnabledValue = validatedPatientMessagingEnabled ? 'true' : 'false'
-var azureOpenAIEnabledValue = enableAzureOpenAIInference ? 'true' : 'false'
+var validatedAzureOpenAISyntheticOnly = restrictAzureOpenAIToSyntheticDemo && !enableAzureOpenAIInference
+  ? fail('restrictAzureOpenAIToSyntheticDemo requires enableAzureOpenAIInference')
+  : restrictAzureOpenAIToSyntheticDemo
+var validatedAzureOpenAIInferenceEnabled = enableAzureOpenAIInference && externalIngress && !validatedAzureOpenAISyntheticOnly
+  ? fail('externally accessible Azure OpenAI inference requires restrictAzureOpenAIToSyntheticDemo')
+  : enableAzureOpenAIInference
+var azureOpenAIEnabledValue = validatedAzureOpenAIInferenceEnabled ? 'true' : 'false'
+var azureOpenAISyntheticOnlyValue = validatedAzureOpenAISyntheticOnly ? 'true' : 'false'
 var validatedAzureLanguageExtractionEnabled = enableAzureLanguageExtraction && !provisionAzureLanguage
   ? fail('enableAzureLanguageExtraction requires provisionAzureLanguage')
-  : enableAzureLanguageExtraction
+  : enableAzureLanguageExtraction && !validatedAzureOpenAIInferenceEnabled
+    ? fail('enableAzureLanguageExtraction requires enableAzureOpenAIInference')
+    : enableAzureLanguageExtraction
 var azureLanguageEnabledValue = validatedAzureLanguageExtractionEnabled ? 'true' : 'false'
 var athenaConfigurationFieldsPresent = startsWith(toLower(athenaBaseUrl), 'https://') && startsWith(toLower(athenaTokenUrl), 'https://') && !empty(athenaClientId) && !empty(athenaScopes)
 var validatedAthenaSyncEnabled = enableAthenaSync && !provisionAthenaSync
@@ -614,6 +626,10 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             {
               name: 'COSMANEURA_AZURE_OPENAI_ENABLED'
               value: azureOpenAIEnabledValue
+            }
+            {
+              name: 'COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY'
+              value: azureOpenAISyntheticOnlyValue
             }
             {
               name: 'COSMANEURA_AZURE_LANGUAGE_ENABLED'
@@ -1156,6 +1172,8 @@ output ingressExternal bool = externalIngress
 output applicationFqdn string = application.properties.configuration.ingress.fqdn
 output imageSourceTag string = imageTag
 output deployedImageDigest string = validatedImageDigest
+output azureOpenAIInferenceEnabled bool = validatedAzureOpenAIInferenceEnabled
+output azureOpenAISyntheticOnly bool = validatedAzureOpenAISyntheticOnly
 output azureLanguageProvisioned bool = provisionAzureLanguage
 output azureLanguageExtractionEnabled bool = validatedAzureLanguageExtractionEnabled
 output azureLanguageAccountName string = provisionAzureLanguage ? azureLanguage!.name : ''

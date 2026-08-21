@@ -90,7 +90,13 @@ def test_private_azure_openai_is_managed_identity_only_and_default_off():
     )
     assert dns_name == "name: 'privatelink.openai.azure.com'"
     assert "enableAzureOpenAIInference bool = false" in APP
+    assert "restrictAzureOpenAIToSyntheticDemo bool = false" in APP
+    assert (
+        "externally accessible Azure OpenAI inference requires "
+        "restrictAzureOpenAIToSyntheticDemo"
+    ) in APP
     assert "COSMANEURA_AZURE_OPENAI_ENABLED" in api
+    assert "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY" in api
     assert "AZURE_OPENAI_ENDPOINT" in api
     assert "AZURE_OPENAI_DEPLOYMENT" in api
     assert "AZURE_OPENAI_MODEL" in api
@@ -99,6 +105,7 @@ def test_private_azure_openai_is_managed_identity_only_and_default_off():
         "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_DEPLOYMENT",
         "COSMANEURA_AZURE_OPENAI_ENABLED",
+        "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY",
     ):
         assert forbidden not in worker
         assert forbidden not in migration
@@ -120,6 +127,7 @@ def test_private_azure_openai_is_managed_identity_only_and_default_off():
     )
     assert foundation_parameters["azureOpenAIDeploymentCapacity"]["value"] == 200
     assert app_parameters["enableAzureOpenAIInference"]["value"] is False
+    assert app_parameters["restrictAzureOpenAIToSyntheticDemo"]["value"] is False
     assert app_parameters["azureOpenAIDeploymentName"]["value"] == (
         foundation_parameters["azureOpenAIDeploymentName"]["value"]
     )

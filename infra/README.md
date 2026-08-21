@@ -69,12 +69,15 @@ The app deployment owns behavior and receives these additional P4 inputs:
   `chaseWorkerCronExpression`
 - `uploadUrl`, `directContractListPath`, and `chaseApprovalMode`, which are also
   part of the server-configured policy/evidence boundary
-- `enableAzureOpenAIInference` (false by default), plus non-secret
+- `enableAzureOpenAIInference` and
+  `restrictAzureOpenAIToSyntheticDemo` (both false by default), plus non-secret
   `azureOpenAIDeploymentName`, `azureOpenAIModelName`, and
-  `azureOpenAIApiVersion=2025-04-01-preview`
+  `azureOpenAIApiVersion=2025-04-01-preview`; external ingress and OpenAI may
+  coexist only when the synthetic restriction is true
 - `provisionAzureLanguage` and `enableAzureLanguageExtraction` (both false by
   default), plus non-secret `azureLanguageApiVersion=2023-04-01`; enablement is
-  rejected unless provisioning is also selected
+  rejected unless provisioning and primary Azure OpenAI inference are also
+  selected
 - `provisionAthenaSync` and `enableAthenaSync` (both false by default);
   enablement is rejected unless provisioning is also selected and the exact
   approved HTTPS base/token URLs, client ID, and synthetic/read-only scopes are
@@ -105,6 +108,12 @@ Azure OpenAI authorization is resource-scoped RBAC, not Key Vault access. The
 API's Azure OpenAI endpoint, deployment, model label, and API version are
 non-secret configuration and are injected only when inference is explicitly
 enabled. `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_AD_TOKEN` are prohibited.
+For an externally reachable synthetic demo,
+`restrictAzureOpenAIToSyntheticDemo=true` injects a second application latch.
+The API and engine then accept model input only from a stored row whose
+server-owned provenance is the reserved release-candidate value. Ad-hoc input
+and operational rows fail before outbound inference; an ID prefix or request
+field cannot satisfy the gate.
 
 Azure AI Language follows the same boundary without sharing the OpenAI role.
 `provisionAzureLanguage=true` creates a `TextAnalytics` F0 account, its

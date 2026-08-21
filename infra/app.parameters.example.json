@@ -20,6 +20,7 @@
     "acsEmailSenderAddress": { "value": "" },
     "acsEmailReplyToAddress": { "value": "" },
     "enableAzureOpenAIInference": { "value": false },
+    "restrictAzureOpenAIToSyntheticDemo": { "value": false },
     "azureOpenAIDeploymentName": { "value": "gpt-5-6-sol-2026-07-09" },
     "azureOpenAIModelName": { "value": "gpt-5.6-sol" },
     "azureOpenAIApiVersion": { "value": "2025-04-01-preview" },

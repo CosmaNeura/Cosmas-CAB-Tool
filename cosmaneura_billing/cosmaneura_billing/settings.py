@@ -440,6 +440,11 @@ class Settings:
     azure_openai_deployment: str = ""
     azure_openai_model: str = ""
     azure_openai_api_version: str = "2025-04-01-preview"
+    # Deployment-time safety latch for a public synthetic demo. When enabled,
+    # model-backed API routes accept only encounters whose server-owned stored
+    # provenance is the reserved release-candidate source. It never trusts an
+    # encounter ID prefix or caller-provided classification.
+    azure_openai_synthetic_only: bool = False
     # Second extraction engine (Text Analytics for health). Off by default, on
     # the same terms as inference: a deployment opts in, it never drifts on.
     azure_language_enabled: bool = False
@@ -566,6 +571,15 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_AZURE_OPENAI_ENABLED must be a boolean"
             )
+        if type(self.azure_openai_synthetic_only) is not bool:
+            raise SettingsError(
+                "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY must be a boolean"
+            )
+        if self.azure_openai_synthetic_only and not self.azure_openai_enabled:
+            raise SettingsError(
+                "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY requires "
+                "COSMANEURA_AZURE_OPENAI_ENABLED=true"
+            )
         if self.azure_openai_enabled and not all(azure_openai_fields.values()):
             missing = ", ".join(
                 name
@@ -605,6 +619,11 @@ class Settings:
             )
         if type(self.azure_language_enabled) is not bool:
             raise SettingsError("COSMANEURA_AZURE_LANGUAGE_ENABLED must be a boolean")
+        if self.azure_language_enabled and not self.azure_openai_enabled:
+            raise SettingsError(
+                "COSMANEURA_AZURE_LANGUAGE_ENABLED requires "
+                "COSMANEURA_AZURE_OPENAI_ENABLED=true"
+            )
         if type(self.azure_language_mock) is not bool:
             raise SettingsError("COSMANEURA_AZURE_LANGUAGE_MOCK must be a boolean")
         if self.azure_language_enabled and self.azure_language_mock:
@@ -974,6 +993,9 @@ class Settings:
         azure_openai_enabled = _parse_bool(
             env, "COSMANEURA_AZURE_OPENAI_ENABLED", False,
         )
+        azure_openai_synthetic_only = _parse_bool(
+            env, "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY", False,
+        )
         direct_azure_credential_present = any(
             (env.get(name) or "").strip()
             for name in _PROHIBITED_AZURE_OPENAI_CREDENTIAL_ENV
@@ -1021,6 +1043,7 @@ class Settings:
             azure_openai_api_version=(
                 env.get("AZURE_OPENAI_API_VERSION") or "2025-04-01-preview"
             ).strip(),
+            azure_openai_synthetic_only=azure_openai_synthetic_only,
             azure_language_enabled=azure_language_enabled,
             azure_language_endpoint=(
                 env.get("AZURE_LANGUAGE_ENDPOINT") or ""

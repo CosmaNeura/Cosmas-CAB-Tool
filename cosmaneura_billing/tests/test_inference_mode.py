@@ -78,6 +78,8 @@ def test_health_reports_the_inference_path():
     body = TestClient(app).get("/api/health").json()
     assert body["inferenceMode"] == "mock"
     assert body["inferenceModel"] == "offline-demo"
+    assert body["inferenceInputPolicy"] == "standard"
+    assert body["multiEngineEnabled"] is False
 
 
 def test_coder_view_carries_inference_mode_and_degraded():

@@ -17,12 +17,17 @@ from .knowledge.pos import PlaceOfService
 from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
 from .llm import LLMClient, describe_client, get_default_client
+from .persistence import SYNTHETIC_DEMO_SOURCE
 from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
     Disposition, FeedbackKind, ProviderCard, VisitBundle,
 )
 from .settings import Settings
 from .ta4h import TA4HClient, get_default_ta4h_client
+
+
+class InferenceInputPolicyError(PermissionError):
+    """The configured model-input boundary rejected an untrusted bundle."""
 
 
 class BillingOrchestrator:
@@ -119,7 +124,20 @@ class BillingOrchestrator:
             consensus_audit + primary_evidence_audit + secondary_evidence_audit,
         )
 
-    def process(self, bundle: VisitBundle, user_id: str | None = None) -> BillingResult:
+    def process(
+        self,
+        bundle: VisitBundle,
+        user_id: str | None = None,
+        *,
+        input_provenance: str | None = None,
+    ) -> BillingResult:
+        if (
+            self.settings.azure_openai_synthetic_only
+            and input_provenance != SYNTHETIC_DEMO_SOURCE
+        ):
+            raise InferenceInputPolicyError(
+                "model inference requires reserved stored synthetic provenance"
+            )
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions, consensus_audit = self._extract(bundle, new_patient)

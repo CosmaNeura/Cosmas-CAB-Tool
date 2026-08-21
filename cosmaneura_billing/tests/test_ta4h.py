@@ -21,8 +21,15 @@ _CLIENT_ID = "6f9619ff-8b86-d011-b42d-00cf4fc964ff"
 
 
 def _enabled_settings(**over) -> Settings:
-    base = dict(azure_language_enabled=True, azure_language_endpoint=_ENDPOINT,
-                azure_client_id=_CLIENT_ID)
+    base = dict(
+        azure_openai_enabled=True,
+        azure_openai_endpoint="https://cab-openai.openai.azure.com",
+        azure_openai_deployment="cab-gpt",
+        azure_openai_model="gpt-5.6-sol",
+        azure_language_enabled=True,
+        azure_language_endpoint=_ENDPOINT,
+        azure_client_id=_CLIENT_ID,
+    )
     base.update(over)
     return Settings(**base)
 
@@ -291,12 +298,12 @@ def test_settings_reject_a_non_azure_endpoint():
 
 def test_settings_require_an_endpoint_when_enabled():
     with pytest.raises(SettingsError, match="AZURE_LANGUAGE_ENDPOINT"):
-        Settings(azure_language_enabled=True, azure_client_id=_CLIENT_ID)
+        _enabled_settings(azure_language_endpoint="")
 
 
 def test_settings_require_the_managed_identity_when_enabled():
     with pytest.raises(SettingsError, match="AZURE_CLIENT_ID"):
-        Settings(azure_language_enabled=True, azure_language_endpoint=_ENDPOINT)
+        _enabled_settings(azure_client_id="")
 
 
 @pytest.mark.parametrize("client_id", [
@@ -323,6 +330,11 @@ def test_client_refuses_a_non_azure_endpoint_before_sending_a_token(monkeypatch)
     effective values, so this fails at construction, before any request."""
     monkeypatch.delenv("AZURE_LANGUAGE_KEY", raising=False)
     hostile = Settings.__new__(Settings)
+    object.__setattr__(hostile, "azure_openai_enabled", True)
+    object.__setattr__(hostile, "azure_openai_endpoint", "https://cab-openai.openai.azure.com")
+    object.__setattr__(hostile, "azure_openai_deployment", "cab-gpt")
+    object.__setattr__(hostile, "azure_openai_model", "gpt-5.6-sol")
+    object.__setattr__(hostile, "azure_openai_api_version", "2025-04-01-preview")
     object.__setattr__(hostile, "azure_language_endpoint", "https://attacker.example.com")
     object.__setattr__(hostile, "azure_language_api_version", "2023-04-01")
     object.__setattr__(hostile, "azure_client_id", _CLIENT_ID)
