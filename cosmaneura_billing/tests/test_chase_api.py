@@ -76,7 +76,12 @@ def test_worklist_buckets_and_filters(client):
     eligibility = client.post(
         "/api/chase/worklist", json={"bucket": "eligibility"},
     ).json()
-    assert [r["patient_ref"] for r in eligibility["rows"]] == ["API-2"]
+    assert len(eligibility["rows"]) == 1
+    assert eligibility["rows"][0]["trigger"] == "eligibility_inactive"
+    assert eligibility["rows"][0]["patientLabel"] == "Patient record"
+    assert "patient_ref" not in eligibility["rows"][0]
+    assert "direct_contract" not in eligibility["rows"][0]
+    assert "attempts" not in eligibility["rows"][0]
 
 
 def test_worklist_exposes_the_policy_and_who_approved_it(client):

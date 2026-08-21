@@ -1,0 +1,86 @@
+{
+  "pack_id": "cosmaneura-synthetic-chase-v1",
+  "schema_version": 1,
+  "data_class": "synthetic_demo",
+  "as_of_date": "2026-08-21",
+  "detected_at": "2026-08-21T13:00:00+00:00",
+  "cases": [
+    {
+      "case_id": "SYN-CHASE-0001",
+      "patient_ref": "synthetic-chase-patient-0001",
+      "display_label": "Synthetic patient A",
+      "expected_trigger": "no_card_on_file",
+      "expected_state": "detected",
+      "direct_contract": false,
+      "snapshot": {
+        "appointment_at": "2026-08-21T15:00:00+00:00",
+        "has_insurance_package": false,
+        "card_image_on_file": false,
+        "eligibility_status": "ACTIVE"
+      },
+      "contact": {
+        "channel": "phone",
+        "destination": "+1 202-555-0101",
+        "instruction": "Call to request the current insurance card before today's visit."
+      }
+    },
+    {
+      "case_id": "SYN-CHASE-0002",
+      "patient_ref": "synthetic-chase-patient-0002",
+      "display_label": "Synthetic patient B",
+      "expected_trigger": "expired",
+      "expected_state": "detected",
+      "direct_contract": false,
+      "snapshot": {
+        "appointment_at": "2026-08-20T14:00:00+00:00",
+        "has_insurance_package": true,
+        "card_image_on_file": true,
+        "coverage_end_date": "2026-07-31",
+        "eligibility_status": "ACTIVE"
+      },
+      "contact": {
+        "channel": "phone",
+        "destination": "+1 202-555-0102",
+        "instruction": "Call to request updated coverage because the recorded plan has expired."
+      }
+    },
+    {
+      "case_id": "SYN-CHASE-0003",
+      "patient_ref": "synthetic-chase-patient-0003",
+      "display_label": "Synthetic patient C",
+      "expected_trigger": "eligibility_inactive",
+      "expected_state": "detected",
+      "direct_contract": false,
+      "snapshot": {
+        "appointment_at": "2026-08-22T16:00:00+00:00",
+        "has_insurance_package": true,
+        "card_image_on_file": true,
+        "eligibility_status": "INACTIVE"
+      },
+      "contact": {
+        "channel": "phone",
+        "destination": "+1 202-555-0103",
+        "instruction": "Call to confirm current coverage after an inactive eligibility response."
+      }
+    },
+    {
+      "case_id": "SYN-CHASE-0004",
+      "patient_ref": "synthetic-chase-patient-0004",
+      "display_label": "Synthetic patient D",
+      "expected_trigger": "no_card_on_file",
+      "expected_state": "needs_review",
+      "direct_contract": true,
+      "snapshot": {
+        "appointment_at": "2026-08-24T13:00:00+00:00",
+        "has_insurance_package": false,
+        "card_image_on_file": false,
+        "eligibility_status": ""
+      },
+      "contact": {
+        "channel": "phone",
+        "destination": "+1 202-555-0104",
+        "instruction": "Review the direct-contract status before deciding whether any insurance follow-up is appropriate."
+      }
+    }
+  ]
+}

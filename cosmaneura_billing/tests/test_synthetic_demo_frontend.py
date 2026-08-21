@@ -7,6 +7,7 @@ FRONTEND = ROOT / "cosmaneura_billing" / "frontend" / "src"
 APP = (FRONTEND / "App.jsx").read_text(encoding="utf-8")
 BILLING = (FRONTEND / "BillingReview.jsx").read_text(encoding="utf-8")
 CODER = (FRONTEND / "CoderReview.jsx").read_text(encoding="utf-8")
+CHASE = (FRONTEND / "CardChase.jsx").read_text(encoding="utf-8")
 
 
 def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
@@ -62,6 +63,28 @@ def test_frontend_never_places_an_encounter_identifier_in_a_request_target():
     assert "encodeURIComponent(encounterId)" not in BILLING + CODER
     assert "encodeURIComponent(enc.encounterId)" not in BILLING + CODER
     assert "`/api/encounters/${" not in BILLING + CODER
+
+
+def test_server_capabilities_control_the_three_tabs_and_encounter_loading():
+    assert 'api("/api/session")' in APP
+    assert 'views.includes("provider")' in APP
+    assert 'views.includes("coder")' in APP
+    assert 'views.includes("chase")' in APP
+    assert 'session.views.includes("provider") || session.views.includes("coder")' in APP
+    assert "Provider &amp; biller" not in APP
+    assert "Card chase" in APP
+
+
+def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
+    assert 'api("/api/chase/worklist"' in CHASE
+    assert 'api("/api/chase/task"' in CHASE
+    assert 'method: "POST"' in CHASE
+    assert "body: { chaseId: row.chaseId }" in CHASE
+    assert "`/api/chase/${" not in CHASE
+    assert "encodeURIComponent" not in CHASE
+    assert "tel:" not in CHASE
+    assert "mailto:" not in CHASE
+    assert "does not dial, text, email, or open an external link" in CHASE
 
 
 def test_degraded_results_suppress_claim_cards_and_feedback_actions():
