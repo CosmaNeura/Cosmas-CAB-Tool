@@ -601,13 +601,31 @@ def health(request: Request) -> dict[str, Any]:
 
 @router.get("/api/session")
 def session_capabilities(request: Request) -> dict[str, Any]:
-    """Return the authenticated principal's server-derived navigation views."""
-    views = _permitted_views(_request_principal(request))
+    """Return server-derived views and narrowly scoped UI action capabilities."""
+    principal = _request_principal(request)
+    views = _permitted_views(principal)
     if not views:
         # Authentication already rejects principals without an allowed app
         # role. Keep this defensive branch fail-closed if that contract drifts.
         raise HTTPException(status_code=403, detail="access is not permitted")
-    return {"views": views, "defaultView": views[0]}
+    capabilities: dict[str, Any] = {
+        "views": views,
+        "defaultView": views[0],
+    }
+    if principal.has_any_role(("Admin",)):
+        # Presence of this object is the browser's capability check. Validate
+        # the bundled pack before advertising it and never make the UI infer
+        # authorization from role names or duplicate the digest constant.
+        from .chase.synthetic_demo import prepare_synthetic_chase_seed
+
+        seed = prepare_synthetic_chase_seed()
+        capabilities["actions"] = {
+            "seedSyntheticChase": {
+                "seedDigest": seed.digest,
+                "caseCount": len(seed.cases),
+            },
+        }
+    return capabilities
 
 
 @router.get("/api/ready")

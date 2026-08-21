@@ -4,6 +4,10 @@ import {
   ShieldAlert, UserRoundSearch,
 } from "lucide-react";
 import { api } from "./api.js";
+import {
+  seedConfirmationIsSafe,
+  syntheticSeedErrorMessage,
+} from "./syntheticDemoSeed.js";
 
 
 const FILTERS = [
@@ -94,11 +98,14 @@ function FollowUpTask({ task, loading, error }) {
   );
 }
 
-export default function CardChase({ live }) {
+export default function CardChase({ live, demoSeed = null }) {
   const [bucket, setBucket] = useState("");
   const [worklist, setWorklist] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [seeding, setSeeding] = useState(false);
+  const [seedResult, setSeedResult] = useState(null);
+  const [seedError, setSeedError] = useState(null);
   const [task, setTask] = useState(null);
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskError, setTaskError] = useState(null);
@@ -143,6 +150,32 @@ export default function CardChase({ live }) {
     }
   };
 
+  const seedSyntheticDemo = async () => {
+    if (!live || !demoSeed?.seedDigest) return;
+    setSeeding(true);
+    setSeedError(null);
+    setSeedResult(null);
+    let confirmed = false;
+    try {
+      const result = await api("/api/chase/demo-seed", {
+        method: "POST",
+        body: { seedDigest: demoSeed.seedDigest },
+      });
+      if (!seedConfirmationIsSafe(result, demoSeed)) {
+        throw new Error("synthetic demo seed confirmation did not match");
+      }
+      setSeedResult(result);
+      confirmed = true;
+      setTask(null);
+      setTaskError(null);
+    } catch (seedFailure) {
+      setSeedError(syntheticSeedErrorMessage(seedFailure));
+    } finally {
+      setSeeding(false);
+    }
+    if (confirmed) await load();
+  };
+
   if (!live) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 shadow-sm">
@@ -174,6 +207,35 @@ export default function CardChase({ live }) {
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
           </button>
         </div>
+
+        {demoSeed && (
+          <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-violet-950">Synthetic demo setup</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-violet-800">
+                  Admin only. Load the fixed {demoSeed.caseCount}-case synthetic pack; retries are safe and do not create duplicates.
+                </p>
+              </div>
+              <button
+                onClick={seedSyntheticDemo}
+                disabled={seeding}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-violet-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-60"
+              >
+                <RefreshCw size={14} className={seeding ? "animate-spin" : ""} />
+                {seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}
+              </button>
+            </div>
+            {seedResult && (
+              <p className="mt-2 text-xs text-emerald-800" role="status">
+                {seedResult.replayed
+                  ? `The same ${seedResult.casesReady} synthetic tasks were already ready; no duplicates were added.`
+                  : `${seedResult.casesReady} synthetic tasks are ready.`}
+              </p>
+            )}
+            {seedError && <p className="mt-2 text-xs text-red-700" role="alert">{seedError}</p>}
+          </div>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {FILTERS.map(([value, label]) => (

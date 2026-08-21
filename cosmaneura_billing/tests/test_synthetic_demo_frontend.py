@@ -8,6 +8,7 @@ APP = (FRONTEND / "App.jsx").read_text(encoding="utf-8")
 BILLING = (FRONTEND / "BillingReview.jsx").read_text(encoding="utf-8")
 CODER = (FRONTEND / "CoderReview.jsx").read_text(encoding="utf-8")
 CHASE = (FRONTEND / "CardChase.jsx").read_text(encoding="utf-8")
+SEED = (FRONTEND / "syntheticDemoSeed.js").read_text(encoding="utf-8")
 
 
 def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
@@ -75,9 +76,31 @@ def test_server_capabilities_control_the_three_tabs_and_encounter_loading():
     assert "Card chase" in APP
 
 
+def test_admin_only_server_capability_drives_digest_pinned_synthetic_seed():
+    assert "setChaseDemoSeed(session.actions?.seedSyntheticChase || null)" in APP
+    assert "demoSeed={chaseDemoSeed}" in APP
+    assert "demoSeed && (" in CHASE
+    assert "Admin only." in CHASE
+    assert 'api("/api/chase/demo-seed"' in CHASE
+    assert "body: { seedDigest: demoSeed.seedDigest }" in CHASE
+    assert "seedConfirmationIsSafe(result, demoSeed)" in CHASE
+    assert "outbound?.schedulerEnabled === false" in SEED
+    assert "outbound?.patientMessagingEnabled === false" in SEED
+    assert "outbound?.operationallyActivated === false" in SEED
+    assert "outbound?.automaticContact === false" in SEED
+    assert 'outbound?.transport === "record_only"' in SEED
+    assert "syntheticSeedErrorMessage(seedFailure)" in CHASE
+    assert "seedFailure.message" not in CHASE
+    assert "no duplicates were added" in CHASE
+    assert "await load()" in CHASE
+    assert "fc207ef1419882f48dce5b12dae05233de2f99d9ea930ee5eb84d84e659d23ff" not in APP + CHASE
+    assert "console." not in CHASE + SEED
+
+
 def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
     assert 'api("/api/chase/worklist"' in CHASE
     assert 'api("/api/chase/task"' in CHASE
+    assert 'api("/api/chase/demo-seed"' in CHASE
     assert 'method: "POST"' in CHASE
     assert "body: { chaseId: row.chaseId }" in CHASE
     assert "`/api/chase/${" not in CHASE
@@ -85,6 +108,8 @@ def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
     assert "tel:" not in CHASE
     assert "mailto:" not in CHASE
     assert "does not dial, text, email, or open an external link" in CHASE
+    assert "patientLabel}`" not in CHASE
+    assert "chaseId}`" not in CHASE
 
 
 def test_degraded_results_suppress_claim_cards_and_feedback_actions():

@@ -76,6 +76,13 @@ def test_synthetic_contact_requires_exact_server_owned_seed_provenance():
 
 
 def test_admin_seed_is_exact_idempotent_and_outbound_dormant(client):
+    descriptor = client.get("/api/session").json()["actions"][
+        "seedSyntheticChase"
+    ]
+    assert descriptor == {
+        "seedDigest": EXPECTED_PACK_DIGEST,
+        "caseCount": 4,
+    }
     mismatch = client.post(
         "/api/chase/demo-seed",
         json={"seedDigest": "0" * 64},
@@ -84,11 +91,11 @@ def test_admin_seed_is_exact_idempotent_and_outbound_dormant(client):
 
     first = client.post(
         "/api/chase/demo-seed",
-        json={"seedDigest": EXPECTED_PACK_DIGEST},
+        json={"seedDigest": descriptor["seedDigest"]},
     )
     replay = client.post(
         "/api/chase/demo-seed",
-        json={"seedDigest": EXPECTED_PACK_DIGEST},
+        json={"seedDigest": descriptor["seedDigest"]},
     )
 
     assert first.status_code == replay.status_code == 200
