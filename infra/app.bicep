@@ -241,6 +241,8 @@ var validatedAzureLanguageShadowEnabled = enableAzureLanguageShadow && enableAzu
     ? fail('enableAzureLanguageShadow requires provisionAzureLanguage')
     : enableAzureLanguageShadow && !validatedAzureOpenAIInferenceEnabled
       ? fail('enableAzureLanguageShadow requires enableAzureOpenAIInference')
+      : enableAzureLanguageShadow && !validatedAzureOpenAISyntheticOnly
+        ? fail('enableAzureLanguageShadow requires restrictAzureOpenAIToSyntheticDemo')
       : enableAzureLanguageShadow
 var azureLanguageEnabledValue = validatedAzureLanguageExtractionEnabled ? 'true' : 'false'
 var azureLanguageShadowEnabledValue = validatedAzureLanguageShadowEnabled ? 'true' : 'false'

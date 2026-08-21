@@ -46,6 +46,7 @@ def test_language_account_is_private_f0_and_provisioning_is_default_off():
     )
     assert "enableAzureLanguageShadow requires provisionAzureLanguage" in APP
     assert "enableAzureLanguageShadow requires enableAzureOpenAIInference" in APP
+    assert "enableAzureLanguageShadow requires restrictAzureOpenAIToSyntheticDemo" in APP
     assert "enableAzureLanguageShadow and enableAzureLanguageExtraction are mutually exclusive" in APP
 
 

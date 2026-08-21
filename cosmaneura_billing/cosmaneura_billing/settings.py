@@ -627,12 +627,22 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED must be a boolean"
             )
-        if (
-            self.azure_language_enabled or self.azure_language_shadow_enabled
-        ) and not self.azure_openai_enabled:
+        if self.azure_language_enabled and not self.azure_openai_enabled:
             raise SettingsError(
-                "Azure AI Language extraction requires "
+                "COSMANEURA_AZURE_LANGUAGE_ENABLED requires "
                 "COSMANEURA_AZURE_OPENAI_ENABLED=true"
+            )
+        if self.azure_language_shadow_enabled and not self.azure_openai_enabled:
+            raise SettingsError(
+                "TA4H shadow mode requires primary Azure OpenAI inference"
+            )
+        if (
+            self.azure_language_shadow_enabled
+            and not self.azure_openai_synthetic_only
+        ):
+            raise SettingsError(
+                "TA4H shadow mode requires the reserved synthetic-only "
+                "inference policy"
             )
         if type(self.azure_language_mock) is not bool:
             raise SettingsError("COSMANEURA_AZURE_LANGUAGE_MOCK must be a boolean")

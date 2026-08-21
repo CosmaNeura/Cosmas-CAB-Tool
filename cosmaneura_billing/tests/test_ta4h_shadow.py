@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from cosmaneura_billing.api import create_app
 from cosmaneura_billing.llm import MockLLM
 from cosmaneura_billing.orchestrator import BillingOrchestrator
+from cosmaneura_billing.persistence import SYNTHETIC_DEMO_SOURCE
 from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 from cosmaneura_billing.settings import Settings, SettingsError
 from cosmaneura_billing.ta4h import MockTA4H
@@ -35,6 +36,7 @@ def _shadow_settings(**overrides) -> Settings:
         "azure_openai_endpoint": OPENAI_ENDPOINT,
         "azure_openai_deployment": "gpt-5-6-sol-2026-07-09",
         "azure_openai_model": "gpt-5.6-sol",
+        "azure_openai_synthetic_only": True,
         "azure_language_shadow_enabled": True,
         "azure_language_endpoint": LANGUAGE_ENDPOINT,
         "cpt_auto_fetch": False,
@@ -48,7 +50,7 @@ def _baseline(settings: Settings):
         settings=replace(settings, azure_language_shadow_enabled=False),
         llm=MockLLM(),
         ta4h=None,
-    ).process(SAMPLE_VISIT)
+    ).process(SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE)
 
 
 def test_shadow_result_is_byte_equivalent_to_primary_only_result():
@@ -58,7 +60,9 @@ def test_shadow_result_is_byte_equivalent_to_primary_only_result():
         settings=settings, llm=MockLLM(), ta4h=MockTA4H(),
     )
 
-    observed = orchestrator.process(SAMPLE_VISIT)
+    observed = orchestrator.process(
+        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
 
     assert asdict(observed) == asdict(expected)
     assert orchestrator.wait_for_shadow(1.0)
@@ -102,7 +106,9 @@ def test_hostile_secondary_output_cannot_reach_any_result_field():
         llm=MockLLM(),
         secondary_coding=HostileSecondary(),
     )
-    observed = orchestrator.process(SAMPLE_VISIT)
+    observed = orchestrator.process(
+        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
 
     assert asdict(observed) == asdict(expected)
     assert "shadow" not in repr(asdict(observed)).casefold()
@@ -143,7 +149,9 @@ def test_secondary_mutation_cannot_race_or_change_primary_bundle_output():
     # deterministic: later evidence and response assembly read mutated data.
     orchestrator.procedures = RaceBarrierProcedures()
 
-    observed = orchestrator.process(bundle)
+    observed = orchestrator.process(
+        bundle, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
 
     assert orchestrator.wait_for_shadow(1.0)
     assert asdict(observed) == asdict(expected)
@@ -166,7 +174,9 @@ def test_shadow_runtime_failure_degrades_only_aggregate_health():
         llm=MockLLM(),
         secondary_coding=BrokenSecondary(),
     )
-    observed = orchestrator.process(SAMPLE_VISIT)
+    observed = orchestrator.process(
+        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
 
     assert asdict(observed) == asdict(expected)
     assert orchestrator.wait_for_shadow(1.0)
@@ -197,7 +207,9 @@ def test_blocking_secondary_does_not_delay_or_change_primary_response():
         secondary_coding=BlockingSecondary(),
     )
     started = perf_counter()
-    observed = orchestrator.process(SAMPLE_VISIT)
+    observed = orchestrator.process(
+        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
     elapsed = perf_counter() - started
 
     # The secondary blocks for five seconds; the primary path must return well
@@ -231,7 +243,9 @@ def test_saturated_shadow_queue_drops_work_without_blocking_requests():
     )
     started = perf_counter()
     for _ in range(3):
-        orchestrator.process(SAMPLE_VISIT)
+        orchestrator.process(
+            SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+        )
     elapsed = perf_counter() - started
 
     snapshot = orchestrator.ta4h_observability()
@@ -255,6 +269,8 @@ def test_shadow_configuration_fails_closed():
         )
     with pytest.raises(SettingsError, match="mutually exclusive"):
         _shadow_settings(azure_language_enabled=True)
+    with pytest.raises(SettingsError, match="synthetic-only"):
+        _shadow_settings(azure_openai_synthetic_only=False)
     with pytest.raises(SettingsError, match="AZURE_LANGUAGE_ENDPOINT"):
         _shadow_settings(azure_language_endpoint="")
 
@@ -267,6 +283,7 @@ def test_shadow_env_parser_and_boolean_type_are_strict():
         "AZURE_OPENAI_ENDPOINT": OPENAI_ENDPOINT,
         "AZURE_OPENAI_DEPLOYMENT": "gpt-5-6-sol-2026-07-09",
         "AZURE_OPENAI_MODEL": "gpt-5.6-sol",
+        "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY": "true",
         "COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED": "true",
         "AZURE_LANGUAGE_ENDPOINT": LANGUAGE_ENDPOINT,
     }
@@ -300,7 +317,9 @@ def test_health_exposes_only_the_closed_aggregate_shadow_schema(tmp_path):
     orchestrator = BillingOrchestrator(
         settings=settings, llm=MockLLM(), ta4h=MockTA4H(),
     )
-    orchestrator.process(SAMPLE_VISIT)
+    orchestrator.process(
+        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
     assert orchestrator.wait_for_shadow(1.0)
     app = create_app(
         settings=settings,

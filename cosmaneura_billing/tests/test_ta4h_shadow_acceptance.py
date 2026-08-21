@@ -27,6 +27,7 @@ def _settings() -> Settings:
         azure_openai_deployment="gpt-5-6-sol-2026-07-09",
         azure_openai_model="gpt-5.6-sol",
         azure_openai_api_version="2025-04-01-preview",
+        azure_openai_synthetic_only=True,
         azure_language_shadow_enabled=True,
         azure_language_endpoint=LANGUAGE_ENDPOINT,
         azure_language_api_version="2023-04-01",
@@ -51,6 +52,12 @@ class SyntheticAzureLanguage(AzureLanguageTA4H):
         if self.fail:
             raise RuntimeError(self.fail)
         return MockTA4H().analyze(documents)
+
+
+class EmptyAzureLanguage(SyntheticAzureLanguage):
+    def analyze(self, documents):
+        del documents
+        return {}
 
 
 def test_green_harness_is_no_influence_and_scanner_clean():
@@ -104,6 +111,23 @@ def test_runtime_failure_and_exception_text_are_sanitized():
     assert statuses["no_influence"] == "pass"
 
 
+def test_empty_secondary_analysis_cannot_be_certified_as_successful():
+    lines: list[str] = []
+
+    result = run_acceptance(
+        _settings(),
+        environ={},
+        resolver=_private_resolver,
+        client_factory=lambda settings: EmptyAzureLanguage(),
+        output=lines.append,
+    )
+
+    assert result == 1
+    statuses = {event["check"]: event["status"] for event in map(json.loads, lines)}
+    assert statuses["synthetic_analysis"] == "fail"
+    assert statuses["no_influence"] == "pass"
+
+
 def test_direct_credentials_fail_before_client_construction_without_echo():
     lines: list[str] = []
     constructed = False
@@ -127,6 +151,31 @@ def test_direct_credentials_fail_before_client_construction_without_echo():
     rendered = "\n".join(lines)
     assert SECRET_CANARY not in rendered
     assert scan_log_text(rendered, prohibited_values=(SECRET_CANARY,)) == []
+
+
+def test_acceptance_requires_the_public_demo_synthetic_input_gate():
+    settings = _settings()
+    object.__setattr__(settings, "azure_openai_synthetic_only", False)
+    lines: list[str] = []
+    constructed = False
+
+    def client_factory(_settings):
+        nonlocal constructed
+        constructed = True
+        return SyntheticAzureLanguage()
+
+    result = run_acceptance(
+        settings,
+        environ={},
+        resolver=_private_resolver,
+        client_factory=client_factory,
+        output=lines.append,
+    )
+
+    assert result == 1
+    assert constructed is False
+    statuses = {event["check"]: event["status"] for event in map(json.loads, lines)}
+    assert statuses["configuration"] == "fail"
 
 
 def test_acceptance_schema_expansion_is_rejected_by_log_scanner():

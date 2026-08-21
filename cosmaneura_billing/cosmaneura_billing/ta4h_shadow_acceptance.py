@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from .corpus.demo import SAMPLE_VISIT
 from .llm import MockLLM
 from .orchestrator import BillingOrchestrator
+from .persistence import SYNTHETIC_DEMO_SOURCE
 from .runtime import (
     TA4H_SHADOW_ACCEPTANCE_LOG_EVENT,
     configure_json_logging,
@@ -138,6 +139,7 @@ def run_acceptance(
 
     configuration_ok = bool(
         settings.azure_openai_enabled
+        and settings.azure_openai_synthetic_only
         and settings.azure_openai_endpoint
         and settings.azure_openai_deployment == EXPECTED_OPENAI_DEPLOYMENT
         and settings.azure_openai_model == EXPECTED_OPENAI_MODEL
@@ -216,15 +218,24 @@ def run_acceptance(
             shadow_settings = replace(settings, cpt_auto_fetch=False)
             baseline = BillingOrchestrator(
                 settings=base_settings, llm=MockLLM(), ta4h=None,
-            ).process(SAMPLE_VISIT)
+            ).process(
+                SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+            )
             shadow = BillingOrchestrator(
                 settings=shadow_settings, llm=MockLLM(), ta4h=client,
             )
-            observed = shadow.process(SAMPLE_VISIT)
+            observed = shadow.process(
+                SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+            )
             influence_ok = asdict(observed) == asdict(baseline)
             idle = shadow.wait_for_shadow(130.0)
             snapshot = shadow.ta4h_observability()
-            analysis_ok = idle and snapshot["succeeded"] == 1
+            analysis_ok = (
+                idle
+                and snapshot["succeeded"] == 1
+                and snapshot["secondaryEntityCount"] > 0
+                and snapshot["secondaryDiagnosisCandidates"] > 0
+            )
             observability_ok = (
                 is_safe_ta4h_shadow_snapshot(snapshot)
                 and snapshot["mode"] == "shadow"
