@@ -8,6 +8,13 @@ import urllib.request
 
 import pytest
 
+from cosmaneura_billing.athena_client import (
+    ATHENA_PREVIEW_INTROSPECTION_URL,
+    ATHENA_PREVIEW_ORIGIN,
+    ATHENA_PREVIEW_PRACTICE_ID,
+    ATHENA_PREVIEW_SCOPE,
+    ATHENA_PREVIEW_TOKEN_URL,
+)
 from cosmaneura_billing.athena_sync import (
     AthenaSyncConfig,
     AthenaSyncStatus,
@@ -21,16 +28,10 @@ def _live_env(**changes: str) -> dict[str, str]:
     values = {
         "COSMANEURA_ATHENA_SYNC_ENABLED": "true",
         "COSMANEURA_ATHENA_MODE": "live",
-        "COSMANEURA_ATHENA_BASE_URL": (
-            "https://reviewed-api.invalid/base"
-        ),
-        "COSMANEURA_ATHENA_TOKEN_URL": (
-            "https://reviewed-auth.invalid/token"
-        ),
+        "COSMANEURA_ATHENA_BASE_URL": ATHENA_PREVIEW_ORIGIN,
+        "COSMANEURA_ATHENA_TOKEN_URL": ATHENA_PREVIEW_TOKEN_URL,
         "COSMANEURA_ATHENA_CLIENT_ID": "synthetic-client-id",
-        "COSMANEURA_ATHENA_SCOPES": (
-            "fixture/read-one,fixture/read-two"
-        ),
+        "COSMANEURA_ATHENA_SCOPES": ATHENA_PREVIEW_SCOPE,
         "COSMANEURA_ATHENA_CLIENT_SECRET": "synthetic-client-secret",
         "COSMANEURA_PRACTICE_ID": "server-practice",
     }
@@ -55,14 +56,14 @@ def test_mock_requires_explicit_enable_and_reads_four_without_importing():
     disabled = AthenaSyncConfig(
         enabled=False,
         mode="mock",
-        practice_id="server-practice",
+        target_practice_id="server-practice",
     )
     assert run_once(disabled).status is AthenaSyncStatus.DISABLED
 
     result = run_once(AthenaSyncConfig(
         enabled=True,
         mode="mock",
-        practice_id="server-practice",
+        target_practice_id="server-practice",
     ))
     assert result.status is AthenaSyncStatus.COMPLETED
     assert result.code == "ATHENA_MOCK_COMPLETE"
@@ -103,9 +104,13 @@ def test_mock_cli_output_is_count_and_code_only():
 
 def test_enabled_sync_cannot_use_disabled_mode_or_empty_practice():
     with pytest.raises(SettingsError, match="MODE=mock or live"):
-        AthenaSyncConfig(enabled=True, mode="disabled", practice_id="practice-a")
+        AthenaSyncConfig(
+            enabled=True,
+            mode="disabled",
+            target_practice_id="practice-a",
+        )
     with pytest.raises(SettingsError, match="PRACTICE_ID"):
-        AthenaSyncConfig(enabled=True, mode="mock", practice_id="")
+        AthenaSyncConfig(enabled=True, mode="mock", target_practice_id="")
 
 
 def test_mock_mode_rejects_all_live_credentials():
@@ -149,10 +154,10 @@ def test_complete_live_config_is_validated_redacted_and_execution_refused(
     config = AthenaSyncConfig.from_env(_live_env())
     rendered = repr(config)
     assert config.mode == "live"
-    assert config.scopes == (
-        "fixture/read-one",
-        "fixture/read-two",
-    )
+    assert config.scopes == (ATHENA_PREVIEW_SCOPE,)
+    assert config.target_practice_id == "server-practice"
+    assert config.vendor_practice_id == ATHENA_PREVIEW_PRACTICE_ID
+    assert config.introspection_url == ATHENA_PREVIEW_INTROSPECTION_URL
     assert "synthetic-client-secret" not in rendered
     assert "<redacted>" in rendered
 
@@ -181,7 +186,23 @@ def test_complete_live_config_is_validated_redacted_and_execution_refused(
         ),
         (
             {"COSMANEURA_ATHENA_SCOPES": "same.read,same.read"},
-            "unique explicit scopes",
+            "exact reviewed Preview scope",
+        ),
+        (
+            {
+                "COSMANEURA_ATHENA_BASE_URL": (
+                    ATHENA_PREVIEW_ORIGIN + "/unreviewed"
+                )
+            },
+            "fixed Preview origin",
+        ),
+        (
+            {
+                "COSMANEURA_ATHENA_TOKEN_URL": (
+                    ATHENA_PREVIEW_ORIGIN + "/oauth2/token"
+                )
+            },
+            "fixed Preview token URL",
         ),
     ],
 )

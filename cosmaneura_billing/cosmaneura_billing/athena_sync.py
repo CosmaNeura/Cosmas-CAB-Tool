@@ -17,6 +17,11 @@ from enum import Enum
 from typing import Mapping, Sequence, TextIO
 
 from .athena_client import (
+    ATHENA_PREVIEW_INTROSPECTION_URL,
+    ATHENA_PREVIEW_ORIGIN,
+    ATHENA_PREVIEW_PRACTICE_ID,
+    ATHENA_PREVIEW_SCOPE,
+    ATHENA_PREVIEW_TOKEN_URL,
     AthenaClientError,
     MockAthenaClient,
     read_all_pages,
@@ -78,7 +83,7 @@ class AthenaSyncConfig:
         repr=False,
         metadata={"secret": True},
     )
-    practice_id: str = ""
+    target_practice_id: str = ""
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
@@ -95,7 +100,7 @@ class AthenaSyncConfig:
             )
         if self.enabled:
             _safe_config_text(
-                self.practice_id,
+                self.target_practice_id,
                 setting="COSMANEURA_PRACTICE_ID",
                 maximum=256,
                 allow_space=True,
@@ -134,22 +139,22 @@ class AthenaSyncConfig:
                 self.token_url,
                 setting="COSMANEURA_ATHENA_TOKEN_URL",
             )
+            if self.base_url != ATHENA_PREVIEW_ORIGIN:
+                raise SettingsError(
+                    "COSMANEURA_ATHENA_BASE_URL must be the fixed Preview origin"
+                ) from None
+            if self.token_url != ATHENA_PREVIEW_TOKEN_URL:
+                raise SettingsError(
+                    "COSMANEURA_ATHENA_TOKEN_URL must be the fixed Preview token URL"
+                ) from None
             _safe_config_text(
                 self.client_id,
                 setting="COSMANEURA_ATHENA_CLIENT_ID",
                 maximum=512,
             )
-            if not 1 <= len(self.scopes) <= 16 or len(set(self.scopes)) != len(
-                self.scopes
-            ):
+            if self.scopes != (ATHENA_PREVIEW_SCOPE,):
                 raise SettingsError(
-                    "COSMANEURA_ATHENA_SCOPES must contain unique explicit scopes"
-                )
-            for scope in self.scopes:
-                _safe_config_text(
-                    scope,
-                    setting="COSMANEURA_ATHENA_SCOPES",
-                    maximum=512,
+                    "COSMANEURA_ATHENA_SCOPES must be the exact reviewed Preview scope"
                 )
             if (
                 not isinstance(self.client_secret, str)
@@ -185,8 +190,22 @@ class AthenaSyncConfig:
             scopes=_parse_scopes(env),
             # Do not trim or normalize credentials.
             client_secret=env.get("COSMANEURA_ATHENA_CLIENT_SECRET", ""),
-            practice_id=(env.get("COSMANEURA_PRACTICE_ID") or "").strip(),
+            target_practice_id=(
+                env.get("COSMANEURA_PRACTICE_ID") or ""
+            ).strip(),
         )
+
+    @property
+    def vendor_practice_id(self) -> str:
+        """Fixed Athena public Preview practice, never an environment value."""
+
+        return ATHENA_PREVIEW_PRACTICE_ID
+
+    @property
+    def introspection_url(self) -> str:
+        """Verified Preview metadata; no introspection call exists yet."""
+
+        return ATHENA_PREVIEW_INTROSPECTION_URL
 
     def __repr__(self) -> str:
         parts: list[str] = []
@@ -265,7 +284,7 @@ def run_once(config: AthenaSyncConfig) -> AthenaSyncResult:
         return AthenaSyncResult(AthenaSyncStatus.LIVE_NOT_IMPLEMENTED)
 
     try:
-        client = MockAthenaClient(server_practice_id=config.practice_id)
+        client = MockAthenaClient(server_practice_id=config.target_practice_id)
         result = read_all_pages(client)
     except AthenaClientError:
         return AthenaSyncResult(AthenaSyncStatus.ADAPTER_ERROR)
