@@ -190,7 +190,9 @@ def test_worker_releases_detached_bundle_while_daemon_remains_alive():
         llm=MockLLM(),
         secondary_coding=ReferencingSecondary(),
     )
-    orchestrator.process(deepcopy(SAMPLE_VISIT))
+    orchestrator.process(
+        deepcopy(SAMPLE_VISIT), input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
 
     assert orchestrator.wait_for_shadow(1.0)
     assert orchestrator.shadow_runner._thread.is_alive()
@@ -292,7 +294,9 @@ def test_dequeued_task_is_cancelled_if_shutdown_wins_service_call_race():
         secondary_coding=CountingSecondary(),
     )
     orchestrator.shadow_runner._queue = GatedQueue(maxsize=2)
-    orchestrator.process(SAMPLE_VISIT)
+    orchestrator.process(
+        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
+    )
     assert dequeued.wait(1.0)
 
     # The worker has removed the task from the queue but cannot inspect the

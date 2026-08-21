@@ -15,7 +15,7 @@ no reviewer agreement fields, no extra audit lines, no behavior change.
 |---|---|
 | *(nothing set)* | Second engine off. Single-engine coding. |
 | `COSMANEURA_AZURE_LANGUAGE_MOCK=1` | Offline deterministic mock. Development only — `Settings` refuses it in staging/production, so mock output can never be presented as engine output. |
-| `COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1` + `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID` | Live observation-only TA4H. Requires primary Azure OpenAI; TA4H output can enter only aggregate health metrics. |
+| `COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1` + `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID` | Live observation-only TA4H. This milestone requires primary Azure OpenAI **and** `COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=1`; TA4H output can enter only aggregate health metrics. |
 | `COSMANEURA_AZURE_LANGUAGE_ENABLED=1` + `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID` | Live **active-consensus** TA4H. This separate gate may change holds, rejections, rationale, and audit text. |
 | `AZURE_LANGUAGE_API_VERSION` | Override the API version (defaults to the GA `2023-04-01`). |
 
@@ -47,10 +47,12 @@ the endpoint or API version until one mutually exclusive runtime flag is true.
 
 The observation-only lane is selected through the shadow flag. The application
 and Bicep template fail closed unless primary Azure OpenAI is enabled, the
-Language account is provisioned, and active consensus is off.
+reserved synthetic-only inference policy is enabled, the Language account is
+provisioned, and active consensus is off.
 
 ```bash
 export COSMANEURA_AZURE_OPENAI_ENABLED=1
+export COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=1
 export COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1
 export COSMANEURA_AZURE_LANGUAGE_ENABLED=0
 export AZURE_LANGUAGE_ENDPOINT="https://cosmaneura-language.cognitiveservices.azure.com"

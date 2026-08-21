@@ -77,7 +77,8 @@ The app deployment owns behavior and receives these additional P4 inputs:
 - `provisionAzureLanguage`, `enableAzureLanguageExtraction`, and
   `enableAzureLanguageShadow` (all false by default), plus non-secret
   `azureLanguageApiVersion=2023-04-01`; both runtime modes require provisioning,
-  are mutually exclusive, and both require primary Azure OpenAI inference
+  are mutually exclusive, and both require primary Azure OpenAI inference;
+  shadow additionally requires the reserved synthetic-only restriction
 - `provisionAthenaSync` and `enableAthenaSync` (both false by default);
   enablement is rejected unless provisioning is also selected and the exact
   approved HTTPS base/token URLs, client ID, and synthetic/read-only scopes are
@@ -454,10 +455,13 @@ inference:
    deny, private DNS resolves only through the VNet path, and only the API UAMI
    has role `7628b7b8-a8b2-4cdc-b46f-e9b35248918e`. The worker and migration
    jobs must have no Language role, endpoint, API version, or enable marker.
-   Do not run a Language shadow study before Azure OpenAI inference is enabled.
+   Do not run a Language shadow study before Azure OpenAI inference and the
+   reserved synthetic-only input restriction are enabled.
 5. Redeploy the app with the reviewed deployment/model/API version and
-   `enableAzureOpenAIInference=true`, then submit only synthetic/de-identified
-   encounters. The acceptance run must exercise both strict `text.format` JSON
+   `enableAzureOpenAIInference=true` and
+   `restrictAzureOpenAIToSyntheticDemo=true`, then submit only the stored,
+   reserved synthetic encounters. The acceptance run must exercise both strict
+   `text.format` JSON
    Schema output and the locally selected JSON-object compatibility path through
    data-plane API `2025-04-01-preview`, plus refusals, content filtering,
    incomplete/truncated output, retries, the 8,000-token output ceiling, and
@@ -469,7 +473,8 @@ inference:
    deployment, or a data-plane response; the first controlled synthetic request
    and the acceptance checks above prove those separately.
    Only after that primary acceptance may a closed-ingress deployment set
-   `enableAzureLanguageShadow=true`. Keep
+   `enableAzureLanguageShadow=true` while retaining
+   `restrictAzureOpenAIToSyntheticDemo=true`. Keep
    `enableAzureLanguageExtraction=false`, run
    `python -m cosmaneura_billing.ta4h_shadow_acceptance`, scan the captured logs,
    and reopen ingress only if every fixed synthetic check passes. The external

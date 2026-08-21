@@ -268,6 +268,9 @@ def test_api_restart_reads_the_same_postgres_worklist(monkeypatch, tmp_path):
     restored = second_process.post("/api/chase/worklist", json={})
 
     assert restored.status_code == 200
-    assert [row["patient_ref"] for row in restored.json()["rows"]] == [
-        "SYNTHETIC-API"
-    ]
+    rows = restored.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["patientLabel"] == "Patient record"
+    assert rows[0]["dataClass"] == "operational"
+    assert rows[0]["trigger"] == "no_card_on_file"
+    assert "patient_ref" not in rows[0]

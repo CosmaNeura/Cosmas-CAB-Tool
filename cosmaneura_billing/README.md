@@ -313,7 +313,9 @@ no new secret enters the deployment.
 # offline deterministic mock (development only; refused in staging/production)
 COSMANEURA_AZURE_LANGUAGE_MOCK=1 uvicorn cosmaneura_billing.api:app --port 8000
 
-# observation-only deployment; requires primary Azure OpenAI
+# observation-only deployment; requires primary OpenAI + reserved synthetic input
+export COSMANEURA_AZURE_OPENAI_ENABLED=1
+export COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY=1
 export COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1
 export COSMANEURA_AZURE_LANGUAGE_ENABLED=0
 export AZURE_LANGUAGE_ENDPOINT='https://<resource>.cognitiveservices.azure.com'

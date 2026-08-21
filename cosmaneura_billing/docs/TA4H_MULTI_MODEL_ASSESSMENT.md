@@ -185,7 +185,8 @@ VisitBundle ──┬── CodingAgent (primary Azure OpenAI when enabled; ─�
   observation lane; `COSMANEURA_AZURE_LANGUAGE_ENABLED` separately selects
   active consensus. They are mutually exclusive and both require
   `AZURE_LANGUAGE_ENDPOINT` + `AZURE_CLIENT_ID`; shadow additionally requires
-  primary Azure OpenAI. **Managed identity only** — key-based auth is
+  primary Azure OpenAI and the reserved synthetic-only input policy for this
+  milestone. **Managed identity only** — key-based auth is
   prohibited. `loggingOptOut` is always on and is not configurable.
 - **Rollout**: (1) run the fixed synthetic shadow acceptance harness; (2) run
   TA4H out-of-band and surface nothing while measuring aggregate agreement and

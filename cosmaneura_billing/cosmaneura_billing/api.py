@@ -1533,6 +1533,11 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
     principal = _require_chase_staff(request)
     ctx = _request_chase_context(request)
     store, runner, action = ctx["store"], ctx["runner"], req.action
+    if action == "release":
+        # Direct-contract release is Admin-only in every topology. Keep this
+        # check ahead of store access so the memory/demo path cannot be less
+        # restrictive than the durable scheduler path.
+        principal = _require_roles(request, "Admin")
     actor = principal.user_id
     existing = store.get(chase_id)
     if existing is None:
@@ -1541,7 +1546,6 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
         _set_audit_resource(request, store.audit_resource_id(chase_id))
     scheduler = ctx.get("scheduler")
     if scheduler is not None and action == "release":
-        principal = _require_roles(request, "Admin")
         gate_fingerprint = str(
             (existing.direct_contract or {}).get("gate_fingerprint") or ""
         )

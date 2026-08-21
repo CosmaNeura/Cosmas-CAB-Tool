@@ -428,6 +428,8 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     provider_with_extra_staff = _auth_headers(
         roles=("Provider", "BillingStaff"),
     )
+    provider_coder = _auth_headers(roles=("Provider", "Coder"))
+    coder_billing_staff = _auth_headers(roles=("Coder", "BillingStaff"))
 
     assert client.get("/api/session", headers=provider).json()["views"] == [
         "provider",
@@ -447,6 +449,30 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     assert client.post(
         "/api/chase/worklist", json={}, headers=provider_with_extra_staff,
     ).status_code == 403
+    for expanded in (provider_coder, coder_billing_staff):
+        assert client.get("/api/session", headers=expanded).json()["views"] == [
+            "provider", "coder", "chase",
+        ]
+    seeded = client.post(
+        "/api/chase/demo-seed",
+        json={"seedDigest": EXPECTED_PACK_DIGEST},
+        headers=admin,
+    )
+    assert seeded.status_code == 200
+    chase_id = client.post(
+        "/api/chase/worklist", json={}, headers=coder_billing_staff,
+    ).json()["rows"][0]["chaseId"]
+    # Multiple effective roles compose deliberately: Coder grants all views;
+    # BillingStaff additionally grants staff transition authority.
+    assert client.post(
+        "/api/chase/action",
+        json={
+            "chaseId": chase_id,
+            "action_id": "10000000-0000-4000-8000-000000000004",
+            "action": "assign",
+        },
+        headers=coder_billing_staff,
+    ).status_code == 200
 
     # Provider: provider surface only.
     assert client.get("/api/encounters", headers=provider).status_code == 200
@@ -517,6 +543,16 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
             "action": "assign",
         },
         headers=coder,
+    ).status_code == 403
+    assert client.post(
+        "/api/chase/action",
+        json={
+            "chaseId": "chase-demo",
+            "action_id": "10000000-0000-4000-8000-000000000003",
+            "action": "release",
+            "reason": "reviewed",
+        },
+        headers=billing_staff,
     ).status_code == 403
     assert client.post(
         "/api/chase/release-message",

@@ -52,6 +52,10 @@ membership.
 If a Provider token is mistakenly also assigned `BillingStaff`, Provider remains
 the restrictive effective persona and still receives only the Provider surface.
 Only `Coder` or `Admin` intentionally expands a login to all three views.
+Effective roles otherwise compose: `Coder` plus `BillingStaff` receives all
+three views and the BillingStaff transition authority, while Admin-only policy
+and release operations remain Admin-only. Pilot identities should normally hold
+one persona role so this composition is deliberate rather than accidental.
 
 Configure the Entra enterprise application with **Assignment required = Yes**,
 define exactly those app roles, and assign only pilot staff or controlled staff
