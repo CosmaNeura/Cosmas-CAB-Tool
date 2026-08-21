@@ -126,12 +126,12 @@ the existing "Demo Release Candidate & Canonical Evidence" slice; defer the rest
    cost, provision the Language resource on F0 (5,000 text records/month, a text
    record being 1,000 characters). F0 should cover the study's service usage;
    Private Link data processing remains separately metered.
-4. Implement an isolated shadow seam before enabling the engine on any
-   reviewer-serving process. The current `azure_language_enabled` path performs
-   active conservative consensus; hiding badges alone is not shadow mode. The
-   future seam must log comparison results while leaving reviewer responses,
-   dispositions, rationales, and audit output unchanged. Then measure, against
-   the 40–60 golden cases from slice item 7:
+4. **Implemented 2026-08-21:** the isolated
+   `azure_language_shadow_enabled` seam leaves reviewer responses,
+   dispositions, rationales, audit, and claim output byte-identical and retains
+   only closed aggregate metrics. The separate `azure_language_enabled` path
+   remains active conservative consensus. Next measure, against the external
+   40–60 coder-labelled golden cases from slice item 7 (still pending):
    agreement rate, codes found only by TA4H, codes found only by the primary
    engine, veto precision against the known-correct answer, and added latency.
    The recorded disagreement set may grow; the live review queue remains

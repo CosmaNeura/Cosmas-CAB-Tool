@@ -82,6 +82,9 @@ param provisionAzureLanguage bool = false
 @description('Enable API-only Azure AI Language extraction. Keep false until Azure OpenAI inference and the isolated shadow milestone are approved.')
 param enableAzureLanguageExtraction bool = false
 
+@description('Run Azure AI Language in an isolated, non-influencing shadow lane. Requires primary Azure OpenAI and the provisioned Language account; mutually exclusive with active extraction.')
+param enableAzureLanguageShadow bool = false
+
 @description('Azure Text Analytics for health data-plane API version.')
 param azureLanguageApiVersion string = '2023-04-01'
 
@@ -232,7 +235,15 @@ var validatedAzureLanguageExtractionEnabled = enableAzureLanguageExtraction && !
   : enableAzureLanguageExtraction && !validatedAzureOpenAIInferenceEnabled
     ? fail('enableAzureLanguageExtraction requires enableAzureOpenAIInference')
     : enableAzureLanguageExtraction
+var validatedAzureLanguageShadowEnabled = enableAzureLanguageShadow && enableAzureLanguageExtraction
+  ? fail('enableAzureLanguageShadow and enableAzureLanguageExtraction are mutually exclusive')
+  : enableAzureLanguageShadow && !provisionAzureLanguage
+    ? fail('enableAzureLanguageShadow requires provisionAzureLanguage')
+    : enableAzureLanguageShadow && !validatedAzureOpenAIInferenceEnabled
+      ? fail('enableAzureLanguageShadow requires enableAzureOpenAIInference')
+      : enableAzureLanguageShadow
 var azureLanguageEnabledValue = validatedAzureLanguageExtractionEnabled ? 'true' : 'false'
+var azureLanguageShadowEnabledValue = validatedAzureLanguageShadowEnabled ? 'true' : 'false'
 var athenaConfigurationFieldsPresent = startsWith(toLower(athenaBaseUrl), 'https://') && startsWith(toLower(athenaTokenUrl), 'https://') && !empty(athenaClientId) && !empty(athenaScopes)
 var validatedAthenaSyncEnabled = enableAthenaSync && !provisionAthenaSync
   ? fail('enableAthenaSync requires provisionAthenaSync')
@@ -636,6 +647,10 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               value: azureLanguageEnabledValue
             }
             {
+              name: 'COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED'
+              value: azureLanguageShadowEnabledValue
+            }
+            {
               name: 'APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL'
               value: 'true'
             }
@@ -776,7 +791,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               name: 'AZURE_OPENAI_API_VERSION'
               value: azureOpenAIApiVersion
             }
-          ] : [], validatedAzureLanguageExtractionEnabled ? [
+          ] : [], validatedAzureLanguageExtractionEnabled || validatedAzureLanguageShadowEnabled ? [
             {
               name: 'AZURE_LANGUAGE_ENDPOINT'
               value: azureLanguage!.properties.endpoint
@@ -1176,6 +1191,7 @@ output azureOpenAIInferenceEnabled bool = validatedAzureOpenAIInferenceEnabled
 output azureOpenAISyntheticOnly bool = validatedAzureOpenAISyntheticOnly
 output azureLanguageProvisioned bool = provisionAzureLanguage
 output azureLanguageExtractionEnabled bool = validatedAzureLanguageExtractionEnabled
+output azureLanguageShadowEnabled bool = validatedAzureLanguageShadowEnabled
 output azureLanguageAccountName string = provisionAzureLanguage ? azureLanguage!.name : ''
 output azureLanguageEndpoint string = provisionAzureLanguage ? azureLanguage!.properties.endpoint : ''
 output athenaSyncProvisioned bool = provisionAthenaSync

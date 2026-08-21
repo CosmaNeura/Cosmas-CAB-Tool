@@ -292,11 +292,12 @@ CPT content stays under your license, outside the repository.
 The repository contains an optional second extraction engine, disabled by
 default. Azure's Text Analytics for health
 contributes clinical NER, assertion detection (negated / hypothetical /
-family-member) and UMLS entity links to ICD-10-CM; it never levels E/M and never
-makes a billing decision. Its internal consensus provenance supports future
-shadow evaluation; agreement badges and reviewer-facing provenance remain
-deferred until the approved surface milestone. A code only one engine found is
-held for a human, and either engine may veto.
+family-member) and UMLS entity links to ICD-10-CM; it never levels E/M. The
+isolated shadow mode queues TA4H on a bounded background worker, reduces its
+output to PHI-safe aggregate counts, and returns the primary result byte-for-byte
+without waiting for TA4H. Agreement badges and reviewer-facing
+provenance remain deferred. The separately gated active-consensus mode may hold
+single-engine codes or apply a TA4H veto.
 
 Off by default, on the same terms as inference, and managed-identity only — there
 is no key-based path. The API's existing user-assigned identity needs a
@@ -307,17 +308,21 @@ no new secret enters the deployment.
 # offline deterministic mock (development only; refused in staging/production)
 COSMANEURA_AZURE_LANGUAGE_MOCK=1 uvicorn cosmaneura_billing.api:app --port 8000
 
-# future inference-on milestone only; do not enable during provisioning
-# (the current switch runs active conservative consensus; it is not shadow mode)
-export COSMANEURA_AZURE_LANGUAGE_ENABLED=1
+# observation-only deployment; requires primary Azure OpenAI
+export COSMANEURA_AZURE_LANGUAGE_SHADOW_ENABLED=1
+export COSMANEURA_AZURE_LANGUAGE_ENABLED=0
 export AZURE_LANGUAGE_ENDPOINT='https://<resource>.cognitiveservices.azure.com'
 export AZURE_CLIENT_ID='<api-managed-identity-client-id>'
 uvicorn cosmaneura_billing.api:app --port 8000
+
+# fixed synthetic deployment acceptance (accepts no chart input)
+python -m cosmaneura_billing.ta4h_shadow_acceptance
 ```
 
 Input logging is opted out on every analysis submission (PHI), the transport is stdlib
-`urllib` so no HTTP/SDK dependency is added, and a TA4H outage degrades to
-single-engine operation rather than failing an encounter.
+`urllib` so no HTTP/SDK dependency is added, and a TA4H outage in shadow mode
+changes only aggregate health status. The external 40–60-case coder-labelled
+gold set is still pending; runtime aggregates are not accuracy evidence.
 `prove_no_upcode.py` proves that adding the engine cannot
 raise a level or grow the captured set, across 2,000 adversarial cases. See
 `docs/TA4H_INTEGRATION.md` for the consensus policy and rollout gates, and

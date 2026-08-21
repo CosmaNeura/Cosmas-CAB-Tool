@@ -28,6 +28,7 @@ LLM_LOG_EVENT = "llm_request"
 CHASE_WORKER_LOGGER_NAME = "cosmaneura_billing.chase.worker"
 CHASE_WORKER_LOG_EVENT = "chase_worker_run"
 AZURE_OPENAI_ACCEPTANCE_LOG_EVENT = "azure_openai_acceptance"
+TA4H_SHADOW_ACCEPTANCE_LOG_EVENT = "ta4h_shadow_acceptance"
 PACKAGE_LOGGER_NAME = "cosmaneura_billing"
 SERVICE_LOG_EVENT = "service_event"
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -108,6 +109,17 @@ _AZURE_OPENAI_ACCEPTANCE_CHECKS = frozenset({
     "safety_terminal_evidence",
     "strict_structured_output",
     "summary",
+})
+_TA4H_SHADOW_ACCEPTANCE_CHECKS = frozenset({
+    "configuration",
+    "forbidden_credentials_absent",
+    "managed_identity_client_routing",
+    "no_influence",
+    "observability_schema",
+    "private_dns",
+    "redirect_policy",
+    "summary",
+    "synthetic_analysis",
 })
 _CONTROLLED_LOGGERS = (
     PACKAGE_LOGGER_NAME,
@@ -736,6 +748,35 @@ def is_safe_azure_openai_acceptance_event(payload: object) -> bool:
     )
 
 
+def is_safe_ta4h_shadow_acceptance_event(payload: object) -> bool:
+    """Validate the fixed synthetic shadow-deployment acceptance schema."""
+
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("event") != TA4H_SHADOW_ACCEPTANCE_LOG_EVENT:
+        return False
+    check = payload.get("check")
+    status = payload.get("status")
+    if check == "summary":
+        if set(payload) != {
+            "event", "check", "status", "passed", "failed", "skipped",
+        }:
+            return False
+        return (
+            status in {"pass", "fail"}
+            and all(
+                type(payload.get(field)) is int
+                and 0 <= payload[field] <= 100
+                for field in ("passed", "failed", "skipped")
+            )
+        )
+    return (
+        set(payload) == {"event", "check", "status"}
+        and check in _TA4H_SHADOW_ACCEPTANCE_CHECKS - {"summary"}
+        and status in {"pass", "fail", "skip"}
+    )
+
+
 __all__ = [
     "AZURE_OPENAI_ACCEPTANCE_LOG_EVENT",
     "HTTP_LOG_EVENT",
@@ -752,11 +793,13 @@ __all__ = [
     "PHISafeServiceFormatter",
     "REQUEST_ID_HEADER",
     "SERVICE_LOG_EVENT",
+    "TA4H_SHADOW_ACCEPTANCE_LOG_EVENT",
     "UNMATCHED_ROUTE",
     "configure_json_logging",
     "generic_error_payload",
     "is_safe_http_event",
     "is_safe_azure_openai_acceptance_event",
+    "is_safe_ta4h_shadow_acceptance_event",
     "is_safe_chase_worker_event",
     "is_safe_llm_event",
     "is_valid_request_id",

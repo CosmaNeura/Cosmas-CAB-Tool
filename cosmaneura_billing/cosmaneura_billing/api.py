@@ -556,6 +556,7 @@ def health(request: Request) -> dict[str, Any]:
         "cptStatus": _cpt_status(orch.cpt, settings),
         "denialPriors": orch.denial_priors.size,
         "encounters": len(_request_encounter_store(request).all()),
+        "ta4h": orch.ta4h_observability(),
     }
 
 
@@ -1466,7 +1467,16 @@ async def _lifespan(application: FastAPI):
         yield
     finally:
         application.state.ready = False
-        llm = getattr(application.state.orchestrator, "llm", None)
+        active_orchestrator = application.state.orchestrator
+        shutdown_orchestrator = getattr(active_orchestrator, "shutdown", None)
+        if callable(shutdown_orchestrator):
+            try:
+                shutdown_orchestrator()
+            except Exception:
+                # Shadow shutdown is bounded and best effort; no secondary
+                # exception may delay or escape service termination.
+                pass
+        llm = getattr(active_orchestrator, "llm", None)
         shutdown_metrics = getattr(llm, "shutdown_metrics", None)
         if callable(shutdown_metrics):
             try:

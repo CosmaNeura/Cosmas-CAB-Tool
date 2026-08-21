@@ -26,6 +26,7 @@
     "azureOpenAIApiVersion": { "value": "2025-04-01-preview" },
     "provisionAzureLanguage": { "value": false },
     "enableAzureLanguageExtraction": { "value": false },
+    "enableAzureLanguageShadow": { "value": false },
     "azureLanguageApiVersion": { "value": "2023-04-01" },
     "provisionAthenaSync": { "value": false },
     "enableAthenaSync": { "value": false },

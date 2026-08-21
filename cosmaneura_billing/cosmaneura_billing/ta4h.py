@@ -528,7 +528,7 @@ def get_default_ta4h_client(settings: Settings | None = None) -> TA4HClient | No
     config = settings or Settings.from_env()
     if config.azure_language_mock:
         return MockTA4H()
-    if config.azure_language_enabled:
+    if config.azure_language_enabled or config.azure_language_shadow_enabled:
         return AzureLanguageTA4H(settings=config)
     return None
 
