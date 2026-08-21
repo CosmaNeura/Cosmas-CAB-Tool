@@ -168,8 +168,10 @@ adds no response or audit line and never includes exception text in metrics.
 Active-consensus mode retains its prior single-engine fallback audit line
 (`CONSENSUS secondary extraction engine unavailable …`) and concurrent engine
 execution. Shadow work starts on a bounded daemon worker after the primary
-extraction; a full queue drops the observation and a stuck TA4H call cannot
-delay reviewer output or process shutdown.
+extraction. Its queued `VisitBundle` is a recursive detached copy, including
+mutable code lists, so a buggy secondary cannot race or mutate any value the
+primary pipeline still reads. A full queue drops the observation and a stuck
+TA4H call cannot delay reviewer output or process shutdown.
 
 Response parsing is defensive: an unrecognised or off-shape entity is dropped
 rather than raised, so a service-side schema change degrades to "fewer

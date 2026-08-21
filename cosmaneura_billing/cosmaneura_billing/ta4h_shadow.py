@@ -12,6 +12,7 @@ reviewer output, consume an unbounded queue, or hold process termination open.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import (
@@ -284,6 +285,11 @@ class TA4HShadowRunner:
 
         try:
             primary_codes = _diagnosis_codes(primary_suggestions)
+            # The primary pipeline continues to read ``bundle`` after this
+            # dispatch. Give the untrusted secondary a recursively detached
+            # copy so mutation of submitted_icd10 (or any future nested field)
+            # cannot race or influence reviewer output.
+            shadow_bundle = deepcopy(bundle)
         except Exception:
             self._safe_drop()
             return False
@@ -291,7 +297,7 @@ class TA4HShadowRunner:
             self._safe_drop()
             return False
 
-        task = _ShadowTask(bundle, primary_codes, perf_counter())
+        task = _ShadowTask(shadow_bundle, primary_codes, perf_counter())
         with self._lock:
             if self._closed:
                 self._slots.release()

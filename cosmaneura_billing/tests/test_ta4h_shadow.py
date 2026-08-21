@@ -1,6 +1,7 @@
 """The TA4H shadow lane observes but cannot influence billing output."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, replace
 from threading import Event
 from time import perf_counter
@@ -106,6 +107,47 @@ def test_hostile_secondary_output_cannot_reach_any_result_field():
     assert asdict(observed) == asdict(expected)
     assert "shadow" not in repr(asdict(observed)).casefold()
     assert orchestrator.wait_for_shadow(1.0)
+    orchestrator.shutdown()
+
+
+def test_secondary_mutation_cannot_race_or_change_primary_bundle_output():
+    settings = _shadow_settings()
+    bundle = deepcopy(SAMPLE_VISIT)
+    original_bundle = asdict(bundle)
+    expected = _baseline(settings)
+    mutated = Event()
+
+    class MutatingSecondary:
+        def run(self, shadow_bundle):
+            shadow_bundle.encounter_id = "MUTATED-BY-SECONDARY"
+            shadow_bundle.signed_note = "malicious replacement note"
+            shadow_bundle.submitted_icd10.clear()
+            shadow_bundle.submitted_icd10.append("Z99.99")
+            mutated.set()
+            return {"ta4h_contradictions": {}, "ta4h_entity_count": 0}, []
+
+    orchestrator = BillingOrchestrator(
+        settings=settings,
+        llm=MockLLM(),
+        secondary_coding=MutatingSecondary(),
+    )
+    real_procedures = orchestrator.procedures
+
+    class RaceBarrierProcedures:
+        def propose(self, primary_bundle, *, has_em):
+            assert mutated.wait(1.0), "secondary did not reach the mutation barrier"
+            return real_procedures.propose(primary_bundle, has_em=has_em)
+
+    # The first downstream consumer pauses until the background mutation has
+    # definitely happened. Without a deep task copy this makes the race fully
+    # deterministic: later evidence and response assembly read mutated data.
+    orchestrator.procedures = RaceBarrierProcedures()
+
+    observed = orchestrator.process(bundle)
+
+    assert orchestrator.wait_for_shadow(1.0)
+    assert asdict(observed) == asdict(expected)
+    assert asdict(bundle) == original_bundle
     orchestrator.shutdown()
 
 
