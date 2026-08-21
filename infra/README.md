@@ -248,7 +248,7 @@ The API startup performs its own database/schema and access-audit checks before 
 returns 200, so a missing migration, unreachable database, or omitted bundled
 NCCI/coverage data fails closed. The app has no public ingress at this stage.
 
-### Load the fixed synthetic demo encounter
+### Load the fixed synthetic demo encounters
 
 The production PostgreSQL store never auto-seeds a chart. For a reviewed
 synthetic-only demo, run the fixed-purpose seed command through the existing
@@ -265,21 +265,35 @@ az containerapp job start \
 ```
 
 The command accepts no chart, file, or identifier argument. It loads only the
-four cases in `cosmaneura-demo-rc-v1` from the installed package, checks the
-pinned whole-pack and per-case SHA-256 digests, proves the configured
-practice/tenant binding inside the database transaction, and inserts source
-`synthetic_demo_release_candidate`. An exact retry reports `replayed`; any
-different row occupying one of the four case IDs reports `conflict`, rolls back
-the entire invocation, and is never updated. Its stdout is limited to the fixed
-pack ID, closed case/insert/replay counts, status, and whole-pack digest.
+four cases in `cosmaneura-demo-rc-v1` and the eight source-only cases in
+`cosmaneura-demo-source-extension-v1` from the installed package. It checks both
+pinned whole-pack digests, all per-case SHA-256 digests, and the combined seed
+digest; proves the exact `ENABLE ALWAYS` migration-008 row and truncate guards,
+their invoker-security function owner/search path, and the exact table owner;
+proves the configured practice/tenant binding inside the database transaction;
+and inserts reserved source `synthetic_demo_release_candidate`.
+An exact retry reports `replayed`; any different row occupying one of the
+twelve case IDs reports `conflict`, rolls back the entire invocation, and is
+never updated. Its stdout is limited to the fixed seed ID, closed
+case/insert/replay counts, status, and combined digest.
 
 Require a successful execution, then verify the assigned demo administrator
-can list and open `SYN-RC-0001` through `SYN-RC-0004`. With Azure OpenAI
+can list and open `SYN-RC-0001` through `SYN-RC-0012`. With Azure OpenAI
 inference disabled, every case must display an explicit degraded/offline notice
-and no claim suggestions. The
-tracked expectations are evaluation assertions, not engine output, and must
-never be rendered as a claim. Do not substitute `ENC-100237`, hand-edit the
-database row, or use this command for real/de-identified records.
+and no claim suggestions. The original pack's tracked expectations are
+evaluation assertions, not engine output, and must never be rendered as a
+claim. The extension contains no evaluator labels. Migration 008 rejects direct
+runtime or worker SQL that claims, changes, or deletes the reserved source and
+owner-gates table truncation. Those roles have no table `TRIGGER` privilege,
+schema `CREATE`, or `SET` authority for `session_replication_role`; both guards
+remain enabled in replica mode. Only the table-owning migration identity can
+seed or perform reviewed cleanup. Do not substitute `ENC-100237`, hand-edit a
+database row, or use this command for real or deidentified records.
+
+Before any rollback of migration 008, close API, worker, and sync ingress and
+scheduling. With the exact table owner, select every bound practice in turn,
+delete and verify zero reserved-source rows in each practice, and keep ingress
+closed through rollback of 007. Forced RLS makes one unscoped count inadequate.
 
 ### Prepare the dormant Athena sandbox lane
 
@@ -574,10 +588,11 @@ email:
   no identity has a vault-scoped `Key Vault Secrets User` grant. In
   `record_only`, the worker job must have no `acs-email-connection-string`
   reference and the API must never have one.
-- The migration execution succeeds with migrations `004`–`006 applied, and
+- The migration execution succeeds with migrations `004`–`008 applied, and
   both runtime roles are practice-bound. The API role cannot claim/finalize
   outbox deliveries; the worker role cannot read identity, encounter, feedback,
-  or access-audit tables or create policy approvals/releases.
+  or access-audit tables or create policy approvals/releases. Neither role can
+  claim or mutate the reserved synthetic-demo encounter provenance.
 - With messaging disabled, app and worker report scheduler enabled,
   `record_only`, and both patient-messaging latches false. An Admin can register,
   approve, and activate the exact server-configured policy. Durable detection

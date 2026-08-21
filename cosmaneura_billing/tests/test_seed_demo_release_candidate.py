@@ -41,6 +41,21 @@ class _Connection:
 
     def execute(self, sql, parameters):
         compact = " ".join(sql.split())
+        if "FROM pg_catalog.pg_class AS relation" in compact:
+            assert parameters == (
+                seeder.IMMUTABILITY_TRIGGER,
+                seeder.IMMUTABILITY_TRUNCATE_TRIGGER,
+            )
+            assert "row_guard.tgenabled = 'A'" in compact
+            assert "row_guard.tgtype = 31" in compact
+            assert "row_guard.tgqual IS NULL" in compact
+            assert "truncate_guard.tgenabled = 'A'" in compact
+            assert "truncate_guard.tgtype = 34" in compact
+            assert "truncate_guard.tgqual IS NULL" in compact
+            assert "guard_function.proowner = relation.relowner" in compact
+            assert "NOT guard_function.prosecdef" in compact
+            assert "ARRAY['search_path=pg_catalog']::text[]" in compact
+            return _Result(self.database["authority"])
         if "FROM practices AS p" in compact:
             practice_id, tenant_id = parameters
             binding = self.database["binding"]
@@ -128,6 +143,11 @@ class _Context:
 @pytest.fixture
 def fake_postgres(monkeypatch):
     database = {
+        "authority": {
+            "current_user": "migration_owner",
+            "table_owner": "migration_owner",
+            "immutability_guard": True,
+        },
         "binding": {
             "practice_id": PRACTICE_ID,
             "tenant_id": TENANT_ID,
@@ -152,20 +172,33 @@ def test_prepared_input_is_the_complete_digest_pinned_pack():
     second = seeder.prepare_synthetic_demo_seed()
 
     assert first == second
-    assert tuple(case.case_id for case in first.cases) == seeder.CASE_IDS
+    assert tuple(case.case_id for case in first.cases) == seeder.SEED_CASE_IDS
     assert tuple(case.visit["encounter_id"] for case in first.cases) == (
         "SYN-RC-0001",
         "SYN-RC-0002",
         "SYN-RC-0003",
         "SYN-RC-0004",
+        "SYN-RC-0005",
+        "SYN-RC-0006",
+        "SYN-RC-0007",
+        "SYN-RC-0008",
+        "SYN-RC-0009",
+        "SYN-RC-0010",
+        "SYN-RC-0011",
+        "SYN-RC-0012",
     )
     assert seeder.PACK_ID == "cosmaneura-demo-rc-v1"
+    assert seeder.EXTENSION_PACK_ID == "cosmaneura-demo-source-extension-v1"
     assert seeder.SOURCE == "synthetic_demo_release_candidate"
-    assert first.digest == seeder.EXPECTED_PACK_DIGEST
+    assert first.digest == seeder.EXPECTED_SEED_DIGEST
     assert {case.case_id: case.digest for case in first.cases} == (
-        seeder.EXPECTED_CASE_DIGESTS
+        seeder.EXPECTED_CASE_DIGESTS | seeder.EXPECTED_EXTENSION_CASE_DIGESTS
     )
-    for digest in (first.digest, *seeder.EXPECTED_CASE_DIGESTS.values()):
+    for digest in (
+        first.digest,
+        *seeder.EXPECTED_CASE_DIGESTS.values(),
+        *seeder.EXPECTED_EXTENSION_CASE_DIGESTS.values(),
+    ):
         assert len(digest) == 64
         assert set(digest) <= set("0123456789abcdef")
 
@@ -195,6 +228,24 @@ def test_changed_case_content_fails_its_fixed_digest(monkeypatch):
         seeder.prepare_synthetic_demo_seed()
 
 
+def test_changed_extension_content_fails_before_database_context(monkeypatch):
+    changed = deepcopy(seeder.load_demo_source_extension())
+    changed["cases"][3]["visit"]["signed_note"] += " Synthetic change."
+    monkeypatch.setattr(
+        seeder,
+        "EXPECTED_EXTENSION_PACK_DIGEST",
+        seeder._canonical_digest(changed),
+    )
+    monkeypatch.setattr(seeder, "load_demo_source_extension", lambda: changed)
+
+    def unexpected_context(*_args, **_kwargs):
+        raise AssertionError("database access must remain closed")
+
+    monkeypatch.setattr(seeder, "PostgresContext", unexpected_context)
+    with pytest.raises(seeder.SyntheticDemoSeedError, match="case digest changed"):
+        seeder.seed_synthetic_demo_release_candidate(_settings())
+
+
 def test_first_seed_inserts_all_cases_and_exact_replay_is_a_noop(fake_postgres):
     database, contexts = fake_postgres
 
@@ -203,28 +254,114 @@ def test_first_seed_inserts_all_cases_and_exact_replay_is_a_noop(fake_postgres):
     replayed = seeder.seed_synthetic_demo_release_candidate(_settings())
 
     assert inserted == {
-        "pack_id": seeder.PACK_ID,
-        "case_count": 4,
-        "inserted_count": 4,
+        "pack_id": seeder.SEED_ID,
+        "case_count": 12,
+        "inserted_count": 12,
         "replayed_count": 0,
         "status": "inserted",
-        "digest": seeder.EXPECTED_PACK_DIGEST,
+        "digest": seeder.EXPECTED_SEED_DIGEST,
     }
     assert replayed == {
         **inserted,
         "inserted_count": 0,
-        "replayed_count": 4,
+        "replayed_count": 12,
         "status": "replayed",
     }
     assert database["encounters"] == snapshot
-    assert set(database["encounters"]) == set(seeder.CASE_IDS)
+    assert set(database["encounters"]) == set(seeder.SEED_CASE_IDS)
     assert all(
         row["source"] == seeder.SOURCE
         for row in database["encounters"].values()
     )
     assert [params[1] for params in contexts[0].connection_object.insert_parameters] == (
-        list(seeder.CASE_IDS)
+        list(seeder.CASE_IDS) + list(seeder.EXTENSION_CASE_IDS)
     )
+
+
+def test_deployed_v1_state_adds_eight_then_replays_all_twelve(fake_postgres):
+    database, _ = fake_postgres
+    prepared = seeder.prepare_synthetic_demo_seed()
+    for case in prepared.cases[:4]:
+        database["encounters"][case.case_id] = {
+            "practice_id": PRACTICE_ID,
+            **seeder._expected_persisted_values(case),
+        }
+
+    first = seeder.seed_synthetic_demo_release_candidate(_settings())
+    snapshot = deepcopy(database["encounters"])
+    second = seeder.seed_synthetic_demo_release_candidate(_settings())
+
+    assert first == {
+        "pack_id": seeder.SEED_ID,
+        "case_count": 12,
+        "inserted_count": 8,
+        "replayed_count": 4,
+        "status": "inserted",
+        "digest": seeder.EXPECTED_SEED_DIGEST,
+    }
+    assert second == {
+        **first,
+        "inserted_count": 0,
+        "replayed_count": 12,
+        "status": "replayed",
+    }
+    assert database["encounters"] == snapshot
+    assert set(database["encounters"]) == set(seeder.SEED_CASE_IDS)
+
+
+@pytest.mark.parametrize(
+    "authority_change",
+    [
+        {"current_user": "runtime_role"},
+        {"immutability_guard": False},
+        {"table_owner": None},
+    ],
+)
+def test_unproven_database_authority_fails_before_binding_or_insert(
+    fake_postgres, authority_change,
+):
+    database, contexts = fake_postgres
+    database["authority"].update(authority_change)
+
+    with pytest.raises(seeder.SyntheticDemoDatabaseAuthorityError):
+        seeder.seed_synthetic_demo_release_candidate(_settings())
+
+    assert database["encounters"] == {}
+    assert contexts[0].connection_object.insert_parameters == []
+
+
+def test_extension_conflict_rolls_back_all_new_cases_from_deployed_v1_state(
+    fake_postgres,
+):
+    database, contexts = fake_postgres
+    prepared = seeder.prepare_synthetic_demo_seed()
+    by_id = {case.case_id: case for case in prepared.cases}
+    for case_id in seeder.CASE_IDS:
+        case = by_id[case_id]
+        database["encounters"][case_id] = {
+            "practice_id": PRACTICE_ID,
+            **seeder._expected_persisted_values(case),
+        }
+    conflicting_id = seeder.EXTENSION_CASE_IDS[2]
+    conflicting = by_id[conflicting_id]
+    database["encounters"][conflicting_id] = {
+        "practice_id": PRACTICE_ID,
+        **seeder._expected_persisted_values(conflicting),
+        "signed_note": "different synthetic content",
+    }
+    snapshot = deepcopy(database["encounters"])
+
+    with pytest.raises(seeder.SyntheticDemoConflict):
+        seeder.seed_synthetic_demo_release_candidate(_settings())
+
+    assert database["encounters"] == snapshot
+    attempted = [
+        parameters[1]
+        for parameters in contexts[-1].connection_object.insert_parameters
+    ]
+    assert seeder.EXTENSION_CASE_IDS[:3] == tuple(
+        case_id for case_id in attempted if case_id in seeder.EXTENSION_CASE_IDS
+    )[:3]
 
 
 def test_mixed_exact_replay_and_new_cases_reports_closed_counts(fake_postgres):
@@ -236,10 +373,10 @@ def test_mixed_exact_replay_and_new_cases_reports_closed_counts(fake_postgres):
     result = seeder.seed_synthetic_demo_release_candidate(_settings())
 
     assert result["status"] == "inserted"
-    assert result["case_count"] == 4
+    assert result["case_count"] == 12
     assert result["inserted_count"] == 2
-    assert result["replayed_count"] == 2
-    assert set(database["encounters"]) == set(seeder.CASE_IDS)
+    assert result["replayed_count"] == 10
+    assert set(database["encounters"]) == set(seeder.SEED_CASE_IDS)
 
 
 @pytest.mark.parametrize(
@@ -329,12 +466,12 @@ def test_cli_rejects_all_arguments_without_reflecting_them(capsys, monkeypatch):
         "digest",
     }
     assert payload == {
-        "pack_id": seeder.PACK_ID,
-        "case_count": 4,
+        "pack_id": seeder.SEED_ID,
+        "case_count": 12,
         "inserted_count": 0,
         "replayed_count": 0,
         "status": "arguments_rejected",
-        "digest": seeder.EXPECTED_PACK_DIGEST,
+        "digest": seeder.EXPECTED_SEED_DIGEST,
     }
 
 
@@ -362,5 +499,5 @@ def test_cli_failure_output_is_closed_and_phi_free(capsys, monkeypatch):
         "digest",
     }
     assert payload["status"] == "failed"
-    assert payload["case_count"] == 4
+    assert payload["case_count"] == 12
     assert payload["inserted_count"] == payload["replayed_count"] == 0

@@ -17,6 +17,7 @@ gate, not a legal opinion. No bulk dataset was downloaded during this audit.
 | **ACI-Bench** | [Repository](https://github.com/wyim/aci-bench) is CC BY 4.0. The [peer-reviewed data descriptor](https://www.nature.com/articles/s41597-023-02487-3) says domain experts created two subsets from experience and studied encounters, while a clinician and volunteer role-played the third; it distinguishes these from the real comparison corpus. | Constructed/role-played encounters, not real patient encounters. Metadata and text can still contain identifier-shaped fictional values. | **Training candidate and evaluation, with attribution**, after pinning the release and running identifier/content screening. It is not part of the bounded release demo pack. |
 | **MTS-Dialog** | [Repository](https://github.com/abachaa/MTS-Dialog) is CC BY 4.0 and describes 1,700 conversation/note pairs. The [paper landing page](https://aclanthology.org/2023.eacl-main.168/) reviewed in this audit does not establish whether every source dialogue is wholly synthetic. | **Unresolved for the synthetic-only gate.** A permissive copyright license does not establish absence of real or deidentified patient content. | **Quarantined from release demos and training** until a source-method record proves the patient-data lineage. Existing bundled files may remain for legacy tests but must not be represented as wholly synthetic on this audit alone. |
 | **`cosmaneura-demo-rc-v1`** | Authored in-repository solely for this release candidate; validated by `cosmaneura_billing.corpus.demo_release_candidate`. | Wholly synthetic; no real or deidentified record was used or adapted; direct-identifier-shaped values are prohibited. | **Demo and evaluation only; training prohibited.** The expected captures are billable ICD-10-CM codes explicitly written in exact signed-note evidence. No CPT expectation or proprietary descriptor is present. |
+| **`cosmaneura-demo-source-extension-v1`** | Authored in-repository as a separately digest-pinned extension; validated by `cosmaneura_billing.corpus.demo_source_extension`. | Wholly synthetic; no real or deidentified record was used or adapted. URL, IP, ZIP, address, long-identifier, control/bidirectional-character, and direct-identifier-shaped values are prohibited. | **Demo and blinded evaluation only; training prohibited.** The packaged artifact contains source encounters only: no coding tokens, expected outputs, labels, CPT/E/M expectations, or submitted codes. The blinded review workflow is kept outside the installed package and image. |
 
 ## Tracked-repository audit
 
@@ -55,5 +56,6 @@ For the bounded pack, run:
 ```bash
 cd cosmaneura_billing
 python -m cosmaneura_billing.corpus.demo_release_candidate
-pytest tests/test_demo_release_candidate_pack.py
+python -m cosmaneura_billing.corpus.demo_source_extension
+pytest tests/test_demo_release_candidate_pack.py tests/test_demo_source_extension_pack.py
 ```

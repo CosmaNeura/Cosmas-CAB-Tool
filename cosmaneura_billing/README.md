@@ -100,12 +100,18 @@ membership changes use the reviewed owner-only CLI documented in
 
 The durable encounter store is also empty by default; production never imports
 the local `ENC-100237` fixture. A synthetic-only release demo may load exactly
-the four cases in `cosmaneura-demo-rc-v1` with
+the four cases in `cosmaneura-demo-rc-v1` plus the eight source-only cases in
+`cosmaneura-demo-source-extension-v1` with
 `python -m cosmaneura_billing.seed_demo_release_candidate` through the private
 migration job, following the bounded procedure in `../infra/README.md`. The
-command accepts no payload, verifies the packaged whole-pack and per-case
-digests plus the practice binding, inserts the pack atomically, is an
-exact-replay no-op, and rolls back without overwriting if any case conflicts.
+command accepts no payload, verifies both packaged whole-pack digests, all
+per-case digests, the combined seed digest, the exact `ENABLE ALWAYS` database
+immutability guards and function shape, the table-owning migration identity,
+and the practice binding. It inserts all twelve cases atomically, is an
+exact-replay no-op, and rolls back
+without overwriting if any case conflicts. The extension has no embedded coding
+labels; its blinded evaluation workflow is in
+`docs/SYNTHETIC_EXTENSION_EVALUATION.md` and is excluded from the image.
 
 **Offline mode covers one encounter.** Unless
 `COSMANEURA_AZURE_OPENAI_ENABLED=true` and the complete Azure endpoint,
