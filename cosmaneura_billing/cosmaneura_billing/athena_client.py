@@ -1,14 +1,16 @@
 """Mock-first boundary for the future Athena sandbox read integration.
 
-This module intentionally does not claim to know Athena's endpoint paths,
-OAuth exchange, scopes, or response schema.  Those details must come from the
-approved sandbox contract.  The boundary is split into three independently
-testable pieces:
+This module pins only the Preview origin, OAuth metadata locations, public
+synthetic practice, and portal-selected scope verified during access review.
+It intentionally does not claim to know Athena's proprietary resource paths,
+query parameters, OAuth wire exchange, or response schema.  Those details
+must come from the approved sandbox contract.  The boundary is split into
+three independently testable pieces:
 
 * :class:`MockAthenaClient` supplies deterministic pages made only from the
   repository's wholly synthetic release-candidate pack;
-* :class:`AthenaHTTPTransport` is a bounded stdlib HTTP transport with an
-  injected bearer-token provider; and
+* :class:`AthenaHTTPTransport` is a bounded, GET-only stdlib transport behind
+  an empty-until-confirmed named-operation allowlist; and
 * :class:`AthenaSandboxClient` composes the transport with an explicitly
   supplied contract adapter once the real contract has been reviewed.
 
@@ -26,6 +28,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from enum import Enum
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
 from .corpus.demo_release_candidate import load_demo_release_candidate
@@ -33,11 +37,20 @@ from .schemas import VisitBundle
 
 
 NORMALIZED_SCHEMA_VERSION = "cosmaneura-athena-normalized-v1"
+ATHENA_PREVIEW_ORIGIN = "https://api.preview.platform.athenahealth.com"
+ATHENA_PREVIEW_TOKEN_URL = ATHENA_PREVIEW_ORIGIN + "/oauth2/v1/token"
+ATHENA_PREVIEW_INTROSPECTION_URL = (
+    ATHENA_PREVIEW_ORIGIN + "/oauth2/v1/introspect"
+)
+ATHENA_PREVIEW_PRACTICE_ID = "195900"
+ATHENA_PREVIEW_SCOPE = "athena/service/Athenanet.MDP.*"
 MAX_PAGE_RECORDS = 100
 MAX_PAGES = 100
 MAX_RESPONSE_BYTES = 1_048_576
-MAX_REQUEST_BYTES = 65_536
 MAX_CURSOR_CHARS = 512
+MAX_TOKEN_CHARS = 16_384
+# Local acceptance bound, not a claim about Athena's issued token lifetime.
+MAX_TOKEN_FUTURE_SECONDS = 3_600
 
 _PAGE_KEYS = {"schema_version", "records", "next_cursor", "checkpoint"}
 _RECORD_KEYS = {"source_record_id", "source_version", "visit"}
@@ -92,6 +105,10 @@ class AthenaTimeoutError(AthenaClientError):
 
 class AthenaRetryExhausted(AthenaClientError):
     code = "ATHENA_RETRY_EXHAUSTED"
+
+
+class AthenaOperationUnavailable(AthenaClientError):
+    code = "ATHENA_OPERATION_UNAVAILABLE"
 
 
 def _safe_string(value: Any, *, minimum: int = 1, maximum: int) -> str:
@@ -457,23 +474,336 @@ def validate_athena_https_url(value: str, *, base_url: str | None = None) -> str
     return value
 
 
+def validate_athena_preview_resource_url(value: str) -> str:
+    """Validate one canonical resource URL on the fixed Preview origin.
+
+    The operation contract creates URLs from literal path templates.  This
+    second check is intentionally redundant so a manually constructed or
+    mutated request cannot use credentials on another origin, a traversal
+    path, or an encoded-path alias.
+    """
+
+    validated = validate_athena_https_url(
+        value,
+        base_url=ATHENA_PREVIEW_ORIGIN,
+    )
+    parsed = urllib.parse.urlsplit(validated)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "api.preview.platform.athenahealth.com"
+        or not parsed.path.startswith("/")
+        or parsed.path == "/"
+        or "//" in parsed.path
+        or "\\" in parsed.path
+        or "%" in parsed.path
+    ):
+        raise AthenaSchemaError() from None
+    segments = parsed.path.split("/")[1:]
+    if not segments or any(segment in {"", ".", ".."} for segment in segments):
+        raise AthenaSchemaError() from None
+    return validated
+
+
+class AthenaPreviewOperation(str, Enum):
+    """Semantic read operations awaiting vendor endpoint confirmation.
+
+    Names here describe the requested workflow; they do not assert endpoint
+    paths or query parameter names.  An operation is unusable until a reviewed
+    literal spec is added to ``_ATHENA_PREVIEW_OPERATION_ALLOWLIST``.
+    """
+
+    PRACTICE_REFERENCE = "practice_reference"
+    DEPARTMENT_REFERENCE = "department_reference"
+    PATIENT_LOOKUP = "patient_lookup"
+    APPOINTMENTS = "appointments"
+    ENCOUNTERS = "encounters"
+    ENCOUNTER_DOCUMENTATION = "encounter_documentation"
+    ENCOUNTER_SERVICES = "encounter_services"
+    COVERAGE = "coverage"
+    CLAIMS = "claims"
+    CLAIM_DETAIL = "claim_detail"
+    CLAIM_TRANSACTIONS = "claim_transactions"
+
+
+@dataclass(frozen=True)
+class _AthenaPreviewOperationSpec:
+    path_template: str
+    query_keys: frozenset[str]
+
+
+# Deliberately empty.  The authenticated scope review confirmed the Preview
+# origin/practice/scope, but not a minimum set of proprietary endpoint paths or
+# their query keys.  Tests inject a private fixture spec to exercise the guard;
+# production operations remain fail-closed until vendor confirmation.
+_ATHENA_PREVIEW_OPERATION_ALLOWLIST: Mapping[
+    AthenaPreviewOperation,
+    _AthenaPreviewOperationSpec,
+] = MappingProxyType({})
+
+
+def _canonical_preview_query(
+    query: Mapping[str, str] | None,
+    *,
+    allowed_keys: frozenset[str],
+) -> tuple[tuple[str, str], ...]:
+    if query is None:
+        return ()
+    if not isinstance(query, Mapping):
+        raise AthenaSchemaError() from None
+    normalized: list[tuple[str, str]] = []
+    for key, value in query.items():
+        if key not in allowed_keys:
+            raise AthenaSchemaError() from None
+        safe_key = _safe_string(key, maximum=64)
+        safe_value = _safe_string(value, maximum=MAX_CURSOR_CHARS)
+        if (
+            any(not 33 <= ord(char) <= 126 for char in safe_key)
+            or any(not 33 <= ord(char) <= 126 for char in safe_value)
+            or any(char in safe_value for char in ("/", "\\", "%"))
+        ):
+            raise AthenaSchemaError() from None
+        normalized.append((safe_key, safe_value))
+    if len(normalized) != len(set(key for key, _ in normalized)):
+        raise AthenaSchemaError() from None
+    return tuple(sorted(normalized))
+
+
+@dataclass(frozen=True, repr=False)
+class AthenaRequest:
+    """One canonical GET generated by the named Preview operation contract."""
+
+    operation: AthenaPreviewOperation
+    url: str
+    query: tuple[tuple[str, str], ...] = ()
+    method: str = "GET"
+
+    def __repr__(self) -> str:
+        return "AthenaRequest(<redacted>)"
+
+
+@dataclass(frozen=True, kw_only=True)
+class AthenaPreviewOperationContract:
+    """Build only literal, vendor-confirmed AthenaOne Preview reads."""
+
+    vendor_practice_id: str = ATHENA_PREVIEW_PRACTICE_ID
+
+    def __post_init__(self) -> None:
+        if self.vendor_practice_id != ATHENA_PREVIEW_PRACTICE_ID:
+            raise AthenaSchemaError() from None
+
+    def build_request(
+        self,
+        operation: AthenaPreviewOperation,
+        *,
+        query: Mapping[str, str] | None = None,
+    ) -> AthenaRequest:
+        if not isinstance(operation, AthenaPreviewOperation):
+            raise AthenaSchemaError() from None
+        spec = _ATHENA_PREVIEW_OPERATION_ALLOWLIST.get(operation)
+        if spec is None:
+            raise AthenaOperationUnavailable() from None
+        template = spec.path_template
+        placeholder = "{vendor_practice_id}"
+        if (
+            not isinstance(template, str)
+            or template.count(placeholder) != 1
+            or not template.startswith("/")
+            or "//" in template
+            or "\\" in template
+            or "%" in template
+            or "?" in template
+            or "#" in template
+        ):
+            raise AthenaSchemaError() from None
+        canonical_query = _canonical_preview_query(
+            query,
+            allowed_keys=spec.query_keys,
+        )
+        path = template.replace(placeholder, self.vendor_practice_id)
+        url = ATHENA_PREVIEW_ORIGIN + path
+        if canonical_query:
+            url += "?" + urllib.parse.urlencode(canonical_query)
+        validate_athena_preview_resource_url(url)
+        return AthenaRequest(
+            operation=operation,
+            url=url,
+            query=canonical_query,
+        )
+
+    def validate_request(self, request: AthenaRequest) -> str:
+        """Rebuild and compare a request before any token is obtained."""
+
+        if not isinstance(request, AthenaRequest) or request.method != "GET":
+            raise AthenaSchemaError() from None
+        try:
+            query = dict(request.query)
+        except (TypeError, ValueError):
+            raise AthenaSchemaError() from None
+        rebuilt = self.build_request(
+            request.operation,
+            query=query,
+        )
+        if request != rebuilt:
+            raise AthenaSchemaError() from None
+        return validate_athena_preview_resource_url(request.url)
+
+
+def _validated_now(value: float | int) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (float, int))
+        or not 0 <= float(value) < 10**11
+    ):
+        raise AthenaAuthenticationError() from None
+    return float(value)
+
+
+def _validate_exact_preview_scope(value: Any, requested_scope: str) -> str:
+    if (
+        requested_scope != ATHENA_PREVIEW_SCOPE
+        or value != requested_scope
+        or not isinstance(value, str)
+    ):
+        raise AthenaAuthenticationError() from None
+    return value
+
+
+@dataclass(frozen=True, repr=False)
+class AthenaAccessToken:
+    """Validated token metadata; representation never includes the bearer."""
+
+    access_token: str
+    scope: str
+    expires_at: float
+
+    def __repr__(self) -> str:
+        return "AthenaAccessToken(<redacted>)"
+
+
+@dataclass(frozen=True, repr=False)
+class AthenaTokenIntrospection:
+    active: bool
+    scope: str
+    expires_at: float
+    client_id: str | None
+
+    def __repr__(self) -> str:
+        return "AthenaTokenIntrospection(<redacted>)"
+
+
+def validate_athena_token_response(
+    payload: Mapping[str, Any],
+    *,
+    requested_scope: str,
+    now: float | int,
+) -> AthenaAccessToken:
+    """Validate a decoded OAuth response without performing an exchange."""
+
+    if not isinstance(payload, Mapping):
+        raise AthenaAuthenticationError() from None
+    current = _validated_now(now)
+    token = payload.get("access_token")
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_TOKEN_CHARS
+        or any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in token)
+    ):
+        raise AthenaAuthenticationError() from None
+    token_type = payload.get("token_type")
+    if not isinstance(token_type, str) or token_type.casefold() != "bearer":
+        raise AthenaAuthenticationError() from None
+    expires_in = payload.get("expires_in")
+    if (
+        isinstance(expires_in, bool)
+        or not isinstance(expires_in, int)
+        or not 1 <= expires_in <= MAX_TOKEN_FUTURE_SECONDS
+    ):
+        raise AthenaAuthenticationError() from None
+    scope = _validate_exact_preview_scope(
+        payload.get("scope"),
+        requested_scope,
+    )
+    return AthenaAccessToken(
+        access_token=token,
+        scope=scope,
+        expires_at=current + expires_in,
+    )
+
+
+def validate_athena_token_introspection(
+    payload: Mapping[str, Any],
+    *,
+    requested_scope: str,
+    expected_client_id: str,
+    now: float | int,
+) -> AthenaTokenIntrospection:
+    """Validate required introspection claims, leaving aud/iss unresolved.
+
+    Athena's documented audience and issuer semantics have not been confirmed,
+    so this function deliberately makes no claim about them.  Live execution
+    remains blocked until that contract is reviewed.
+    """
+
+    if not isinstance(payload, Mapping) or payload.get("active") is not True:
+        raise AthenaAuthenticationError() from None
+    current = _validated_now(now)
+    scope = _validate_exact_preview_scope(
+        payload.get("scope"),
+        requested_scope,
+    )
+    expires_at = payload.get("exp")
+    if (
+        isinstance(expires_at, bool)
+        or not isinstance(expires_at, (float, int))
+        or not current < float(expires_at)
+        or float(expires_at) - current > MAX_TOKEN_FUTURE_SECONDS
+    ):
+        raise AthenaAuthenticationError() from None
+    try:
+        _safe_string(expected_client_id, maximum=512)
+    except AthenaClientError:
+        raise AthenaAuthenticationError() from None
+    client_id = payload.get("client_id")
+    if client_id is not None and client_id != expected_client_id:
+        raise AthenaAuthenticationError() from None
+    if client_id is not None:
+        try:
+            _safe_string(client_id, maximum=512)
+        except AthenaClientError:
+            raise AthenaAuthenticationError() from None
+    return AthenaTokenIntrospection(
+        active=True,
+        scope=scope,
+        expires_at=float(expires_at),
+        client_id=client_id,
+    )
+
+
 class AthenaHTTPTransport:
-    """Bounded stdlib JSON transport; it knows no Athena resource paths."""
+    """GET-only Preview transport behind the named-operation allowlist."""
 
     def __init__(
         self,
         *,
-        base_url: str,
-        token_provider: Callable[[], str],
+        token_provider: Callable[[], AthenaAccessToken],
+        operation_contract: AthenaPreviewOperationContract | None = None,
+        origin: str = ATHENA_PREVIEW_ORIGIN,
         max_retries: int = 2,
         timeout: float = 30.0,
         max_response_bytes: int = MAX_RESPONSE_BYTES,
         urlopen: Callable[..., Any] | None = None,
         sleep: Callable[[float], None] | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
-        self.base_url = validate_athena_https_url(base_url).rstrip("/")
+        if origin != ATHENA_PREVIEW_ORIGIN:
+            raise AthenaSchemaError() from None
+        self.base_url = ATHENA_PREVIEW_ORIGIN
         if not callable(token_provider):
             raise AthenaAuthenticationError() from None
+        contract = operation_contract or AthenaPreviewOperationContract()
+        if not isinstance(contract, AthenaPreviewOperationContract):
+            raise AthenaSchemaError() from None
         if (
             isinstance(max_retries, bool)
             or not isinstance(max_retries, int)
@@ -494,6 +824,7 @@ class AthenaHTTPTransport:
             raise AthenaSchemaError() from None
 
         self._token_provider = token_provider
+        self._operation_contract = contract
         self._max_retries = max_retries
         self._timeout = float(timeout)
         self._max_response_bytes = max_response_bytes
@@ -501,65 +832,51 @@ class AthenaHTTPTransport:
             _NoRedirectHandler(),
         ).open
         self._sleep = sleep or time.sleep
+        self._clock = clock or time.time
 
     def _bearer(self) -> str:
         try:
             token = self._token_provider()
         except Exception:
             raise AthenaAuthenticationError() from None
+        current = _validated_now(self._clock())
         if (
-            not isinstance(token, str)
-            or not token
-            or len(token) > 16_384
-            or any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in token)
+            not isinstance(token, AthenaAccessToken)
+            or token.scope != ATHENA_PREVIEW_SCOPE
+            or isinstance(token.expires_at, bool)
+            or not isinstance(token.expires_at, (float, int))
+            or not current < token.expires_at
+            or token.expires_at - current > MAX_TOKEN_FUTURE_SECONDS
+            or not isinstance(token.access_token, str)
+            or not token.access_token
+            or len(token.access_token) > MAX_TOKEN_CHARS
+            or any(
+                char.isspace() or ord(char) < 33 or ord(char) == 127
+                for char in token.access_token
+            )
         ):
             raise AthenaAuthenticationError() from None
-        return token
+        return token.access_token
 
     def request_json(
         self,
-        url: str,
-        *,
-        method: str = "GET",
-        body: Mapping[str, Any] | None = None,
+        request_spec: AthenaRequest,
     ) -> dict[str, Any]:
-        target = validate_athena_https_url(url, base_url=self.base_url)
-        if method not in {"GET", "POST"}:
-            raise AthenaSchemaError() from None
-        if method == "GET" and body is not None:
-            raise AthenaSchemaError() from None
-
-        encoded: bytes | None = None
-        if body is not None:
-            if not isinstance(body, Mapping):
-                raise AthenaSchemaError() from None
-            try:
-                encoded = json.dumps(
-                    dict(body),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            except (TypeError, ValueError):
-                raise AthenaSchemaError() from None
-            if len(encoded) > MAX_REQUEST_BYTES:
-                raise AthenaSchemaError() from None
-
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {self._bearer()}",
-            "User-Agent": "cosmaneura-athena-sandbox/1",
-        }
-        if encoded is not None:
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(
-            target,
-            data=encoded,
-            headers=headers,
-            method=method,
-        )
+        target = self._operation_contract.validate_request(request_spec)
 
         saw_timeout = False
         for attempt in range(self._max_retries + 1):
+            # Revalidate or refresh on every attempt. A token that was valid on
+            # attempt one may expire during a retry backoff.
+            request = urllib.request.Request(
+                target,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self._bearer()}",
+                    "User-Agent": "cosmaneura-athena-sandbox/1",
+                },
+                method="GET",
+            )
             try:
                 with self._urlopen(request, timeout=self._timeout) as response:
                     content_length = response.headers.get("Content-Length")
@@ -599,22 +916,15 @@ class AthenaHTTPTransport:
         raise AthenaRetryExhausted() from None
 
 
-@dataclass(frozen=True, repr=False)
-class AthenaRequest:
-    """A reviewed contract adapter's request; representation is redacted."""
-
-    url: str
-    method: str = "GET"
-    body: Mapping[str, Any] | None = None
-
-    def __repr__(self) -> str:
-        return "AthenaRequest(<redacted>)"
-
-
 class AthenaContract(Protocol):
-    """Vendor-specific behavior to implement only after contract approval."""
+    """Vendor response behavior to implement only after contract approval."""
 
-    def build_page_request(self, cursor: str | None) -> AthenaRequest:
+    operation: AthenaPreviewOperation
+
+    def build_page_query(
+        self,
+        cursor: str | None,
+    ) -> Mapping[str, str] | None:
         ...
 
     def decode_page(
@@ -635,12 +945,18 @@ class AthenaSandboxClient:
         self,
         *,
         transport: AthenaHTTPTransport,
+        operation_contract: AthenaPreviewOperationContract,
         contract: AthenaContract,
         server_practice_id: str,
     ) -> None:
         if not isinstance(transport, AthenaHTTPTransport):
             raise AthenaSchemaError() from None
+        if not isinstance(operation_contract, AthenaPreviewOperationContract):
+            raise AthenaSchemaError() from None
+        if transport._operation_contract is not operation_contract:
+            raise AthenaSchemaError() from None
         self._transport = transport
+        self._operation_contract = operation_contract
         self._contract = contract
         self._server_practice_id = _safe_string(
             server_practice_id,
@@ -651,7 +967,12 @@ class AthenaSandboxClient:
         if cursor is not None:
             _safe_string(cursor, maximum=MAX_CURSOR_CHARS)
         try:
-            request = self._contract.build_page_request(cursor)
+            operation = self._contract.operation
+            query = self._contract.build_page_query(cursor)
+            request = self._operation_contract.build_request(
+                operation,
+                query=query,
+            )
         except AthenaClientError:
             raise
         except Exception:
@@ -659,11 +980,7 @@ class AthenaSandboxClient:
         if not isinstance(request, AthenaRequest):
             raise AthenaSchemaError() from None
 
-        payload = self._transport.request_json(
-            request.url,
-            method=request.method,
-            body=request.body,
-        )
+        payload = self._transport.request_json(request)
         try:
             page = self._contract.decode_page(
                 payload,
