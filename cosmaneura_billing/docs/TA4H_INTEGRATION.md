@@ -171,7 +171,11 @@ execution. Shadow work starts on a bounded daemon worker after the primary
 extraction. Its queued `VisitBundle` is a recursive detached copy, including
 mutable code lists, so a buggy secondary cannot race or mutate any value the
 primary pipeline still reads. A full queue drops the observation and a stuck
-TA4H call cannot delay reviewer output or process shutdown.
+TA4H call cannot delay reviewer output or process shutdown. Each short-lived
+task frame clears service results and the daemon deletes its task reference
+before publishing idle, so the last chart/result is not retained between runs.
+Shutdown latches before draining and a worker re-checks that latch immediately
+after dequeue, preventing a queued task from starting a new service call.
 
 Response parsing is defensive: an unrecognised or off-shape entity is dropped
 rather than raised, so a service-side schema change degrades to "fewer

@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, replace
+import gc
+from queue import Queue
 from threading import Event
 from time import perf_counter
+import weakref
 
 import pytest
 from fastapi.testclient import TestClient
@@ -159,6 +162,44 @@ def test_secondary_mutation_cannot_race_or_change_primary_bundle_output():
     orchestrator.shutdown()
 
 
+def test_worker_releases_detached_bundle_while_daemon_remains_alive():
+    settings = _shadow_settings()
+    detached_refs: list[weakref.ReferenceType] = []
+
+    class WeakFacts(dict):
+        pass
+
+    class WeakSuggestions(list):
+        pass
+
+    class ReferencingSecondary:
+        def run(self, shadow_bundle):
+            facts = WeakFacts(
+                ta4h_contradictions={}, ta4h_entity_count=0,
+            )
+            suggestions = WeakSuggestions()
+            detached_refs.extend((
+                weakref.ref(shadow_bundle),
+                weakref.ref(facts),
+                weakref.ref(suggestions),
+            ))
+            return facts, suggestions
+
+    orchestrator = BillingOrchestrator(
+        settings=settings,
+        llm=MockLLM(),
+        secondary_coding=ReferencingSecondary(),
+    )
+    orchestrator.process(deepcopy(SAMPLE_VISIT))
+
+    assert orchestrator.wait_for_shadow(1.0)
+    assert orchestrator.shadow_runner._thread.is_alive()
+    for _ in range(3):
+        gc.collect()
+    assert detached_refs and all(reference() is None for reference in detached_refs)
+    orchestrator.shutdown()
+
+
 def test_shadow_runtime_failure_degrades_only_aggregate_health():
     settings = _shadow_settings()
     expected = _baseline(settings)
@@ -224,6 +265,49 @@ def test_blocking_secondary_does_not_delay_or_change_primary_response():
     assert perf_counter() - shutdown_started < 0.2
     release.set()
     assert orchestrator.wait_for_shadow(1.0)
+
+
+def test_dequeued_task_is_cancelled_if_shutdown_wins_service_call_race():
+    settings = _shadow_settings()
+    dequeued = Event()
+    release_dequeue = Event()
+    calls: list[str] = []
+
+    class GatedQueue(Queue):
+        def get(self, block=True, timeout=None):
+            item = super().get(block=block, timeout=timeout)
+            dequeued.set()
+            release_dequeue.wait(2.0)
+            return item
+
+    class CountingSecondary:
+        def run(self, bundle):
+            del bundle
+            calls.append("called")
+            return {"ta4h_contradictions": {}, "ta4h_entity_count": 0}, []
+
+    orchestrator = BillingOrchestrator(
+        settings=settings,
+        llm=MockLLM(),
+        secondary_coding=CountingSecondary(),
+    )
+    orchestrator.shadow_runner._queue = GatedQueue(maxsize=2)
+    orchestrator.process(SAMPLE_VISIT)
+    assert dequeued.wait(1.0)
+
+    # The worker has removed the task from the queue but cannot inspect the
+    # stop latch yet. Shutdown must return on its bound, and the worker must
+    # cancel rather than call TA4H when the gated dequeue resumes.
+    shutdown_started = perf_counter()
+    orchestrator.shutdown()
+    assert perf_counter() - shutdown_started < 0.2
+    release_dequeue.set()
+
+    assert orchestrator.wait_for_shadow(1.0)
+    assert calls == []
+    snapshot = orchestrator.ta4h_observability()
+    assert snapshot["runs"] == snapshot["dropped"] == 1
+    assert snapshot["pending"] == snapshot["succeeded"] == snapshot["failed"] == 0
 
 
 def test_saturated_shadow_queue_drops_work_without_blocking_requests():

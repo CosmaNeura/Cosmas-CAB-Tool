@@ -299,7 +299,7 @@ class TA4HShadowRunner:
 
         task = _ShadowTask(shadow_bundle, primary_codes, perf_counter())
         with self._lock:
-            if self._closed:
+            if self._closed or self._stop.is_set():
                 self._slots.release()
                 self._safe_drop()
                 return False
@@ -337,37 +337,72 @@ class TA4HShadowRunner:
         except Exception:
             pass
 
+    def _process_task(self, task: _ShadowTask) -> None:
+        """Process one task in a short-lived frame that cannot retain PHI."""
+
+        secondary_facts: dict[str, Any] | None = None
+        secondary_suggestions: Iterable[CodeSuggestion] | None = None
+        try:
+            secondary_facts, secondary_suggestions = self._secondary.run(
+                task.bundle,
+            )
+            if not isinstance(secondary_facts, dict):
+                raise TypeError("invalid shadow facts")
+            self._metrics.record_success(
+                task.primary_codes,
+                secondary_facts,
+                secondary_suggestions,
+                latency_ms=self._metrics.elapsed_ms(task.started_at),
+            )
+        except Exception:
+            try:
+                self._metrics.record_failure(
+                    latency_ms=self._metrics.elapsed_ms(task.started_at),
+                )
+            except Exception:
+                pass
+        finally:
+            # Do not let a traceback or later refactor extend the lifetime of
+            # service-returned clinical entities/codes beyond this task frame.
+            secondary_facts = None
+            secondary_suggestions = None
+
     def _work(self) -> None:
         while not self._stop.is_set():
             try:
                 task = self._queue.get(timeout=0.05)
             except Empty:
                 continue
+            cancelled = not self._claim_service_call()
             try:
-                secondary_facts, secondary_suggestions = self._secondary.run(
-                    task.bundle,
-                )
-                if not isinstance(secondary_facts, dict):
-                    raise TypeError("invalid shadow facts")
-                self._metrics.record_success(
-                    task.primary_codes,
-                    secondary_facts,
-                    secondary_suggestions,
-                    latency_ms=self._metrics.elapsed_ms(task.started_at),
-                )
-            except Exception:
-                try:
-                    self._metrics.record_failure(
-                        latency_ms=self._metrics.elapsed_ms(task.started_at),
-                    )
-                except Exception:
-                    pass
+                if not cancelled:
+                    self._process_task(task)
             finally:
-                self._queue.task_done()
-                self._slots.release()
-                with self._idle:
-                    self._inflight = max(0, self._inflight - 1)
-                    self._idle.notify_all()
+                # `_work` is a long-lived daemon frame. Delete the loop local
+                # before publishing idle so a waiter cannot observe completion
+                # while this frame still retains the detached VisitBundle.
+                del task
+                self._finish_queued_task(cancelled=cancelled)
+
+    def _claim_service_call(self) -> bool:
+        """Linearize service dispatch against the start of shutdown."""
+
+        with self._lock:
+            return not self._closed and not self._stop.is_set()
+
+    def _finish_queued_task(self, *, cancelled: bool) -> None:
+        """Release exactly one dequeued/drained task through one accounting path."""
+
+        if cancelled:
+            try:
+                self._metrics.record_cancelled()
+            except Exception:
+                pass
+        self._queue.task_done()
+        self._slots.release()
+        with self._idle:
+            self._inflight = max(0, self._inflight - 1)
+            self._idle.notify_all()
 
     def wait_for_idle(self, timeout: float) -> bool:
         """Acceptance/test synchronization; never used on reviewer requests."""
@@ -386,24 +421,21 @@ class TA4HShadowRunner:
     def shutdown(self, timeout: float = 0.05) -> None:
         """Stop accepting work, discard queued tasks, and return on a bound."""
 
+        # Set the lock-free latch first so a dequeued worker cannot wait for
+        # `_lock`, miss the start of shutdown, and then dispatch to TA4H.
+        self._stop.set()
         with self._lock:
             self._closed = True
-            self._stop.set()
         while True:
             try:
-                self._queue.get_nowait()
+                queued_task = self._queue.get_nowait()
             except Empty:
                 break
             else:
-                self._queue.task_done()
-                self._slots.release()
-                try:
-                    self._metrics.record_cancelled()
-                except Exception:
-                    pass
-                with self._idle:
-                    self._inflight = max(0, self._inflight - 1)
-                    self._idle.notify_all()
+                # Drop the only PHI-bearing reference before completion is
+                # visible, matching the worker path above.
+                del queued_task
+                self._finish_queued_task(cancelled=True)
         thread = self._thread
         if thread is not None and thread is not current_thread():
             thread.join(max(0.0, min(float(timeout), 1.0)))
