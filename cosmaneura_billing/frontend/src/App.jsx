@@ -17,6 +17,38 @@ const tab = (active) =>
   `inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
     active ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`;
 
+function BrandLockup() {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white"
+            aria-hidden="true">
+        <ShieldCheck size={20} />
+      </span>
+      <div>
+        <h1 className="text-lg font-medium tracking-tight">Cosmas · Billing review</h1>
+        <p className="text-xs text-slate-500">
+          Evidence-grounded coding for independent practices · by CosmaNeura
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BrandedMessage({ children }) {
+  return (
+    <div className="min-h-screen bg-slate-50 px-4 py-6 font-sans text-slate-900">
+      <main className="mx-auto max-w-5xl">
+        <header className="mb-6">
+          <BrandLockup />
+        </header>
+        <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+          {children}
+        </section>
+      </main>
+    </div>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
@@ -69,18 +101,23 @@ export default function App() {
   // without changing the authentication boundary or reintroducing mock claims.
   if (authStatus) {
     return (
-      <main>
+      <BrandedMessage>
         <p>{authStatus === 401 ? "Sign in is required." : "Your account is not assigned access to this pilot."}</p>
-        {authStatus === 401 && <a href="/.auth/login/aad?post_login_redirect_uri=/">Sign in with Microsoft</a>}
-      </main>
+        {authStatus === 401 && (
+          <a className="mt-3 inline-block font-medium text-slate-900 underline"
+             href="/.auth/login/aad?post_login_redirect_uri=/">
+            Sign in with Microsoft
+          </a>
+        )}
+      </BrandedMessage>
     );
   }
 
   if (serviceError) {
     return (
-      <main>
+      <BrandedMessage>
         <p>Billing service unavailable (HTTP {serviceError}). No mock claim was loaded.</p>
-      </main>
+      </BrandedMessage>
     );
   }
 
@@ -88,15 +125,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 px-4 py-6 font-sans text-slate-900">
       <div className="mx-auto max-w-5xl">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white">
-              <ShieldCheck size={20} />
-            </span>
-            <div>
-              <h1 className="text-lg font-medium tracking-tight">CosmaNeura · Billing review</h1>
-              <p className="text-xs text-slate-500">Evidence-grounded coding for independent practices</p>
-            </div>
-          </div>
+          <BrandLockup />
           <div className="flex items-center gap-2">
             {health === null && <Pill tone="bg-slate-100 text-slate-500 ring-slate-300">connecting…</Pill>}
             {health === false && (
