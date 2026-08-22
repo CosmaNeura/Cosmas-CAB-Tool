@@ -4,11 +4,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "cosmaneura_billing" / "frontend" / "src"
+INDEX = (FRONTEND.parent / "index.html").read_text(encoding="utf-8")
 APP = (FRONTEND / "App.jsx").read_text(encoding="utf-8")
 BILLING = (FRONTEND / "BillingReview.jsx").read_text(encoding="utf-8")
 CODER = (FRONTEND / "CoderReview.jsx").read_text(encoding="utf-8")
 CHASE = (FRONTEND / "CardChase.jsx").read_text(encoding="utf-8")
 SEED = (FRONTEND / "syntheticDemoSeed.js").read_text(encoding="utf-8")
+
+
+def test_cosmas_is_the_product_brand_and_cosmaneura_is_the_company():
+    assert '<meta name="application-name" content="Cosmas" />' in INDEX
+    assert "<title>Cosmas · Billing review</title>" in INDEX
+    assert ">Cosmas · Billing review</h1>" in APP
+    assert "by CosmaNeura" in APP
+    assert "function BrandLockup()" in APP
+    assert "function BrandedMessage({ children })" in APP
+    assert APP.count("<BrandedMessage>") == 2
+    assert "CosmaNeura · Billing review" not in INDEX + APP
 
 
 def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():

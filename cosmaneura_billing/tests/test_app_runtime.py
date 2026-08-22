@@ -97,16 +97,23 @@ def test_built_frontend_is_same_origin_without_shadowing_api(tmp_path):
     assets = dist / "assets"
     assets.mkdir(parents=True)
     (dist / "index.html").write_text(
-        "<main>CosmaNeura frontend</main>", encoding="utf-8"
+        "<main>Cosmas frontend</main>", encoding="utf-8"
     )
     (assets / "app.js").write_text(
         "window.loaded = true;", encoding="utf-8"
     )
 
     client = TestClient(api.create_app(frontend_dist=dist))
-    assert client.get("/").text == "<main>CosmaNeura frontend</main>"
+    assert client.get("/").text == "<main>Cosmas frontend</main>"
     assert client.get("/assets/app.js").text == "window.loaded = true;"
     assert client.get("/api/ready").json() == {"status": "warming"}
+
+
+def test_api_docs_use_the_cosmas_product_brand(tmp_path):
+    application = api.create_app(frontend_dist=tmp_path / "missing")
+
+    assert application.title == "Cosmas Billing Engine"
+    assert application.openapi()["info"]["title"] == "Cosmas Billing Engine"
 
 
 def test_production_refuses_to_start_without_built_frontend(tmp_path):

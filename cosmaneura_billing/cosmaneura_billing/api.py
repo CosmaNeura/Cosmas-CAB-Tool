@@ -1817,7 +1817,7 @@ def create_app(
     failed_auth_limiter = auth_failure_limiter or FixedWindowLimiter()
     denied_auditor = DeniedAccessAuditor(settings=config, store=audit_store)
     application = FastAPI(
-        title="CosmaNeura Billing Engine",
+        title="Cosmas Billing Engine",
         version="0.1.0",
         lifespan=_lifespan,
     )
