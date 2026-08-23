@@ -2,14 +2,15 @@
 
 Scope note
 ----------
-This is not card *capture*. Capture — OCR, staff verification, the idempotent
-write back into Athena — lives in the CardCapture workstream and already exists.
+This is not card *capture*. Capture — OCR, staff verification, and any approved
+idempotent write-back adapter — lives in the CardCapture workstream.
 What was missing is the system that gets the card *to* capture in the first
 place: a worklist of patients whose insurance data is missing, worked across
 email, SMS, portal and phone until it lands.
 
 Its users are not the coders. The corpus names Cindy and Maggie entering missing
-cards into Athena after appointments; that is the job this replaces most of.
+cards into practice systems after appointments; that is the job this replaces
+most of.
 Grace's constraint — net coder minutes must go down — still binds, but it is not
 the metric for *this* surface. These users are measured on cards closed and
 time-to-card, which is why ``chase.metrics`` instruments those from day one.
@@ -78,7 +79,7 @@ class State(str, Enum):
     READY = "ready"                      # policy approved, cleared to send
     IN_PROGRESS = "in_progress"          # at least one touch made
     SUBMITTED = "submitted"              # patient sent something; awaiting verification
-    VERIFIED_CLOSED = "verified_closed"  # card verified and written — the win
+    VERIFIED_CLOSED = "verified_closed"  # card verified in the system of record
     ESCALATED = "escalated"              # exhausted the sequence, needs a person
     UNREACHABLE = "unreachable"          # no working channel
     RESOLVED_OTHER = "resolved_other"    # closed for another reason (self-pay, cancelled)
@@ -92,9 +93,10 @@ TERMINAL = frozenset({State.VERIFIED_CLOSED, State.ESCALATED,
 class CoverageSnapshot:
     """What the practice-management system says about one patient + appointment.
 
-    This is the adapter boundary. athenaNet, Acuity and the eligibility (271)
-    response all reduce to this shape, so the detector is testable without
-    credentials and the real integration is one adapter rather than a rewrite.
+    This is the adapter boundary. Practice-management, scheduling, clearinghouse,
+    and eligibility (271) feeds all reduce to this shape, so the detector is
+    testable without credentials and each real integration is an adapter rather
+    than a workflow rewrite.
     """
     patient_ref: str
     appointment_at: str = ""             # ISO 8601; "" when not scheduled

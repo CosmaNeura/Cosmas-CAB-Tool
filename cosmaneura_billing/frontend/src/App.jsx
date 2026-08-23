@@ -53,6 +53,7 @@ export default function App() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
   const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
+  const [manageChase, setManageChase] = useState(false); // Server-owned staff mutation capability
   const [health, setHealth] = useState(null);           // null = probing, false = offline
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
   const [serviceError, setServiceError] = useState(null);
@@ -70,6 +71,7 @@ export default function App() {
         setHealth(h);
         setViews(session.views);
         setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
+        setManageChase(session.capabilities?.manageChase === true);
         setView((current) => (
           session.views.includes(current) ? current : session.defaultView
         ));
@@ -145,19 +147,23 @@ export default function App() {
         </header>
 
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-slate-200">
+          <div
+            className="flex items-center gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-slate-200"
+            role="tablist"
+            aria-label="Workspace"
+          >
             {views.includes("provider") && (
-              <button className={tab(view === "provider")} onClick={() => setView("provider")}>
+              <button type="button" role="tab" aria-selected={view === "provider"} className={tab(view === "provider")} onClick={() => setView("provider")}>
                 <Stethoscope size={15} />Provider
               </button>
             )}
             {views.includes("coder") && (
-              <button className={tab(view === "coder")} onClick={() => setView("coder")}>
+              <button type="button" role="tab" aria-selected={view === "coder"} className={tab(view === "coder")} onClick={() => setView("coder")}>
                 <ClipboardCheck size={15} />Coder review
               </button>
             )}
             {views.includes("chase") && (
-              <button className={tab(view === "chase")} onClick={() => setView("chase")}>
+              <button type="button" role="tab" aria-selected={view === "chase"} className={tab(view === "chase")} onClick={() => setView("chase")}>
                 <CreditCard size={15} />Card chase
               </button>
             )}
@@ -184,7 +190,11 @@ export default function App() {
         ) : view === null ? (
           <p>Loading your assigned workspace…</p>
         ) : view === "chase" ? (
-          <CardChase live={Boolean(health)} demoSeed={chaseDemoSeed} />
+          <CardChase
+            live={Boolean(health)}
+            demoSeed={chaseDemoSeed}
+            manageChase={manageChase}
+          />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>
         ) : !selected ? (

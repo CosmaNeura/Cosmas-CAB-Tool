@@ -2,7 +2,7 @@
 
     python demo_chase.py
 
-Nothing leaves the building: synthetic patients, an inert transport, no Athena
+Nothing leaves the building: synthetic patients, an inert transport, no source-system
 credentials, no PHI. The point is to turn the interview from "tell me about your
 process" into "here is the process, tell me where it's wrong" — which is a far
 better use of the time of the two people whose whole job this is.
@@ -176,7 +176,7 @@ def main() -> None:
     runner.mark_submitted(target, note="uploaded via the secure link")
     print(f"  {target.patient_ref} submitted -> state={target.state.value}, "
           f"still open={target.is_open}")
-    runner.close_verified(target, verified_by="cindy", athena_write_id="ath-4471",
+    runner.close_verified(target, verified_by="cindy", source_write_id="source-4471",
                           eligibility_status="ACTIVE")
     print(f"  cindy verified and wrote it -> state={target.state.value}, "
           f"still open={target.is_open}")

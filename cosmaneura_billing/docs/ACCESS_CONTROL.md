@@ -210,7 +210,7 @@ The user-facing worklist is a minimum-necessary projection: it omits patient
 references, gate payloads, assignee identifiers, attempt notes, and contact
 destinations. `POST /api/chase/task` accepts an opaque chase ID only in its JSON
 body and returns either a fixed digest-pinned synthetic manual-call destination
-or an athenaNet system-of-record placeholder. A direct-contract review withholds
+or a practice-source-system placeholder. A direct-contract review withholds
 even the synthetic destination until the human gate is resolved. No identifier
 is accepted in a chase URL.
 

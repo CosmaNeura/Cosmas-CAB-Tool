@@ -143,7 +143,9 @@ def test_task_returns_only_fixed_synthetic_contact_and_withholds_review_case(cli
     assert task.status_code == held.status_code == 200
     assert task.json()["contact"]["destination"].startswith("+1 202-555-01")
     assert task.json()["contact"]["mode"] == "synthetic_demo"
+    assert "log_attempt" in task.json()["allowedActions"]
     assert held.json()["contact"] is None
+    assert "log_attempt" not in held.json()["allowedActions"]
     assert "direct-contract" in held.json()["instruction"]
     assert "patient_ref" not in task.text + held.text
     assert ordinary["chaseId"] not in task.request.url.path
@@ -181,6 +183,7 @@ def test_operational_lookalike_never_unlocks_a_synthetic_destination(client):
     assert task["dataClass"] == "operational"
     assert task["contact"] is None
     assert task["systemOfRecord"]["deepLinkConfigured"] is False
+    assert task["systemOfRecord"]["name"] == "Practice source system"
 
 
 def test_seed_refuses_to_run_when_scheduler_is_enabled(tmp_path):

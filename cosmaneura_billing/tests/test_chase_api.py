@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cosmaneura_billing import api
+from cosmaneura_billing.chase import State
 
 TODAY = "2026-08-17"
 
@@ -52,6 +53,29 @@ def _action(client, chase_id, payload, *, action_id=None):
             **payload,
         },
     )
+
+
+def _item(client, chase_id):
+    return client.app.state.chase_context["store"].get(chase_id)
+
+
+def _stage_phone_task(client, chase_id):
+    item = _item(client, chase_id)
+    item.state = State.IN_PROGRESS
+    item.pending_task = {
+        "channel": "phone",
+        "template_id": "phone.call",
+        "created_at": "2026-08-17T12:00:00+00:00",
+    }
+    return item
+
+
+def _release_if_needed(client, chase_id):
+    if _item(client, chase_id).state is State.NEEDS_REVIEW:
+        response = _action(client, chase_id, {
+            "action": "release", "reason": "reviewed synthetic test task",
+        })
+        assert response.status_code == 200
 
 
 def test_detect_populates_the_worklist_and_skips_clean_records(client):
@@ -113,17 +137,19 @@ def test_assign_then_filter_by_assignee(client):
 
 def test_log_a_phone_attempt_with_minutes(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
+    _stage_phone_task(client, chase_id)
     row = _action(client, chase_id, {
         "action": "log_attempt", "channel": "phone",
         "outcome": "left_message", "minutes_spent": 3.5,
         "note": "will call back"}).json()
     assert row["touches"] == 1
-    assert row["staff_minutes"] == 3.5
-    assert row["attempts"][0]["actor"] == "local-developer"
+    assert row["staffMinutes"] == 3.5
+    assert _item(client, chase_id).attempts[0].actor == "local-developer"
 
 
 def test_staff_action_retry_is_exactly_once_and_conflicts_fail(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
+    _stage_phone_task(client, chase_id)
     action_id = str(uuid4())
     payload = {
         "action": "log_attempt", "channel": "phone",
@@ -139,12 +165,13 @@ def test_staff_action_retry_is_exactly_once_and_conflicts_fail(client):
 
     assert first.status_code == replay.status_code == 200
     assert replay.json()["touches"] == 1
-    assert replay.json()["staff_minutes"] == 2.0
+    assert replay.json()["staffMinutes"] == 2.0
     assert conflict.status_code == 409
 
 
 def test_caller_cannot_override_log_attempt_actor(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
+    _stage_phone_task(client, chase_id)
     r = _action(client, chase_id, {
         "action": "log_attempt", "actor": "cindy", "channel": "phone",
     })
@@ -153,22 +180,109 @@ def test_caller_cannot_override_log_attempt_actor(client):
 
 def test_submission_does_not_close_but_verification_does(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
+    _release_if_needed(client, chase_id)
     submitted = _action(
         client, chase_id, {"action": "submitted", "note": "uploaded"},
     ).json()
     assert submitted["state"] == "submitted" and submitted["open"] is True
 
     verified = _action(client, chase_id, {
-        "action": "verify", "athena_write_id": "ath-9",
+        "action": "verify", "source_write_id": "source-9",
         "eligibility_status": "ACTIVE"}).json()
     assert verified["state"] == "verified_closed" and verified["open"] is False
-    assert verified["resolution"]["athena_write_id"] == "ath-9"
+    assert _item(client, chase_id).resolution["source_write_id"] == "source-9"
+
+
+def test_minimum_necessary_task_reflects_workflow_state_for_staff_controls(client):
+    chase_id = _detect(client)["rows"][0]["chase_id"]
+    initial = client.post("/api/chase/task", json={"chaseId": chase_id}).json()
+    assert initial["state"] in {"detected", "needs_review"}
+    assert initial["assigned"] is False
+    assert initial["touches"] == 0
+    assert initial["staffMinutes"] == 0
+    assert initial["open"] is True
+    assert initial["hasPendingTask"] is False
+    assert initial["allowedActions"] == (
+        ["assign"]
+        if initial["state"] == "needs_review"
+        else ["assign", "submitted"]
+    )
+    assert "assignee" not in initial
+    assert "patient_ref" not in initial
+
+    _action(client, chase_id, {"action": "assign"})
+    _release_if_needed(client, chase_id)
+    _stage_phone_task(client, chase_id)
+    pending = client.post("/api/chase/task", json={"chaseId": chase_id}).json()
+    assert pending["hasPendingTask"] is True
+    assert "log_attempt" in pending["allowedActions"]
+    _action(client, chase_id, {
+        "action": "log_attempt",
+        "channel": "phone",
+        "outcome": "left_message",
+        "minutes_spent": 2.5,
+    })
+    _action(client, chase_id, {"action": "submitted"})
+    submitted = client.post("/api/chase/task", json={"chaseId": chase_id}).json()
+    assert submitted["state"] == "submitted"
+    assert submitted["assigned"] is True
+    assert submitted["touches"] == 1
+    assert submitted["staffMinutes"] == 2.5
+    assert submitted["contact"] is None
+    assert submitted["allowedActions"] == ["assign", "verify"]
+
+    _action(client, chase_id, {"action": "verify"})
+    closed = client.post("/api/chase/task", json={"chaseId": chase_id}).json()
+    assert closed["state"] == "verified_closed"
+    assert closed["open"] is False
+    assert closed["contact"] is None
+    assert closed["allowedActions"] == []
 
 
 def test_verify_records_the_session_principal(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
-    row = _action(client, chase_id, {"action": "verify"}).json()
-    assert row["resolution"]["verified_by"] == "local-developer"
+    _release_if_needed(client, chase_id)
+    _action(client, chase_id, {"action": "submitted"})
+    _action(client, chase_id, {"action": "verify"})
+    assert _item(client, chase_id).resolution["verified_by"] == "local-developer"
+
+
+def test_action_response_is_minimum_necessary(client):
+    chase_id = _detect(client)["rows"][0]["chase_id"]
+    body = _action(client, chase_id, {"action": "assign"}).json()
+    assert set(body) == {
+        "chaseId", "state", "assigned", "touches", "staffMinutes", "open",
+    }
+    assert not {
+        "patient_ref", "direct_contract", "assignee", "pending_task",
+        "attempts", "resolution",
+    }.intersection(body)
+
+
+def test_staff_actions_enforce_server_side_workflow_gates(client):
+    chase_id = _detect(client)["rows"][0]["chase_id"]
+
+    assert _action(client, chase_id, {
+        "action": "log_attempt", "channel": "phone",
+    }).status_code == 422
+    assert _action(client, chase_id, {"action": "verify"}).status_code == 422
+
+    item = _item(client, chase_id)
+    item.state = State.NEEDS_REVIEW
+    assert _action(client, chase_id, {"action": "submitted"}).status_code == 422
+
+    item.state = State.DETECTED
+    assert _action(client, chase_id, {"action": "submitted"}).status_code == 200
+    assert _action(client, chase_id, {"action": "verify"}).status_code == 200
+    assert _action(client, chase_id, {"action": "assign"}).status_code == 422
+
+
+def test_athena_specific_write_receipt_is_not_in_source_neutral_contract(client):
+    chase_id = _detect(client)["rows"][0]["chase_id"]
+    response = _action(client, chase_id, {
+        "action": "verify", "athena_write_id": "legacy-specific-id",
+    })
+    assert response.status_code == 422
 
 
 def test_suppress_requires_a_reason(client):
@@ -202,9 +316,11 @@ def test_metrics_report_outstanding_and_flag_the_missing_baseline(client):
 
 def test_metrics_compute_a_delta_when_a_baseline_is_supplied(client):
     chase_id = _detect(client)["rows"][0]["chase_id"]
+    _stage_phone_task(client, chase_id)
     _action(client, chase_id, {
         "action": "log_attempt", "channel": "phone",
         "outcome": "reached", "minutes_spent": 4.0})
+    _action(client, chase_id, {"action": "submitted"})
     _action(client, chase_id, {"action": "verify"})
     body = client.post(
         "/api/chase/metrics",

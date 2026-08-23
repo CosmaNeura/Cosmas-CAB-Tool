@@ -278,14 +278,14 @@ class SequenceRunner:
         return item
 
     def close_verified(
-        self, item: ChaseItem, *, verified_by: str, athena_write_id: str = "",
+        self, item: ChaseItem, *, verified_by: str, source_write_id: str = "",
         eligibility_status: str = "",
     ) -> ChaseItem:
         """F9c: close on a *verified* card, never on a submission.
 
         The distinction is the whole completion loop. A patient uploading a photo
         is not a card on file; staff verification and the write into the right
-        Athena encounter are what finish the job, and only that closes the row.
+        source-system record are what finish the job, and only that closes the row.
         """
         if not verified_by.strip():
             raise ValueError("closing a chase requires the verifier's identity")
@@ -294,7 +294,7 @@ class SequenceRunner:
         item.resolution = {
             "outcome": "verified_closed",
             "verified_by": verified_by,
-            "athena_write_id": athena_write_id or None,
+            "source_write_id": source_write_id or None,
             "eligibility_status": eligibility_status or None,
         }
         return item

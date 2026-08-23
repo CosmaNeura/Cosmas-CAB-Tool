@@ -1,7 +1,8 @@
 """The master worklist — one integrated list, not three dashboards.
 
 The staff who do this job today work from whatever they can reconstruct across
-Acuity, Athena and memory. Grace's Aug 13 walkthrough described the shape they
+scheduling, practice-management, and eligibility systems. Grace's Aug 13
+walkthrough described the shape they
 want: one place showing patients with eligibility issues, expired cards, or
 missing payment information, with follow-ups tracked rather than remembered.
 
