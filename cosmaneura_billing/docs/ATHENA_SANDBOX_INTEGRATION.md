@@ -1,8 +1,10 @@
 # Athena sandbox integration plan
 
-Status: mock adapter and dormant job infrastructure implemented locally; no
-Athena credential, network call, imported record, or production write path is
-enabled. The exact Preview enrollment boundary is captured in
+Status: the mock adapter now imports its four synthetic encounters through a
+durable, source-agnostic receipt/checkpoint boundary. The dedicated import
+database role and dormant job wiring are implemented but default off. No Athena
+credential, network call, live import, or production write path is enabled.
+The exact Preview enrollment boundary is captured in
 [ATHENA_SANDBOX_ACCESS_REQUEST.md](ATHENA_SANDBOX_ACCESS_REQUEST.md).
 The authenticated portal exposes proprietary AthenaOne access only as a
 Read/Write wildcard, so the desired read-only boundary is not yet grantable at
@@ -33,6 +35,53 @@ matching `client_id` when introspection returns one. They do not acquire a
 token or call introspection. Audience and issuer semantics are deliberately
 unasserted until athenahealth confirms them; live sync continues to return
 `ATHENA_LIVE_NOT_IMPLEMENTED`.
+
+## Implemented credential-independent import boundary
+
+Migration `009_source_import_foundation` adds generic
+`source_import_checkpoints` and `source_import_receipts` state keyed by the
+server-selected practice, source system, and feed. It registers Athena Preview
+as one adapter (`athena_preview` / `encounters`) rather than making the shared
+tables Athena-specific. A future reviewed MCD Card Chase adapter can reuse the
+same checkpoint and receipt transaction without putting raw patient or source
+identifiers in operational output. Normalized coverage persistence and its
+Card Chase adapter remain a future migration after `009` (expected `010`); they
+must not overload the encounter schema or add Athena-only shared object names.
+
+The mock path writes normalized encounters with the exact server-owned
+provenance `athena_preview_synthetic`. An import page's new receipts, encounter
+inserts or updates, and opaque continuation state commit in one transaction.
+The dedicated login cannot write any of those tables directly: it receives
+checkpoint read access and `EXECUTE` on one size- and shape-bounded,
+database-owned encounter page primitive. A future normalized coverage/Card
+Chase adapter must receive its own reviewed domain-specific commit primitive;
+it does not inherit the Athena encounter writer.
+Imported encounter IDs are deterministic, source/feed-namespaced hashes of the
+source record ID. They expose no raw identifier and cannot collide with the
+existing four-case release-candidate IDs even when the mock fixture begins from
+the same synthetic case pack. This unkeyed synthetic-data mapping is not an
+approved de-identification control for real, guessable identifiers; keyed
+per-practice tokenization and rotation must be designed before live ingestion.
+Each receipt also persists a bounded normalizer
+`mapping_version`, and that version participates in the canonical idempotency
+key and feed checkpoint. A mapping revision therefore cannot alias a receipt
+or resume halfway through a checkpoint created by the earlier normalizer; it
+fails closed until an explicit reviewed restart/backfill resets the feed.
+Exact page replay writes no encounter change and does not advance the checkpoint
+version; a failed page advances neither data nor checkpoint. A per-feed
+transaction lock and expected-version comparison reject overlapping stale
+writers instead of allowing an older cursor to replace a newer commit. Runtime
+output is limited to a static status code and
+page/fetched/imported/replayed counts.
+
+The dedicated login defaults to `cosmaneura_athena_import` and is bound to one
+internal practice, source system, and provenance. It cannot read memberships,
+feedback, audit, or Card Chase tables. The generic API encounter store cannot
+claim the reserved Athena provenance. Loss of the source registration remains
+fail-closed even if a mistaken deployment leaves import grants behind, and an
+encounter receipt must link the exact imported encounter. The sync job alone receives
+`COSMANEURA_ATHENA_IMPORT_DATABASE_URL`; the migration job receives only the
+separate password required to create or rotate that login.
 
 ## Deployment decision
 
@@ -74,19 +123,54 @@ Athena sandbox synthetic records
   -> existing Entra-authenticated CosmaNeura API and UI
 ```
 
-The sync job should have its own user-assigned identity.  It may read only its
-Athena credential from a secret-scoped Key Vault grant and use a least-privilege
-database import role.  The UI API, migration job, and chase worker must not
-inherit that credential or role.
+The sync job has its own user-assigned identity. When the lane is eventually
+enabled, it may read only its dedicated Athena credential and import DSN through
+two secret-scoped Key Vault grants. The migration job may read only the raw
+import-role password needed for role provisioning; it must never receive the
+Athena OAuth secret or import DSN. The UI API and chase worker inherit none of
+these credentials or database privileges.
 
-The adapter must be mock-first.  All Athena protocol knowledge belongs in
-`athena_client.py`; downstream code consumes internal types such as
-`VisitBundle` and `chase.models.CoverageSnapshot`.  Required runtime properties
+The adapter is mock-first. All Athena protocol knowledge belongs in
+`athena_client.py`; this slice normalizes only `VisitBundle`. A later reviewed
+coverage adapter may target `chase.models.CoverageSnapshot`, but no coverage or
+Card Chase import is implemented here. Required runtime properties
 include bounded pagination, a durable cursor/checkpoint, idempotent imports,
 strict response limits, sanitized errors, and count-only operational logs.
 
 The VNet currently has no documented static-egress or Athena host-allowlist
 contract.  Verify Athena's egress/IP requirements before provisioning the job.
+
+## Separate provider-lab lane
+
+Lab analysis is not part of this billing importer or `VisitBundle`. The
+provider-facing lab dashboard/chatbot belongs to the separate Sovereign
+provider-workspace integration, with its own normalized lab domain, storage,
+API/UI, OAuth application, Key Vault secret, and runtime identity. Its FHIR R4
+`DiagnosticReport` and `Observation` reads must not be added to this importer.
+
+The two products may share design principles, but they must never share an
+Athena client ID, client secret, access/refresh token, DSN, or secret source.
+Athena must approve and bind each OAuth client independently. A billing/claims
+grant here does not authorize the Sovereign lab lane, and a Sovereign lab grant
+does not authorize encounter, coverage, claim, or Card Chase ingestion here.
+
+## Local mock proof (no credential or network)
+
+Run the mock without a database for an ephemeral four-record proof:
+
+```bash
+COSMANEURA_ATHENA_SYNC_ENABLED=true \
+COSMANEURA_ATHENA_MODE=mock \
+COSMANEURA_PRACTICE_ID=synthetic-pilot \
+python -m cosmaneura_billing.athena_sync --once
+```
+
+To prove durable replay, use a disposable migrated PostgreSQL database and set
+both `COSMANEURA_ATHENA_IMPORT_DB_ROLE` and
+`COSMANEURA_ATHENA_IMPORT_DATABASE_URL` to the dedicated import login. Never
+use the API, chase-worker, migration-owner, or Sovereign DSN. The command emits
+counts and a code only; do not print the DSN, cursor, receipt key, payload, or
+record identifiers.
 
 ## Safety gates before a sandbox call
 

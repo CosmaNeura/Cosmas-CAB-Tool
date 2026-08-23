@@ -58,6 +58,25 @@ and worker roles also have no `TRIGGER` privilege, no `CREATE` on the `public`
 schema, and no `SET` privilege on `session_replication_role`. The migration
 changes no row, RLS policy, or table grant.
 
+`009_source_import_foundation` adds source-agnostic, practice-bound import
+registrations, durable per-feed checkpoints, and append-only idempotency
+receipts. It reserves `athena_preview_synthetic` as one server-owned encounter
+provenance and gives the dedicated Athena importer checkpoint read access plus
+`EXECUTE` on one database-owned page-commit function. The importer has no
+direct encounter, receipt, or checkpoint write grant, so normalized encounters,
+receipts, and continuation state cross one atomic boundary. A per-feed
+transaction lock and checkpoint-version comparison reject a
+stale overlapping writer. Exact page replay preserves encounter and checkpoint
+versions. The bounded normalizer mapping version is stored in both receipt and
+checkpoint state and included in the canonical receipt identity. A changed
+normalizer cannot resume a partially processed feed without an explicit
+reviewed restart/backfill. An `encounters` receipt must link its encounter. The
+generic schema permits a non-encounter receipt without `encounter_uid`, but a
+future MCD Card Chase adapter must add its own narrow database commit primitive
+(expected with the normalized coverage migration `010`); the Athena importer
+cannot write such receipts directly. This migration adds no coverage/lab table,
+Card Chase UI, OAuth behavior, or network path.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).
@@ -122,17 +141,23 @@ Use the locked runner from the one-shot migration job:
     COSMANEURA_DB_RUNTIME_PASSWORD='<separate runtime password>' \
     COSMANEURA_CHASE_WORKER_DB_ROLE=cosmaneura_chase_worker \
     COSMANEURA_CHASE_WORKER_DB_PASSWORD='<separate worker password>' \
+    COSMANEURA_ATHENA_IMPORT_DB_ROLE=cosmaneura_athena_import \
+    COSMANEURA_ATHENA_IMPORT_DB_PASSWORD='<separate import password>' \
     COSMANEURA_ENTRA_TENANT_ID='<tenant UUID>' \
     COSMANEURA_PRACTICE_ID='<stable practice ID>' \
     COSMANEURA_PRACTICE_NAME='<reviewed display name>' \
     COSMANEURA_BOOTSTRAP_ADMIN_OID='<immutable Entra object UUID>' \
     python -m cosmaneura_billing.migrations
 
-The runner serializes concurrent executions, applies each migration and its
+The Athena import role/password variables are optional and must be omitted when
+the dormant import boundary is not being provisioned. The runner serializes
+concurrent executions, applies each migration and its
 ledger row in one transaction, and refuses to continue if an already-applied
 file's SHA-256 changes. It also creates or rotates the least-privilege API and
-chase-worker logins, binds each login to exactly one practice, and grants only
-the required table/sequence/function privileges. The bootstrap OID creates the
+chase-worker logins and, when configured, the least-privilege source importer.
+Each login is bound to exactly one practice; the importer is additionally bound
+to one source system and server-owned provenance. The runner grants only the
+required table/sequence/function privileges. The bootstrap OID creates the
 initial reviewed `Admin` membership once; later migration runs never reactivate
 or overwrite a disabled membership. It does not discover users or create
 memberships from login traffic.
@@ -155,6 +180,17 @@ Keep three credentials:
   its password, or the ACS connection string to the API. The API and worker
   instead receive identical non-credential ACS endpoint/sender/reply metadata
   and the shared chase-gate key needed to compute the same exact evidence.
+- The no-ingress Athena sync job alone uses
+  `COSMANEURA_ATHENA_IMPORT_DATABASE_URL` with
+  `COSMANEURA_ATHENA_IMPORT_DB_ROLE` (normally
+  `cosmaneura_athena_import`). It can read only its own source/feed checkpoint
+  and can mutate imported encounters, receipts, and continuation state only by
+  executing the bounded atomic page-commit function. It cannot directly read
+  encounters or receipts, and cannot read memberships, coder feedback, access
+  audit, or Card Chase tables.
+  Never pass this DSN to the API, chase worker, or Sovereign provider-lab
+  application. The migration job receives the raw password only to create or
+  rotate the login; it does not receive the OAuth client secret or import DSN.
 
 The Azure deployment must store these as separate Key Vault secrets and expose
 each only to its owning job or service. Never paste a real DSN or password into
@@ -211,12 +247,14 @@ Plain psql:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_synthetic_demo_release_candidate_source.up.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/008_synthetic_demo_encounter_immutability.up.sql
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/009_source_import_foundation.up.sql
     # rollback:
     # PRECONDITION: close API, worker, and sync ingress/scheduling. As the exact
     # table owner, select each bound practice via cosmaneura.practice_id, delete
     # its reserved-source rows, and verify that practice has zero remaining.
     # Repeat for every bound practice; forced RLS makes an unscoped count unsafe.
     # Keep ingress closed until both 008 and 007 are down.
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/009_source_import_foundation.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/008_synthetic_demo_encounter_immutability.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_synthetic_demo_release_candidate_source.down.sql
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_chase_policy_revocation.down.sql
@@ -230,7 +268,16 @@ The down migrations are destructive and are intended only for an explicitly
 selected disposable database or a reviewed rollback. Migration `008` cannot
 perform a reliable cross-practice row check through forced RLS, so its stated
 closed-ingress, per-practice owner cleanup is a mandatory operational gate, not
-an optional verification. `002` is safe to apply before `001` when the chase
+an optional verification.
+
+Migration `009` rollback also requires every source importer to be stopped. Its
+down migration destroys checkpoint/receipt history, revokes each registered
+importer's encounter privileges, and removes its runtime binding; it fails
+closed while any `athena_preview_synthetic` encounter remains. Retain required
+audit evidence, then remove reserved rows as exact table owner before reviewed
+rollback. Never use the down migration as an ordinary sync reset or replay.
+
+`002` is safe to apply before `001` when the chase
 store is needed before the dialogue index. Direct
 `psql` does not provision the API/worker runtime roles or bootstrap
 administrator, so it is not a substitute for the deployment runner.

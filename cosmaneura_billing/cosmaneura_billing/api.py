@@ -58,7 +58,7 @@ from .orchestrator import BillingOrchestrator
 from .persistence import (
     MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
     PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
-    SYNTHETIC_DEMO_SOURCE, UnknownEncounter, postgres_services,
+    READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES, UnknownEncounter, postgres_services,
 )
 from .preferences import PreferenceStore
 from .runtime import PHISafeHTTPMiddleware, configure_json_logging
@@ -693,10 +693,10 @@ def list_encounters(request: Request) -> list[dict[str, Any]]:
 
 
 def _encounter_data_policy(stored) -> dict[str, Any]:
-    is_synthetic_demo = stored.source == SYNTHETIC_DEMO_SOURCE
+    is_synthetic_demo = stored.source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
     return {
         "dataClass": (
-            SYNTHETIC_DEMO_SOURCE if is_synthetic_demo else "operational"
+            stored.source if is_synthetic_demo else "operational"
         ),
         "readOnly": is_synthetic_demo,
     }
@@ -719,7 +719,10 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
     """
     if not _request_settings(request).azure_openai_synthetic_only:
         return
-    if stored is None or stored.source != SYNTHETIC_DEMO_SOURCE:
+    if (
+        stored is None
+        or stored.source not in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+    ):
         raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
 
 

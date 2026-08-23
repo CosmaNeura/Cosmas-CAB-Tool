@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from .corpus.demo_release_candidate import load_demo_release_candidate
 from .schemas import VisitBundle
+from .source_import import source_import_idempotency_key
 
 
 NORMALIZED_SCHEMA_VERSION = "cosmaneura-athena-normalized-v1"
@@ -47,7 +48,7 @@ ATHENA_PREVIEW_SCOPE = "athena/service/Athenanet.MDP.*"
 MAX_PAGE_RECORDS = 100
 MAX_PAGES = 100
 MAX_RESPONSE_BYTES = 1_048_576
-MAX_CURSOR_CHARS = 512
+MAX_CURSOR_BYTES = 512
 MAX_TOKEN_CHARS = 16_384
 # Local acceptance bound, not a claim about Athena's issued token lifetime.
 MAX_TOKEN_FUTURE_SECONDS = 3_600
@@ -114,10 +115,15 @@ class AthenaOperationUnavailable(AthenaClientError):
 def _safe_string(value: Any, *, minimum: int = 1, maximum: int) -> str:
     if (
         not isinstance(value, str)
-        or not minimum <= len(value) <= maximum
         or value != value.strip()
         or any(ord(char) < 32 or ord(char) == 127 for char in value)
     ):
+        raise AthenaSchemaError() from None
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise AthenaSchemaError() from None
+    if not minimum <= len(encoded) <= maximum:
         raise AthenaSchemaError() from None
     return value
 
@@ -143,13 +149,19 @@ def _bounded_text(value: Any, maximum: int) -> str:
     return value
 
 
-def _idempotency_key(source_record_id: str, source_version: str) -> str:
-    canonical = json.dumps(
-        [source_record_id, source_version],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return "athena-read-v1:" + hashlib.sha256(canonical).hexdigest()
+def _idempotency_key(
+    practice_id: str,
+    source_record_id: str,
+    source_version: str,
+) -> str:
+    return source_import_idempotency_key(
+        practice_id=practice_id,
+        source_system="athena_preview",
+        feed="encounters",
+        source_record_id=source_record_id,
+        source_version=source_version,
+        mapping_version=NORMALIZED_SCHEMA_VERSION,
+    )
 
 
 @dataclass(frozen=True, repr=False)
@@ -164,6 +176,7 @@ class AthenaVisitRecord:
     target_practice_id: str
     source_record_id: str
     source_version: str
+    mapping_version: str
     idempotency_key: str
     visit: VisitBundle
 
@@ -227,8 +240,8 @@ def parse_normalized_page(
 
     next_cursor = page["next_cursor"]
     if next_cursor is not None:
-        next_cursor = _safe_string(next_cursor, maximum=MAX_CURSOR_CHARS)
-    checkpoint = _safe_string(page["checkpoint"], maximum=MAX_CURSOR_CHARS)
+        next_cursor = _safe_string(next_cursor, maximum=MAX_CURSOR_BYTES)
+    checkpoint = _safe_string(page["checkpoint"], maximum=MAX_CURSOR_BYTES)
 
     records: list[AthenaVisitRecord] = []
     for raw_record in raw_records:
@@ -288,7 +301,9 @@ def parse_normalized_page(
             target_practice_id=practice_id,
             source_record_id=source_record_id,
             source_version=source_version,
+            mapping_version=NORMALIZED_SCHEMA_VERSION,
             idempotency_key=_idempotency_key(
+                practice_id,
                 source_record_id,
                 source_version,
             ),
@@ -315,7 +330,7 @@ def read_all_pages(
     if not 1 <= max_pages <= MAX_PAGES:
         raise AthenaSchemaError() from None
     if starting_cursor is not None:
-        _safe_string(starting_cursor, maximum=MAX_CURSOR_CHARS)
+        _safe_string(starting_cursor, maximum=MAX_CURSOR_BYTES)
 
     cursor = starting_cursor
     seen_cursors: set[str] = set()
@@ -397,7 +412,7 @@ class MockAthenaClient:
         if cursor is None:
             start = 0
         else:
-            _safe_string(cursor, maximum=MAX_CURSOR_CHARS)
+            _safe_string(cursor, maximum=MAX_CURSOR_BYTES)
             prefix = "mock-cursor-v1-"
             if not cursor.startswith(prefix):
                 raise AthenaSchemaError() from None
@@ -555,7 +570,7 @@ def _canonical_preview_query(
         if key not in allowed_keys:
             raise AthenaSchemaError() from None
         safe_key = _safe_string(key, maximum=64)
-        safe_value = _safe_string(value, maximum=MAX_CURSOR_CHARS)
+        safe_value = _safe_string(value, maximum=MAX_CURSOR_BYTES)
         if (
             any(not 33 <= ord(char) <= 126 for char in safe_key)
             or any(not 33 <= ord(char) <= 126 for char in safe_value)
@@ -965,7 +980,7 @@ class AthenaSandboxClient:
 
     def read_page(self, cursor: str | None = None) -> AthenaPage:
         if cursor is not None:
-            _safe_string(cursor, maximum=MAX_CURSOR_CHARS)
+            _safe_string(cursor, maximum=MAX_CURSOR_BYTES)
         try:
             operation = self._contract.operation
             query = self._contract.build_page_query(cursor)

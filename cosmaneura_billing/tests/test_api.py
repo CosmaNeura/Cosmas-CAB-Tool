@@ -11,6 +11,10 @@ from fastapi.testclient import TestClient
 
 import cosmaneura_billing.api as api
 from cosmaneura_billing.auth import AuthPrincipal
+from cosmaneura_billing.persistence import (
+    ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    StoredEncounter,
+)
 from cosmaneura_billing.settings import Settings
 
 
@@ -141,6 +145,22 @@ def test_read_only_data_class_comes_only_from_persisted_source(client):
         and response["readOnly"] is True
         for response in (detail, billing, coder)
     )
+
+    athena_policy = api._encounter_data_policy(StoredEncounter(
+        resource_id="synthetic-resource-id",
+        bundle=stored.bundle,
+        source=ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    ))
+    unknown_policy = api._encounter_data_policy(StoredEncounter(
+        resource_id="operational-resource-id",
+        bundle=stored.bundle,
+        source="future_unknown_source",
+    ))
+    assert athena_policy == {
+        "dataClass": ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+        "readOnly": True,
+    }
+    assert unknown_policy == {"dataClass": "operational", "readOnly": False}
 
 
 def test_unknown_encounter_404(client):

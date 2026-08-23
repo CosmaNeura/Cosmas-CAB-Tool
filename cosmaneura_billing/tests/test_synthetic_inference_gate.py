@@ -14,6 +14,7 @@ from cosmaneura_billing.orchestrator import (
     InferenceInputPolicyError,
 )
 from cosmaneura_billing.persistence import (
+    ATHENA_PREVIEW_SYNTHETIC_SOURCE,
     MemoryEncounterStore,
     SYNTHETIC_DEMO_SOURCE,
 )
@@ -43,7 +44,7 @@ class CountingMockLLM(MockLLM):
         return super().complete_json(*args, **kwargs)
 
 
-def test_orchestrator_gate_requires_exact_reserved_provenance():
+def test_orchestrator_gate_requires_a_server_owned_synthetic_provenance():
     llm = CountingMockLLM()
     orchestrator = BillingOrchestrator(llm=llm, settings=_gated_settings())
 
@@ -53,10 +54,15 @@ def test_orchestrator_gate_requires_exact_reserved_provenance():
         orchestrator.process(SAMPLE_VISIT, input_provenance="explicit_import")
 
     assert llm.calls == 0
-    result = orchestrator.process(
-        SAMPLE_VISIT, input_provenance=SYNTHETIC_DEMO_SOURCE,
-    )
-    assert result.inference["inferenceMode"] == "mock"
+    for provenance in (
+        SYNTHETIC_DEMO_SOURCE,
+        ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    ):
+        result = orchestrator.process(
+            SAMPLE_VISIT,
+            input_provenance=provenance,
+        )
+        assert result.inference["inferenceMode"] == "mock"
     assert llm.calls > 0
 
 

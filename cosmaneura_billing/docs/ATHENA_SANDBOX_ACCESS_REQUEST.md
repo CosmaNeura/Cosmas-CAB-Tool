@@ -5,6 +5,12 @@ application already matches the proposed integration, but athenahealth does not
 offer a read-only proprietary AthenaOne scope. No application, credential, or
 scope was created, opened, rotated, or changed during this review.
 
+This request is only for the billing/claims import lane in this repository.
+The Sovereign provider-workspace lab feature must use a different OAuth client
+ID, secret, token lifecycle, Key Vault secret, and runtime identity. Never reuse
+or copy credentials between the billing importer and Sovereign, even if both
+applications target Athena Preview Practice `195900`.
+
 Official onboarding source:
 
 - [athenahealth onboarding overview](https://docs.athenahealth.com/api/guides/onboarding-overview)
@@ -16,7 +22,7 @@ Official onboarding source:
 
 | Field | Proposed value; confirm before submission |
 |---|---|
-| Application name | `CosmaNeura CAB Synthetic Read Validation` |
+| Application name | `Cosmas Billing Import Preview` |
 | Environment | Preview / public sandbox |
 | Authorization category | 2-Legged OAuth |
 | Data authorization | System-level, sandbox synthetic records only |
@@ -95,9 +101,11 @@ client ID, selected scope names, creation time, owner, and expiration metadata.
 
 - the repository mock suite and dormant infrastructure are merged;
 - the sync job remains disabled and manual with no ingress;
+- migration `009` is applied and the dedicated practice/source-bound import
+  login has a separate DSN; neither the API nor chase worker can read it;
 - the exact portal scope list is captured without credentials;
-- the credential is available only to the dedicated sync identity through one
-  secret-scoped Key Vault role assignment;
+- the OAuth credential and import DSN are available only to the dedicated sync
+  identity through separate, secret-scoped Key Vault role assignments;
 - all other workloads have zero Athena settings or secret grants; and
 - a bounded acceptance plan uses only sandbox synthetic records and emits
   count/code-only evidence.

@@ -30,6 +30,9 @@ param postgresAppLogin string = 'cosmaneura_app'
 @description('Must match the dedicated chase worker login configured by the foundation deployment.')
 param postgresChaseWorkerLogin string = 'cosmaneura_chase_worker'
 
+@description('Must match the dedicated Athena import login configured by the foundation deployment.')
+param postgresAthenaImportLogin string = 'cosmaneura_athena_import'
+
 @description('Secure card-upload URL used by chase templates.')
 param uploadUrl string = 'https://example.invalid/insurance'
 
@@ -90,6 +93,9 @@ param azureLanguageApiVersion string = '2023-04-01'
 
 @description('Provision a dedicated user-assigned identity and no-ingress manual job for Athena sandbox sync. This does not enable sync or make an Athena request.')
 param provisionAthenaSync bool = false
+
+@description('Operator assertion that foundation provisionAthenaImportDatabase completed and its two Key Vault secrets exist. Required before provisioning the sync job.')
+param athenaImportDatabaseProvisioned bool = false
 
 @description('Enable the manually triggered Athena sandbox sync lane. Keep false until synthetic/read-only access, exact endpoints/scopes, egress, import-role, and acceptance review are complete.')
 param enableAthenaSync bool = false
@@ -247,6 +253,28 @@ var validatedAzureLanguageShadowEnabled = enableAzureLanguageShadow && enableAzu
 var azureLanguageEnabledValue = validatedAzureLanguageExtractionEnabled ? 'true' : 'false'
 var azureLanguageShadowEnabledValue = validatedAzureLanguageShadowEnabled ? 'true' : 'false'
 var athenaConfigurationFieldsPresent = startsWith(toLower(athenaBaseUrl), 'https://') && startsWith(toLower(athenaTokenUrl), 'https://') && !empty(athenaClientId) && !empty(athenaScopes)
+var athenaReservedSecretNames = [
+  'migration-database-url'
+  'database-runtime-password'
+  'chase-worker-database-password'
+  'athena-import-database-password'
+  'database-url'
+  'chase-worker-database-url'
+  'athena-import-database-url'
+  'chase-gate-hmac-key'
+  'acs-email-connection-string'
+]
+var athenaClientSecretNameConflicts = contains(athenaReservedSecretNames, toLower(athenaClientSecretKeyVaultSecretName)) || toLower(athenaClientSecretKeyVaultSecretName) == toLower(entraClientSecretKeyVaultSecretName)
+var validatedAthenaClientSecretName = athenaClientSecretNameConflicts
+  ? fail('athenaClientSecretKeyVaultSecretName must not alias any platform or Entra secret')
+  : athenaClientSecretKeyVaultSecretName
+var entraClientSecretNameConflicts = contains(athenaReservedSecretNames, toLower(entraClientSecretKeyVaultSecretName)) || toLower(entraClientSecretKeyVaultSecretName) == toLower(athenaClientSecretKeyVaultSecretName)
+var validatedEntraClientSecretName = entraClientSecretNameConflicts
+  ? fail('entraClientSecretKeyVaultSecretName must not alias any platform or Athena secret')
+  : entraClientSecretKeyVaultSecretName
+var validatedAthenaImportDatabase = provisionAthenaSync && !athenaImportDatabaseProvisioned
+  ? fail('provisionAthenaSync requires athenaImportDatabaseProvisioned after the foundation import secrets exist')
+  : athenaImportDatabaseProvisioned
 var validatedAthenaSyncEnabled = enableAthenaSync && !provisionAthenaSync
   ? fail('enableAthenaSync requires provisionAthenaSync')
   : enableAthenaSync && !athenaConfigurationFieldsPresent
@@ -320,12 +348,30 @@ resource athenaSyncAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 resource athenaClientSecretVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = if (validatedAthenaSyncEnabled) {
   parent: keyVault
-  name: athenaClientSecretKeyVaultSecretName
+  name: validatedAthenaClientSecretName
 }
 
 resource athenaClientSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (validatedAthenaSyncEnabled) {
   scope: athenaClientSecretVault
   name: guid(athenaClientSecretVault.id, athenaSyncIdentity!.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: athenaSyncIdentity!.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource athenaImportDatabaseUrlVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = if (validatedAthenaSyncEnabled) {
+  parent: keyVault
+  name: 'athena-import-database-url'
+}
+
+resource athenaImportDatabaseUrlReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (validatedAthenaSyncEnabled) {
+  scope: athenaImportDatabaseUrlVault
+  name: guid(athenaImportDatabaseUrlVault.id, athenaSyncIdentity!.id, 'key-vault-secrets-user')
   properties: {
     principalId: athenaSyncIdentity!.properties.principalId
     principalType: 'ServicePrincipal'
@@ -432,7 +478,7 @@ resource azureLanguagePrivateDnsGroup 'Microsoft.Network/privateEndpoints/privat
 
 resource entraClientSecretVault 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: keyVault
-  name: entraClientSecretKeyVaultSecretName
+  name: validatedEntraClientSecretName
   properties: {
     contentType: 'Container Apps Microsoft Entra authentication client secret'
     value: entraClientSecret
@@ -478,7 +524,7 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
           identity: migrationIdentity.id
         }
       ]
-      secrets: [
+      secrets: concat([
         {
           name: 'migration-database-url'
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/migration-database-url'
@@ -494,7 +540,13 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-worker-database-password'
           identity: migrationIdentity.id
         }
-      ]
+      ], validatedAthenaImportDatabase ? [
+        {
+          name: 'athena-import-database-password'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/athena-import-database-password'
+          identity: migrationIdentity.id
+        }
+      ] : [])
     }
     template: {
       containers: [
@@ -508,7 +560,7 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
             '-m'
             'cosmaneura_billing.migrations'
           ]
-          env: [
+          env: concat([
             {
               name: 'DATABASE_URL'
               secretRef: 'migration-database-url'
@@ -549,7 +601,16 @@ resource migrationJob 'Microsoft.App/jobs@2026-01-01' = {
               name: 'COSMANEURA_MIGRATIONS_DIR'
               value: '/app/migrations'
             }
-          ]
+          ], validatedAthenaImportDatabase ? [
+            {
+              name: 'COSMANEURA_ATHENA_IMPORT_DB_ROLE'
+              value: postgresAthenaImportLogin
+            }
+            {
+              name: 'COSMANEURA_ATHENA_IMPORT_DB_PASSWORD'
+              secretRef: 'athena-import-database-password'
+            }
+          ] : [])
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
@@ -600,7 +661,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
         }
         {
           name: entraSecretSettingName
-          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${entraClientSecretKeyVaultSecretName}'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${validatedEntraClientSecretName}'
           identity: identity.id
         }
         {
@@ -1068,7 +1129,12 @@ resource athenaSyncJob 'Microsoft.App/jobs@2026-01-01' = if (provisionAthenaSync
       secrets: validatedAthenaSyncEnabled ? [
         {
           name: 'athena-client-secret'
-          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${athenaClientSecretKeyVaultSecretName}'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${validatedAthenaClientSecretName}'
+          identity: athenaSyncIdentity!.id
+        }
+        {
+          name: 'athena-import-database-url'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/athena-import-database-url'
           identity: athenaSyncIdentity!.id
         }
       ] : []
@@ -1132,6 +1198,14 @@ resource athenaSyncJob 'Microsoft.App/jobs@2026-01-01' = if (provisionAthenaSync
               name: 'COSMANEURA_ATHENA_CLIENT_SECRET'
               secretRef: 'athena-client-secret'
             }
+            {
+              name: 'COSMANEURA_ATHENA_IMPORT_DB_ROLE'
+              value: postgresAthenaImportLogin
+            }
+            {
+              name: 'COSMANEURA_ATHENA_IMPORT_DATABASE_URL'
+              secretRef: 'athena-import-database-url'
+            }
           ] : [])
           resources: {
             cpu: json('0.5')
@@ -1144,6 +1218,7 @@ resource athenaSyncJob 'Microsoft.App/jobs@2026-01-01' = if (provisionAthenaSync
   dependsOn: [
     athenaSyncAcrPull
     athenaClientSecretReader
+    athenaImportDatabaseUrlReader
   ]
 }
 

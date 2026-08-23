@@ -93,7 +93,12 @@ and local-development exception are in `docs/ACCESS_CONTROL.md`.
 The read-first Athena sandbox architecture, including why it uses a private
 outbound sync job rather than a second public API, is in
 `docs/ATHENA_SANDBOX_INTEGRATION.md`; the exact Preview, synthetic/read-only
-enrollment request is in `docs/ATHENA_SANDBOX_ACCESS_REQUEST.md`.
+enrollment request is in `docs/ATHENA_SANDBOX_ACCESS_REQUEST.md`. The four-case
+mock now exercises source-agnostic durable receipts/checkpoints and atomic
+encounter persistence. Live OAuth/network execution remains deliberately
+unimplemented and all deployment gates default off. Provider lab analysis is a
+separate Sovereign integration and must not share this billing importer's OAuth
+client, secrets, tokens, or storage contract.
 
 Staging and production are PostgreSQL-only: set both
 `COSMANEURA_STATE_STORE=postgres` and `COSMANEURA_CHASE_STORE=postgres`, and use
