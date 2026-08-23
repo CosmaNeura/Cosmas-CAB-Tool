@@ -90,6 +90,8 @@ def test_atomic_function_is_the_importers_only_write_capability():
     assert "SET search_path = pg_catalog, public" not in normalized
     assert "pg_advisory_xact_lock" in normalized
     assert "expected_checkpoint_version" in normalized
+    assert "candidate_feed IS DISTINCT FROM 'encounters'" in normalized
+    assert "source-import encounter feed is invalid" in normalized
     assert "octet_length(candidate_records::text) > 16777216" in normalized
     assert "source-encounter-v1:[0-9a-f]{64}" in normalized
     assert "source-import-v1:[0-9a-f]{64}" in normalized
@@ -117,6 +119,8 @@ def test_receipts_are_append_only_and_checkpoint_identity_is_immutable():
         "ROW(OLD.checkpoint, OLD.next_cursor)"
         in normalized
     )
+    assert "position_changed OR NEW.version = OLD.version + 1" in normalized
+    assert "CASE WHEN imported_total > 0 THEN 1 ELSE 0 END" in normalized
     for trigger in (
         "encounters_source_import_guard",
         "encounters_z_source_import_truncate_guard",

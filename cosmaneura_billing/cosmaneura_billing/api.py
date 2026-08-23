@@ -1290,7 +1290,10 @@ def chase_demo_seed(
         return {
             "seedId": seed.seed_id,
             "seedDigest": seed.digest,
-            "casesReady": len(existing),
+            "installedCaseCount": len(existing),
+            "openTaskCount": sum(
+                item.is_open for item in existing if item is not None
+            ),
             "replayed": True,
             "outbound": _chase_outbound_status(settings),
         }
@@ -1325,20 +1328,31 @@ def chase_demo_seed(
                 ),
             ))
         try:
-            results = scheduler.persist_detection_batch(
+            scheduler.persist_detection_batch(
                 entries,
                 audit_event=_scheduler_audit_event(request),
             )
             request.state.audit_completion_committed = True
         except Exception as exc:
             _raise_scheduler_http(exc)
-        ready = len(results)
+        installed = [context["store"].get(item.chase_id) for item in items]
+        if not all(
+            item is not None and synthetic_case_for(item) is not None
+            for item in installed
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="synthetic chase seed confirmation is unavailable",
+            )
     else:
-        ready = len(context["store"].extend(items))
+        installed = context["store"].extend(items)
     return {
         "seedId": seed.seed_id,
         "seedDigest": seed.digest,
-        "casesReady": ready,
+        "installedCaseCount": len(installed),
+        "openTaskCount": sum(
+            item.is_open for item in installed if item is not None
+        ),
         "replayed": False,
         "outbound": _chase_outbound_status(settings),
     }

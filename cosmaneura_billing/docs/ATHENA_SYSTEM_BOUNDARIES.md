@@ -2,10 +2,10 @@
 
 Status: reviewed 2026-08-23. This boundary is intentionally credential-free.
 
-This review compared the billing repository at `0bebce4` with the actual
-GitHub `main` of `CosmaNeura/cosmaneura-sovereign` at `c570560`. The local
-`cosmaneura-sovereign-main` checkout was behind its remote and must not be used
-as the release reference.
+This review compared this work, based on billing commit `0bebce4`, with the
+actual GitHub `main` of `CosmaNeura/cosmaneura-sovereign` at `c570560`. The
+local `cosmaneura-sovereign-main` checkout was behind its remote and must not
+be used as the release reference.
 
 ## Decision
 

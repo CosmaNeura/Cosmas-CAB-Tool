@@ -24,6 +24,7 @@ from cosmaneura_billing.settings import Settings
 from cosmaneura_billing.source_import import (
     PostgresSourceImportStore,
     SourceImportConflict,
+    SourceImportSchemaError,
     source_import_external_id,
     source_import_idempotency_key,
 )
@@ -285,6 +286,8 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
             "checkpoint": page.checkpoint,
             "next_cursor": page.next_cursor,
         }
+        with pytest.raises(SourceImportSchemaError):
+            store.import_encounter_page(**{**arguments, "feed": "claims"})
         with pytest.raises(SourceImportConflict):
             store.import_encounter_page(
                 **{**arguments, "provenance": "unregistered_import_source"}
@@ -346,6 +349,16 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
                 }
             }
 
+        with psycopg.connect(TEST_DSN) as owner:
+            checkpoint_storage_before_replay = owner.execute(
+                """SELECT xmin::text, ctid::text, updated_at
+                     FROM public.source_import_checkpoints
+                    WHERE practice_id = %s
+                      AND source_system = %s
+                      AND feed = 'encounters'""",
+                (practice_a, SOURCE_SYSTEM),
+            ).fetchone()
+
         replayed = store.import_encounter_page(
             **{
                 **arguments,
@@ -356,6 +369,76 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
         assert store.load_checkpoint(
             source_system=SOURCE_SYSTEM, feed="encounters",
         ) == first_checkpoint
+        nonterminal_replay = store.import_encounter_page(
+            **{
+                **arguments,
+                "checkpoint": "different-source-checkpoint",
+                "next_cursor": "different-source-cursor",
+                "expected_checkpoint_version": first_checkpoint.version,
+            }
+        )
+        assert (
+            nonterminal_replay.imported_count,
+            nonterminal_replay.replayed_count,
+        ) == (0, 2)
+        assert nonterminal_replay.checkpoint == first_checkpoint
+        with psycopg.connect(TEST_DSN) as owner:
+            assert owner.execute(
+                """SELECT xmin::text, ctid::text, updated_at
+                     FROM public.source_import_checkpoints
+                    WHERE practice_id = %s
+                      AND source_system = %s
+                      AND feed = 'encounters'""",
+                (practice_a, SOURCE_SYSTEM),
+            ).fetchone() == checkpoint_storage_before_replay
+
+        second_page = MockAthenaClient(
+            server_practice_id=practice_a,
+        ).read_page(page.next_cursor)
+        second_arguments = {
+            "source_system": SOURCE_SYSTEM,
+            "feed": "encounters",
+            "provenance": PROVENANCE,
+            "mapping_version": second_page.records[0].mapping_version,
+            "records": second_page.records,
+            "checkpoint": second_page.checkpoint,
+            "next_cursor": second_page.next_cursor,
+        }
+        completed = store.import_encounter_page(
+            **{
+                **second_arguments,
+                "expected_checkpoint_version": first_checkpoint.version,
+            }
+        )
+        assert (completed.imported_count, completed.replayed_count) == (2, 0)
+        terminal_checkpoint = completed.checkpoint
+        assert terminal_checkpoint.next_cursor is None
+
+        replayed_first_page = store.import_encounter_page(
+            **{
+                **arguments,
+                "expected_checkpoint_version": terminal_checkpoint.version,
+            }
+        )
+        assert (
+            replayed_first_page.imported_count,
+            replayed_first_page.replayed_count,
+        ) == (0, 2)
+        assert replayed_first_page.checkpoint == terminal_checkpoint
+        replayed_second_page = store.import_encounter_page(
+            **{
+                **second_arguments,
+                "expected_checkpoint_version": terminal_checkpoint.version,
+            }
+        )
+        assert (
+            replayed_second_page.imported_count,
+            replayed_second_page.replayed_count,
+        ) == (0, 2)
+        assert replayed_second_page.checkpoint == terminal_checkpoint
+        assert store.load_checkpoint(
+            source_system=SOURCE_SYSTEM, feed="encounters",
+        ) == terminal_checkpoint
 
         original = page.records[0]
         stale_store = PostgresSourceImportStore(
@@ -366,7 +449,7 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
             source_system=SOURCE_SYSTEM,
             feed="encounters",
         )
-        assert stale_checkpoint == first_checkpoint
+        assert stale_checkpoint == terminal_checkpoint
         changed = replace(
             original,
             source_version="source-version-2",
@@ -389,16 +472,18 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
             provenance=PROVENANCE,
             mapping_version=changed.mapping_version,
             records=(changed,),
-            checkpoint="mock-checkpoint-updated",
-            next_cursor=None,
-            expected_checkpoint_version=first_checkpoint.version,
+            checkpoint=terminal_checkpoint.checkpoint,
+            next_cursor=terminal_checkpoint.next_cursor,
+            expected_checkpoint_version=terminal_checkpoint.version,
         )
         assert (updated.imported_count, updated.replayed_count) == (1, 0)
         updated_checkpoint = store.load_checkpoint(
             source_system=SOURCE_SYSTEM, feed="encounters",
         )
         assert updated_checkpoint is not None
-        assert updated_checkpoint.version == 2
+        assert updated_checkpoint.version == terminal_checkpoint.version + 1
+        assert updated_checkpoint.checkpoint == terminal_checkpoint.checkpoint
+        assert updated_checkpoint.next_cursor == terminal_checkpoint.next_cursor
         with pytest.raises(SourceImportConflict):
             stale_store.import_encounter_page(
                 source_system=SOURCE_SYSTEM,
@@ -489,7 +574,7 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
                 """SELECT count(*) FROM public.source_import_receipts
                     WHERE practice_id = %s""",
                 (practice_a,),
-            ).fetchone()[0] == 3
+            ).fetchone()[0] == 5
 
         # The credential has no direct data-table path: the reviewed atomic
         # function is its only mutation capability.
@@ -564,6 +649,26 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
                         "SELECT * FROM public.source_import_role_bindings"
                     )
 
+            with pytest.raises(
+                psycopg.errors.CheckViolation,
+                match="source-import encounter feed is invalid",
+            ):
+                with importer.transaction(force_rollback=True):
+                    importer.execute(
+                        """SELECT * FROM
+                               public.cosmaneura_commit_source_encounter_page(
+                                   %s, %s, 'claims', %s, %s, %s,
+                                   '[]'::jsonb, 'must-not-commit', NULL
+                               )""",
+                        (
+                            practice_a,
+                            SOURCE_SYSTEM,
+                            PROVENANCE,
+                            page.records[0].mapping_version,
+                            updated_checkpoint.version,
+                        ),
+                    )
+
             record = page.records[0]
             malformed_record = {
                 "target_external_id": "raw-patient-identifier",
@@ -608,6 +713,23 @@ def test_athena_import_role_is_exactly_scoped_and_page_commit_is_atomic():
             )
             assert importer.execute(
                 "SELECT count(*) FROM public.source_import_checkpoints"
+            ).fetchone()[0] == 0
+
+        assert store.load_checkpoint(
+            source_system=SOURCE_SYSTEM, feed="encounters",
+        ) == updated_checkpoint
+        with psycopg.connect(TEST_DSN) as owner:
+            assert owner.execute(
+                """SELECT count(*)
+                     FROM public.source_import_checkpoints
+                    WHERE practice_id = %s AND feed = 'claims'""",
+                (practice_a,),
+            ).fetchone()[0] == 0
+            assert owner.execute(
+                """SELECT count(*)
+                     FROM public.source_import_receipts
+                    WHERE practice_id = %s AND feed = 'claims'""",
+                (practice_a,),
             ).fetchone()[0] == 0
 
         ordinary_dsn = make_conninfo(

@@ -27,6 +27,7 @@ _SOURCE_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _FEED_NAME = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _PROVENANCE_NAME = re.compile(r"[a-z][a-z0-9_]{0,127}")
 _MAPPING_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+_ENCOUNTER_FEED = "encounters"
 
 
 class SourceImportError(RuntimeError):
@@ -182,6 +183,15 @@ def _validate_mapping_version(value: str) -> str:
     if not isinstance(value, str) or _MAPPING_VERSION.fullmatch(value) is None:
         raise SourceImportSchemaError() from None
     return value
+
+
+def _validate_encounter_feed(value: str) -> str:
+    """Keep the encounter writer unavailable to every other feed type."""
+
+    feed = _validate_name(value, feed=True)
+    if feed != _ENCOUNTER_FEED:
+        raise SourceImportSchemaError() from None
+    return feed
 
 
 def source_import_external_id(
@@ -370,7 +380,7 @@ class MemorySourceImportStore:
         expected_checkpoint_version: int | None = None,
     ) -> SourceImportPageResult:
         source_system = _validate_name(source_system)
-        feed = _validate_name(feed, feed=True)
+        feed = _validate_encounter_feed(feed)
         provenance = _validate_name(provenance, provenance=True)
         mapping_version = _validate_mapping_version(mapping_version)
         checkpoint = _validate_opaque(checkpoint, required=False)
@@ -454,45 +464,62 @@ class MemorySourceImportStore:
             and old_checkpoint.mapping_version != mapping_version
         ):
             raise SourceImportConflict() from None
-        position_changed = old_checkpoint is None or (
-            old_checkpoint.checkpoint != checkpoint
-            or old_checkpoint.next_cursor != next_cursor
+        # A non-empty page whose receipts are all already durable proves no
+        # new import progress, so it cannot move or bump the checkpoint. The
+        # caller may still walk source cursors to verify a whole-feed replay.
+        # Empty pages are deliberately excluded so they can advance state.
+        exact_replay = (
+            old_checkpoint is not None
+            and imported == 0
+            and replayed == len(prepared)
+            and replayed > 0
         )
-        active_history = (
-            ()
-            if old_checkpoint is None or old_checkpoint.next_cursor is None
-            else old_checkpoint.cursor_history
+        committed_checkpoint_value = (
+            old_checkpoint.checkpoint if exact_replay else checkpoint
         )
-        if (
-            position_changed
-            and next_cursor is not None
-            and next_cursor in active_history
-        ):
-            raise SourceImportConflict() from None
-        cursor_history = (
-            active_history + (next_cursor,)
-            if position_changed and next_cursor is not None
-            else active_history
+        committed_next_cursor = (
+            old_checkpoint.next_cursor if exact_replay else next_cursor
         )
-        if len(cursor_history) > MAX_IMPORT_CURSOR_HISTORY:
-            raise SourceImportConflict() from None
-        version = (
-            1
-            if old_checkpoint is None
-            else old_checkpoint.version
-            + int(
-                old_checkpoint.checkpoint != checkpoint
-                or old_checkpoint.next_cursor != next_cursor
+        if exact_replay:
+            committed_checkpoint = old_checkpoint
+        else:
+            position_changed = old_checkpoint is None or (
+                old_checkpoint.checkpoint != committed_checkpoint_value
+                or old_checkpoint.next_cursor != committed_next_cursor
             )
-        )
-        committed_checkpoint = SourceImportCheckpoint(
-            checkpoint=checkpoint,
-            next_cursor=next_cursor,
-            mapping_version=mapping_version,
-            cursor_history=cursor_history,
-            version=version,
-        )
-        checkpoints[(source_system, feed)] = committed_checkpoint
+            active_history = (
+                ()
+                if old_checkpoint is None
+                or (position_changed and old_checkpoint.next_cursor is None)
+                else old_checkpoint.cursor_history
+            )
+            if (
+                position_changed
+                and committed_next_cursor is not None
+                and committed_next_cursor in active_history
+            ):
+                raise SourceImportConflict() from None
+            cursor_history = (
+                active_history + (committed_next_cursor,)
+                if position_changed and committed_next_cursor is not None
+                else active_history
+            )
+            if len(cursor_history) > MAX_IMPORT_CURSOR_HISTORY:
+                raise SourceImportConflict() from None
+            version = (
+                1
+                if old_checkpoint is None
+                else old_checkpoint.version
+                + int(position_changed or imported > 0)
+            )
+            committed_checkpoint = SourceImportCheckpoint(
+                checkpoint=committed_checkpoint_value,
+                next_cursor=committed_next_cursor,
+                mapping_version=mapping_version,
+                cursor_history=cursor_history,
+                version=version,
+            )
+            checkpoints[(source_system, feed)] = committed_checkpoint
         if self._transaction_check is not None:
             self._transaction_check()
         self._receipts = receipts
@@ -554,7 +581,7 @@ class PostgresSourceImportStore:
         expected_checkpoint_version: int | None = None,
     ) -> SourceImportPageResult:
         source_system = _validate_name(source_system)
-        feed = _validate_name(feed, feed=True)
+        feed = _validate_encounter_feed(feed)
         provenance = _validate_name(provenance, provenance=True)
         mapping_version = _validate_mapping_version(mapping_version)
         checkpoint = _validate_opaque(checkpoint, required=False)

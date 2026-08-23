@@ -92,7 +92,82 @@ def test_exact_replay_records_receipts_without_mutating_encounter_versions():
     assert first.imported_count == 2
     assert second.imported_count == 0
     assert second.replayed_count == 2
+    assert second.checkpoint == first.checkpoint
     assert store.get_encounter(encounter_id).version == version
+
+    advanced_source_position = store.import_encounter_page(
+        **{
+            **arguments,
+            "checkpoint": "different-source-checkpoint",
+            "next_cursor": "different-source-cursor",
+            "expected_checkpoint_version": first.checkpoint.version,
+        }
+    )
+    assert advanced_source_position.imported_count == 0
+    assert advanced_source_position.replayed_count == 2
+    assert advanced_source_position.checkpoint == first.checkpoint
+
+
+def test_new_receipt_at_same_position_bumps_cas_and_stale_writer_is_atomic():
+    store = MemorySourceImportStore(practice_id=PRACTICE)
+    page = _first_page()
+    original = page.records[0]
+    first = store.import_encounter_page(
+        source_system=SOURCE,
+        feed=FEED,
+        provenance=PROVENANCE,
+        mapping_version=original.mapping_version,
+        records=(original,),
+        checkpoint=page.checkpoint,
+        next_cursor=page.next_cursor,
+    )
+    changed = replace(
+        original,
+        source_version="same-position-version-2",
+        idempotency_key=source_import_idempotency_key(
+            practice_id=PRACTICE,
+            source_system=SOURCE,
+            feed=FEED,
+            source_record_id=original.source_record_id,
+            source_version="same-position-version-2",
+            mapping_version=original.mapping_version,
+        ),
+        visit=replace(original.visit, signed_note="Same-position correction."),
+    )
+
+    winner = store.import_encounter_page(
+        source_system=SOURCE,
+        feed=FEED,
+        provenance=PROVENANCE,
+        mapping_version=changed.mapping_version,
+        records=(changed,),
+        checkpoint=first.checkpoint.checkpoint,
+        next_cursor=first.checkpoint.next_cursor,
+        expected_checkpoint_version=first.checkpoint.version,
+    )
+
+    assert winner.imported_count == 1
+    assert winner.checkpoint.version == first.checkpoint.version + 1
+    assert winner.checkpoint.checkpoint == first.checkpoint.checkpoint
+    assert winner.checkpoint.next_cursor == first.checkpoint.next_cursor
+
+    stale_record = page.records[1]
+    with pytest.raises(SourceImportConflict):
+        store.import_encounter_page(
+            source_system=SOURCE,
+            feed=FEED,
+            provenance=PROVENANCE,
+            mapping_version=stale_record.mapping_version,
+            records=(stale_record,),
+            checkpoint=winner.checkpoint.checkpoint,
+            next_cursor=winner.checkpoint.next_cursor,
+            expected_checkpoint_version=first.checkpoint.version,
+        )
+
+    assert store.load_checkpoint(source_system=SOURCE, feed=FEED) == (
+        winner.checkpoint
+    )
+    assert store.get_encounter(_external_id(stale_record)) is None
 
 
 def test_new_source_version_updates_exactly_one_encounter():
@@ -339,6 +414,56 @@ def test_names_and_opaque_state_are_bounded_and_never_rendered():
             checkpoint="é" * 300,
             next_cursor=None,
         )
+
+
+def test_encounter_page_rejects_other_feeds_without_mutation():
+    store = MemorySourceImportStore(practice_id=PRACTICE)
+    page = _first_page()
+
+    with pytest.raises(SourceImportSchemaError):
+        store.import_encounter_page(
+            source_system=SOURCE,
+            feed="coverage",
+            provenance=PROVENANCE,
+            mapping_version=page.records[0].mapping_version,
+            records=page.records,
+            checkpoint=page.checkpoint,
+            next_cursor=page.next_cursor,
+        )
+
+    assert store.load_checkpoint(source_system=SOURCE, feed="coverage") is None
+    assert store.load_checkpoint(source_system=SOURCE, feed=FEED) is None
+    assert store.get_encounter(_external_id(page.records[0])) is None
+
+
+def test_empty_page_can_advance_a_terminal_checkpoint():
+    store = MemorySourceImportStore(practice_id=PRACTICE)
+    page = _first_page()
+    terminal = store.import_encounter_page(
+        source_system=SOURCE,
+        feed=FEED,
+        provenance=PROVENANCE,
+        mapping_version=page.records[0].mapping_version,
+        records=page.records,
+        checkpoint="terminal-checkpoint",
+        next_cursor=None,
+    )
+
+    advanced = store.import_encounter_page(
+        source_system=SOURCE,
+        feed=FEED,
+        provenance=PROVENANCE,
+        mapping_version=page.records[0].mapping_version,
+        records=(),
+        checkpoint="empty-page-checkpoint",
+        next_cursor="cursor-after-empty-page",
+        expected_checkpoint_version=terminal.checkpoint.version,
+    )
+
+    assert (advanced.imported_count, advanced.replayed_count) == (0, 0)
+    assert advanced.checkpoint.checkpoint == "empty-page-checkpoint"
+    assert advanced.checkpoint.next_cursor == "cursor-after-empty-page"
+    assert advanced.checkpoint.version == terminal.checkpoint.version + 1
 
 
 def test_memory_store_rejects_the_same_oversized_page_as_postgres():

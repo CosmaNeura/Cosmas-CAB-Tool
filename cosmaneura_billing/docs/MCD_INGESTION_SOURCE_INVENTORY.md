@@ -9,11 +9,16 @@ Every MCD source will enter through the same source-agnostic import/checkpoint
 layer, but each source retains its own authorization, feed identity, cursor,
 idempotency receipts, mapping version, and kill switch.
 
+Lab results are intentionally absent from this inventory. The provider lab
+dashboard/chatbot remains owned by Cosmas Sovereign and uses a separate Athena
+OAuth application and FHIR-only scope set; see
+[`ATHENA_SYSTEM_BOUNDARIES.md`](ATHENA_SYSTEM_BOUNDARIES.md).
+
 ## Current inventory
 
 | Source ID | System of record | Data supplied | Transport | Owner | Status |
 |---|---|---|---|---|---|
-| `athena_preview_billing` | athenahealth Preview `195900` | Synthetic encounter, coverage, claim, and outcome reads after endpoint approval | OAuth 2.0, no-ingress job | Cosmas billing | Contract pending; disabled |
+| `athena_preview` | athenahealth Preview `195900` | Synthetic encounter, coverage, claim, and outcome reads after endpoint approval | OAuth 2.0, no-ingress job | Cosmas billing | Contract pending; disabled |
 | `mcd_insurance_source_01` | To be named by MCD | Insurance/member identifiers and coverage evidence | Unknown | MCD | Discovery required |
 | `mcd_insurance_source_02` | To be named by MCD | Insurance/member identifiers and coverage evidence | Unknown | MCD | Discovery required |
 | `manual_card_chase` | Staff-reviewed patient response | Minimum necessary card/identifier update | Manual staff workflow | MCD billing staff | No automated outreach or ingestion enabled |

@@ -549,6 +549,8 @@ AS $$
 DECLARE
     binding public.source_import_role_bindings%ROWTYPE;
     table_owner name;
+    position_changed boolean;
+    progress_changed boolean;
 BEGIN
     SELECT * INTO binding
       FROM public.source_import_role_bindings AS candidate
@@ -594,8 +596,14 @@ BEGIN
             RAISE EXCEPTION 'source-import checkpoint identity is immutable'
                 USING ERRCODE = 'check_violation';
         END IF;
-        IF ROW(NEW.checkpoint, NEW.next_cursor)
-           IS DISTINCT FROM ROW(OLD.checkpoint, OLD.next_cursor) THEN
+        position_changed := ROW(NEW.checkpoint, NEW.next_cursor)
+            IS DISTINCT FROM ROW(OLD.checkpoint, OLD.next_cursor);
+        IF NEW.version NOT IN (OLD.version, OLD.version + 1) THEN
+            RAISE EXCEPTION 'source-import checkpoint version is invalid'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        progress_changed := position_changed OR NEW.version = OLD.version + 1;
+        IF position_changed THEN
             IF OLD.next_cursor IS NULL THEN
                 NEW.cursor_history := ARRAY[]::text[];
             ELSE
@@ -611,12 +619,15 @@ BEGIN
                     NEW.cursor_history, NEW.next_cursor
                 );
             END IF;
+        ELSE
+            NEW.cursor_history := OLD.cursor_history;
+        END IF;
+        IF progress_changed THEN
             NEW.version := OLD.version + 1;
             NEW.updated_at := now();
         ELSE
             NEW.version := OLD.version;
             NEW.updated_at := OLD.updated_at;
-            NEW.cursor_history := OLD.cursor_history;
         END IF;
         NEW.created_at := OLD.created_at;
     END IF;
@@ -748,11 +759,16 @@ DECLARE
     encounter_id uuid;
     checkpoint_row record;
     checkpoint_exists boolean;
+    exact_replay boolean;
     imported_total integer := 0;
     replayed_total integer := 0;
 BEGIN
     IF candidate_source_system IS NULL OR candidate_provenance IS NULL THEN
         RAISE EXCEPTION 'source-import identity is required'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    IF candidate_feed IS DISTINCT FROM 'encounters' THEN
+        RAISE EXCEPTION 'source-import encounter feed is invalid'
             USING ERRCODE = 'check_violation';
     END IF;
     IF NOT public.cosmaneura_source_import_allowed(
@@ -786,7 +802,9 @@ BEGIN
             0
         )
     );
-    SELECT checkpoint.mapping_version, checkpoint.version
+    SELECT checkpoint.mapping_version, checkpoint.version,
+           checkpoint.checkpoint, checkpoint.next_cursor,
+           checkpoint.cursor_history
       INTO checkpoint_row
       FROM public.source_import_checkpoints AS checkpoint
      WHERE checkpoint.practice_id = candidate_practice_id
@@ -948,26 +966,39 @@ BEGIN
         END IF;
     END LOOP;
 
-    INSERT INTO public.source_import_checkpoints (
-        practice_id, source_system, feed, mapping_version,
-        checkpoint, next_cursor
-    ) VALUES (
-        candidate_practice_id,
-        candidate_source_system,
-        candidate_feed,
-        candidate_mapping_version,
-        candidate_checkpoint,
-        candidate_next_cursor
-    )
-    ON CONFLICT (practice_id, source_system, feed) DO UPDATE SET
-        checkpoint = EXCLUDED.checkpoint,
-        next_cursor = EXCLUDED.next_cursor
-    RETURNING source_import_checkpoints.checkpoint,
-              source_import_checkpoints.next_cursor,
-              source_import_checkpoints.mapping_version,
-              source_import_checkpoints.cursor_history,
-              source_import_checkpoints.version
-         INTO checkpoint_row;
+    -- A non-empty all-replay page proves no new durable import progress, so it
+    -- cannot move or bump the existing high-water mark. The caller may still
+    -- walk source cursors to verify the whole feed. Empty pages are not
+    -- replays and may still advance state.
+    exact_replay := checkpoint_exists
+        AND imported_total = 0
+        AND replayed_total = pg_catalog.jsonb_array_length(candidate_records)
+        AND replayed_total > 0;
+
+    IF NOT exact_replay THEN
+        INSERT INTO public.source_import_checkpoints (
+            practice_id, source_system, feed, mapping_version,
+            checkpoint, next_cursor
+        ) VALUES (
+            candidate_practice_id,
+            candidate_source_system,
+            candidate_feed,
+            candidate_mapping_version,
+            candidate_checkpoint,
+            candidate_next_cursor
+        )
+        ON CONFLICT (practice_id, source_system, feed) DO UPDATE SET
+            checkpoint = EXCLUDED.checkpoint,
+            next_cursor = EXCLUDED.next_cursor,
+            version = source_import_checkpoints.version
+                + CASE WHEN imported_total > 0 THEN 1 ELSE 0 END
+        RETURNING source_import_checkpoints.checkpoint,
+                  source_import_checkpoints.next_cursor,
+                  source_import_checkpoints.mapping_version,
+                  source_import_checkpoints.cursor_history,
+                  source_import_checkpoints.version
+             INTO checkpoint_row;
+    END IF;
 
     RETURN QUERY SELECT
         imported_total,

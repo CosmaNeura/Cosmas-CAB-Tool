@@ -1,9 +1,11 @@
 # Athena Preview synthetic/read-only access request
 
 Status: authenticated portal review completed 2026-08-20. An existing Preview
-application already matches the proposed integration, but athenahealth does not
-offer a read-only proprietary AthenaOne scope. No application, credential, or
-scope was created, opened, rotated, or changed during this review.
+application has a nominally compatible configuration, but its ownership and
+scope separation from the Sovereign lab integration must be confirmed before
+it is assigned to this workload. Athenahealth does not offer a read-only
+proprietary AthenaOne scope. No application, credential, or scope was created,
+opened, rotated, or changed during this review.
 
 This request is only for the billing/claims import lane in this repository.
 The Sovereign provider-workspace lab feature must use a different OAuth client

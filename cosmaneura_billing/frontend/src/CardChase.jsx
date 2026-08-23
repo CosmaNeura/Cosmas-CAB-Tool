@@ -6,6 +6,7 @@ import {
 import { api } from "./api.js";
 import {
   seedConfirmationIsSafe,
+  syntheticSeedConfirmationMessage,
   syntheticSeedErrorMessage,
 } from "./syntheticDemoSeed.js";
 
@@ -484,9 +485,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
             </div>
             {seedResult && (
               <p className="mt-2 text-xs text-emerald-800" role="status">
-                {seedResult.replayed
-                  ? `The same ${seedResult.casesReady} synthetic tasks were already ready; no duplicates were added.`
-                  : `${seedResult.casesReady} synthetic tasks are ready.`}
+                {syntheticSeedConfirmationMessage(seedResult)}
               </p>
             )}
             {seedError && <p className="mt-2 text-xs text-red-700" role="alert">{seedError}</p>}

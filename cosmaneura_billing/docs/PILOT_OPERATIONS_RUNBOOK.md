@@ -32,6 +32,7 @@ Use these values for a synthetic-only deployment or incident shutdown:
 | Capability | Bicep parameter | Runtime value | Safe state |
 |---|---|---|---|
 | External access | `externalIngress` | platform-owned | `false` during maintenance or investigation |
+| Billing import database material | `provisionAthenaImportDatabase` | none | `false` unless deliberately provisioning the dormant, dedicated import role |
 | Billing Athena infrastructure | `provisionAthenaSync` | none | `false` unless the dormant job is deliberately provisioned |
 | Billing Athena execution | `enableAthenaSync` | `COSMANEURA_ATHENA_SYNC_ENABLED=false`, `COSMANEURA_ATHENA_MODE=disabled` | `false` |
 | Card Chase scheduler | `enableChaseScheduler` | `COSMANEURA_CHASE_SCHEDULER_ENABLED=false` | `false` |
@@ -190,16 +191,26 @@ COSMANEURA_PRACTICE_ID=synthetic-pilot \
 python -m cosmaneura_billing.athena_sync --once
 ```
 
-The current expected result is `ATHENA_MOCK_COMPLETE`, two pages, four fetched
-records, and zero imported records. Run it twice and require the same closed
-count/code-only shape. Mock mode rejects live connection settings.
+The expected ephemeral result is `ATHENA_MOCK_COMPLETE`, two pages, four
+fetched records, four imported records, and zero replayed records. This command
+uses an in-memory store and proves the adapter contract without creating
+durable data.
+Mock mode rejects live connection settings.
 
-There is currently no database import and no durable checkpoint: every mock run
-starts at the first page, and live mode returns `ATHENA_LIVE_NOT_IMPLEMENTED`.
-There is therefore no approved checkpoint reset, skip, edit, or live-job start
-procedure. Keep both Athena Bicep flags false until atomic import receipts,
-checkpoint persistence, a dedicated database import role, sanitized vendor
-fixtures, and live acceptance are implemented.
+Migration `009_source_import_foundation` provides the durable, source-neutral
+receipt/checkpoint layer and the dedicated practice/source-bound import role.
+Prove durable replay only against a disposable migrated PostgreSQL database:
+configure `COSMANEURA_ATHENA_IMPORT_DB_ROLE` and
+`COSMANEURA_ATHENA_IMPORT_DATABASE_URL` for that dedicated login, run once and
+require four imports, then run again and require zero imports and four exact
+replays. A failed page, stale concurrent writer, cursor cycle, or normalizer
+mapping-version mismatch must leave the affected page uncommitted.
+
+There is still no approved checkpoint reset, skip, edit, or live-job start
+procedure. Live mode returns `ATHENA_LIVE_NOT_IMPLEMENTED`. Keep
+`provisionAthenaImportDatabase`, `provisionAthenaSync`, and `enableAthenaSync`
+false in the pilot until the external access and live-acceptance gates below
+are complete.
 
 ## Vendor outage
 
@@ -210,9 +221,10 @@ enabling the incomplete live path. After live import exists:
    replay window by hand.
 2. Keep patient messaging and the chase scheduler off. Imported data must never
    trigger contact merely because a vendor recovers.
-3. Preserve the last verified local state; do not present stale data as fresh.
-   The current product lacks a durable checkpoint/staleness surface, so this is
-   a release blocker for live import.
+3. Preserve the last committed checkpoint; never reset or edit it by hand, and
+   do not present stale data as fresh. The product still lacks an accepted
+   user-facing staleness indicator, so that remains a release blocker for live
+   import.
 4. Record only fixed error/status codes, attempt counts, and the UTC outage
    window. Do not retain raw vendor errors, URLs, payloads, or identifiers.
 5. Resume with one bounded synthetic run, then an exact replay proving zero
@@ -279,8 +291,9 @@ Run once with synthetic data before pilot launch:
 ## Open release blockers
 
 - Billing Athena OAuth exchange, literal endpoint/query allowlist, vendor
-  decoders, database import role, atomic receipts/checkpoint, and live acceptance
-  are not implemented.
+  decoders, and live acceptance are not implemented. The database role and
+  atomic source-neutral receipt/checkpoint foundation are implemented but stay
+  unprovisioned by default.
 - Athena has not supplied a vendor-enforced read-only AthenaOne scope; the
   Read/Write wildcard remains unusable without an approved GET-only exception.
 - Athena-job log-stream coverage is not in the deployment count-report schema.

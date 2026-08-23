@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   seedConfirmationIsSafe,
+  syntheticSeedConfirmationMessage,
   syntheticSeedErrorMessage,
 } from "./syntheticDemoSeed.js";
 
@@ -11,7 +12,8 @@ const DIGEST = "a".repeat(64);
 const DESCRIPTOR = Object.freeze({ seedDigest: DIGEST, caseCount: 4 });
 const CONFIRMATION = Object.freeze({
   seedDigest: DIGEST,
-  casesReady: 4,
+  installedCaseCount: 4,
+  openTaskCount: 4,
   replayed: false,
   outbound: Object.freeze({
     schedulerEnabled: false,
@@ -23,12 +25,33 @@ const CONFIRMATION = Object.freeze({
 });
 
 
-test("accepts only the exact digest, count, replay flag, and dormant outbound state", () => {
+test("accepts the exact installed count and a bounded open-task count", () => {
   assert.equal(seedConfirmationIsSafe(CONFIRMATION, DESCRIPTOR), true);
-  assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, replayed: true }, DESCRIPTOR), true);
+  assert.equal(seedConfirmationIsSafe({
+    ...CONFIRMATION, openTaskCount: 3, replayed: true,
+  }, DESCRIPTOR), true);
   assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, seedDigest: "b".repeat(64) }, DESCRIPTOR), false);
-  assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, casesReady: 3 }, DESCRIPTOR), false);
+  assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, installedCaseCount: 3 }, DESCRIPTOR), false);
+  assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, openTaskCount: 5 }, DESCRIPTOR), false);
+  assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, openTaskCount: -1 }, DESCRIPTOR), false);
+  assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, openTaskCount: 3.5 }, DESCRIPTOR), false);
   assert.equal(seedConfirmationIsSafe({ ...CONFIRMATION, replayed: "false" }, DESCRIPTOR), false);
+});
+
+
+test("confirmation copy distinguishes the installed pack from open work", () => {
+  assert.equal(
+    syntheticSeedConfirmationMessage({
+      ...CONFIRMATION, openTaskCount: 3, replayed: true,
+    }),
+    "The same 4-case synthetic pack is installed; 3 tasks remain open. No duplicates were added.",
+  );
+  assert.equal(
+    syntheticSeedConfirmationMessage({
+      ...CONFIRMATION, openTaskCount: 1, replayed: true,
+    }),
+    "The same 4-case synthetic pack is installed; 1 task remains open. No duplicates were added.",
+  );
 });
 
 

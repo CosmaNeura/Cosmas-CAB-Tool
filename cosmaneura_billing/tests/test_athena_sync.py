@@ -135,20 +135,45 @@ def test_mock_cli_output_is_count_and_code_only():
 
 
 def test_mock_sync_replays_exactly_and_resumes_from_durable_cursor():
+    class RecordingStore(MemorySourceImportStore):
+        def __init__(self, *, practice_id: str) -> None:
+            super().__init__(practice_id=practice_id)
+            self.committed_checkpoints = []
+
+        def import_encounter_page(self, **kwargs):
+            outcome = super().import_encounter_page(**kwargs)
+            self.committed_checkpoints.append(outcome.checkpoint)
+            return outcome
+
     config = AthenaSyncConfig(
         enabled=True,
         mode="mock",
         target_practice_id="server-practice",
     )
-    store = MemorySourceImportStore(practice_id="server-practice")
+    store = RecordingStore(practice_id="server-practice")
 
     first = run_once(config, import_store=store)
+    terminal_checkpoint = store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    )
+    assert terminal_checkpoint is not None
+    store.committed_checkpoints.clear()
     replay = run_once(config, import_store=store)
 
     assert first.imported_count == 4
     assert first.replayed_count == 0
     assert replay.imported_count == 0
     assert replay.replayed_count == 4
+    assert len(store.committed_checkpoints) == 2
+    assert all(
+        checkpoint == terminal_checkpoint
+        for checkpoint in store.committed_checkpoints
+    )
+    assert store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    ) == terminal_checkpoint
 
     resume_store = MemorySourceImportStore(practice_id="server-practice")
     base = MockAthenaClient(server_practice_id="server-practice")

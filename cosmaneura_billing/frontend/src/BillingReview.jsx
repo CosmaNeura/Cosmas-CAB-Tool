@@ -103,6 +103,11 @@ const RISK = {
   unknown: "bg-slate-100 text-slate-500 ring-slate-300",
 };
 
+const SYNTHETIC_DATA_LABELS = Object.freeze({
+  synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture",
+  athena_preview_synthetic: "Athena Preview synthetic fixture",
+});
+
 function Pill({ tone, children }) {
   return (
     <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>
@@ -303,8 +308,10 @@ export default function BillingReview({ encounterId, live }) {
     return <p>{loadError ? `Could not load encounter: ${loadError}` : "Loading encounter…"}</p>;
   }
 
-  const isSyntheticReleaseCandidate = enc.dataClass === "synthetic_demo_release_candidate";
   const documentationReadOnly = enc.readOnly === true;
+  const syntheticDataLabel = documentationReadOnly
+    ? SYNTHETIC_DATA_LABELS[enc.dataClass] || null
+    : null;
 
   const run = async () => {
     setLoading(true);
@@ -341,9 +348,9 @@ export default function BillingReview({ encounterId, live }) {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <p className="text-sm font-medium text-slate-900">Encounter {enc.encounterId}</p>
-            {isSyntheticReleaseCandidate && (
+            {syntheticDataLabel && (
               <p className="mt-1 text-xs text-slate-500">
-                Validated synthetic release-candidate fixture · documentation is read-only
+                {syntheticDataLabel} · documentation is read-only
               </p>
             )}
           </div>
