@@ -1,15 +1,16 @@
-"""One-shot, fail-closed skeleton for the future Athena sandbox sync job.
+"""One-shot, fail-closed Athena sandbox sync job.
 
-This slice intentionally supports only the deterministic mock client.  It does
-not perform an OAuth exchange, call Athena, or write imported records.  A live
-configuration can be validated and staged, but execution returns a static
-``ATHENA_LIVE_NOT_IMPLEMENTED`` code until the approved sandbox contract and
-the persistence acceptance are implemented.
+The deterministic mock can exercise the durable, source-agnostic import and
+checkpoint boundary.  This module still performs no OAuth exchange or Athena
+network call: a live configuration can be staged, but execution returns the
+static ``ATHENA_LIVE_NOT_IMPLEMENTED`` code until the vendor contract is
+approved and implemented.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.parse
 from dataclasses import dataclass, field, fields
@@ -22,15 +23,28 @@ from .athena_client import (
     ATHENA_PREVIEW_PRACTICE_ID,
     ATHENA_PREVIEW_SCOPE,
     ATHENA_PREVIEW_TOKEN_URL,
+    MAX_PAGES,
+    NORMALIZED_SCHEMA_VERSION,
+    AthenaClient,
     AthenaClientError,
+    AthenaPage,
     MockAthenaClient,
-    read_all_pages,
     validate_athena_https_url,
 )
-from .settings import SettingsError, _parse_bool
+from .persistence import ATHENA_PREVIEW_SYNTHETIC_SOURCE
+from .settings import SettingsError, _database_url_uses_role, _parse_bool
+from .source_import import (
+    MemorySourceImportStore,
+    PostgresSourceImportStore,
+    SourceImportError,
+    SourceImportStore,
+)
 
 
 _MODES = frozenset({"disabled", "mock", "live"})
+ATHENA_PREVIEW_SOURCE_SYSTEM = "athena_preview"
+ATHENA_PREVIEW_ENCOUNTER_FEED = "encounters"
+ATHENA_IMPORT_DATABASE_ROLE = "cosmaneura_athena_import"
 
 
 def _parse_scopes(env: Mapping[str, str]) -> tuple[str, ...]:
@@ -56,6 +70,10 @@ def _safe_config_text(
         or (not allow_space and any(char.isspace() for char in value))
     ):
         raise SettingsError(f"{setting} is malformed") from None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise SettingsError(f"{setting} is malformed") from None
 
 
 def _validate_config_url(value: str, *, setting: str) -> None:
@@ -79,6 +97,12 @@ class AthenaSyncConfig:
     client_id: str = ""
     scopes: tuple[str, ...] = ()
     client_secret: str = field(
+        default="",
+        repr=False,
+        metadata={"secret": True},
+    )
+    import_database_role: str = ATHENA_IMPORT_DATABASE_ROLE
+    import_database_url: str = field(
         default="",
         repr=False,
         metadata={"secret": True},
@@ -128,6 +152,38 @@ class AthenaSyncConfig:
         if self.mode == "mock" and any(live_fields.values()):
             raise SettingsError(
                 "COSMANEURA_ATHENA_MODE=mock must not receive live credentials"
+            )
+
+        _safe_config_text(
+            self.import_database_role,
+            setting="COSMANEURA_ATHENA_IMPORT_DB_ROLE",
+            maximum=63,
+        )
+        if (
+            re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_.-]{0,62}",
+                self.import_database_role,
+            )
+            is None
+            or self.import_database_role.casefold().startswith("pg_")
+            or self.import_database_role.casefold()
+            in {"postgres", "azure_pg_admin"}
+        ):
+            raise SettingsError(
+                "COSMANEURA_ATHENA_IMPORT_DB_ROLE must be a safe PostgreSQL role"
+            )
+        if self.import_database_url and not _database_url_uses_role(
+            self.import_database_url,
+            role=self.import_database_role,
+        ):
+            raise SettingsError(
+                "COSMANEURA_ATHENA_IMPORT_DATABASE_URL must use the dedicated "
+                "Athena import role"
+            )
+        if self.mode == "live" and not self.import_database_url:
+            raise SettingsError(
+                "COSMANEURA_ATHENA_MODE=live requires the dedicated import "
+                "database URL"
             )
 
         if all(live_fields.values()):
@@ -190,6 +246,15 @@ class AthenaSyncConfig:
             scopes=_parse_scopes(env),
             # Do not trim or normalize credentials.
             client_secret=env.get("COSMANEURA_ATHENA_CLIENT_SECRET", ""),
+            import_database_role=(
+                env.get("COSMANEURA_ATHENA_IMPORT_DB_ROLE")
+                or ATHENA_IMPORT_DATABASE_ROLE
+            ).strip(),
+            # Do not trim or normalize database credentials.
+            import_database_url=env.get(
+                "COSMANEURA_ATHENA_IMPORT_DATABASE_URL",
+                "",
+            ),
             target_practice_id=(
                 env.get("COSMANEURA_PRACTICE_ID") or ""
             ).strip(),
@@ -224,6 +289,7 @@ class AthenaSyncStatus(str, Enum):
     DISABLED = "disabled"
     CONFIGURATION_ERROR = "configuration_error"
     ADAPTER_ERROR = "adapter_error"
+    IMPORT_ERROR = "import_error"
     LIVE_NOT_IMPLEMENTED = "live_not_implemented"
 
 
@@ -232,6 +298,7 @@ _STATUS_CODES = {
     AthenaSyncStatus.DISABLED: "ATHENA_SYNC_DISABLED",
     AthenaSyncStatus.CONFIGURATION_ERROR: "ATHENA_CONFIGURATION_ERROR",
     AthenaSyncStatus.ADAPTER_ERROR: "ATHENA_ADAPTER_ERROR",
+    AthenaSyncStatus.IMPORT_ERROR: "ATHENA_IMPORT_ERROR",
     AthenaSyncStatus.LIVE_NOT_IMPLEMENTED: "ATHENA_LIVE_NOT_IMPLEMENTED",
 }
 
@@ -273,8 +340,116 @@ class AthenaSyncResult:
         }
 
 
-def run_once(config: AthenaSyncConfig) -> AthenaSyncResult:
-    """Run only the deterministic mock; no network or persistence exists."""
+def _run_mock_pages(
+    *,
+    client: AthenaClient,
+    store: SourceImportStore,
+) -> AthenaSyncResult:
+    """Import bounded mock pages, committing each page with its continuation."""
+
+    if getattr(client, "mode", None) != "athena_mock":
+        return AthenaSyncResult(AthenaSyncStatus.ADAPTER_ERROR)
+
+    state = store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    )
+    if (
+        state is not None
+        and state.mapping_version != NORMALIZED_SCHEMA_VERSION
+    ):
+        return AthenaSyncResult(AthenaSyncStatus.IMPORT_ERROR)
+    cursor = state.next_cursor if state is not None else None
+    seen_cursors: set[str] = (
+        set(state.cursor_history)
+        if state is not None and state.next_cursor is not None
+        else set()
+    )
+    expected_checkpoint_version = state.version if state is not None else None
+    fetched = 0
+    imported = 0
+    replayed = 0
+
+    for page_count in range(1, MAX_PAGES + 1):
+        try:
+            page = client.read_page(cursor)
+        except AthenaClientError:
+            return AthenaSyncResult(
+                status=AthenaSyncStatus.ADAPTER_ERROR,
+                page_count=page_count - 1,
+                fetched_count=fetched,
+                replayed_count=replayed,
+                imported_count=imported,
+            )
+        if not isinstance(page, AthenaPage):
+            return AthenaSyncResult(
+                status=AthenaSyncStatus.ADAPTER_ERROR,
+                page_count=page_count - 1,
+                fetched_count=fetched,
+                replayed_count=replayed,
+                imported_count=imported,
+            )
+        # A repeated continuation is an adapter failure. Validate it before
+        # entering the page transaction so neither its records nor its
+        # checkpoint can become the last committed boundary.
+        if page.next_cursor is not None and (
+            page.next_cursor in seen_cursors or page.next_cursor == cursor
+        ):
+            return AthenaSyncResult(
+                status=AthenaSyncStatus.ADAPTER_ERROR,
+                page_count=page_count - 1,
+                fetched_count=fetched,
+                replayed_count=replayed,
+                imported_count=imported,
+            )
+        try:
+            outcome = store.import_encounter_page(
+                source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+                feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+                provenance=ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+                mapping_version=NORMALIZED_SCHEMA_VERSION,
+                records=page.records,
+                checkpoint=page.checkpoint,
+                next_cursor=page.next_cursor,
+                expected_checkpoint_version=expected_checkpoint_version,
+            )
+        except (SourceImportError, RuntimeError):
+            return AthenaSyncResult(
+                status=AthenaSyncStatus.IMPORT_ERROR,
+                page_count=page_count - 1,
+                fetched_count=fetched,
+                replayed_count=replayed,
+                imported_count=imported,
+            )
+        fetched += len(page.records)
+        imported += outcome.imported_count
+        replayed += outcome.replayed_count
+        expected_checkpoint_version = outcome.checkpoint.version
+        if page.next_cursor is None:
+            return AthenaSyncResult(
+                status=AthenaSyncStatus.COMPLETED,
+                page_count=page_count,
+                fetched_count=fetched,
+                replayed_count=replayed,
+                imported_count=imported,
+            )
+        seen_cursors.add(page.next_cursor)
+        cursor = page.next_cursor
+    return AthenaSyncResult(
+        status=AthenaSyncStatus.ADAPTER_ERROR,
+        page_count=MAX_PAGES,
+        fetched_count=fetched,
+        replayed_count=replayed,
+        imported_count=imported,
+    )
+
+
+def run_once(
+    config: AthenaSyncConfig,
+    *,
+    import_store: SourceImportStore | None = None,
+) -> AthenaSyncResult:
+    """Run the mock import path; keep live OAuth and network fail-closed."""
 
     if not isinstance(config, AthenaSyncConfig):
         return AthenaSyncResult(AthenaSyncStatus.CONFIGURATION_ERROR)
@@ -284,18 +459,24 @@ def run_once(config: AthenaSyncConfig) -> AthenaSyncResult:
         return AthenaSyncResult(AthenaSyncStatus.LIVE_NOT_IMPLEMENTED)
 
     try:
-        client = MockAthenaClient(server_practice_id=config.target_practice_id)
-        result = read_all_pages(client)
+        selected_client = MockAthenaClient(
+            server_practice_id=config.target_practice_id,
+        )
+        selected_store = import_store or (
+            PostgresSourceImportStore(
+                config.import_database_url,
+                practice_id=config.target_practice_id,
+            )
+            if config.import_database_url
+            else MemorySourceImportStore(
+                practice_id=config.target_practice_id,
+            )
+        )
+        return _run_mock_pages(client=selected_client, store=selected_store)
     except AthenaClientError:
         return AthenaSyncResult(AthenaSyncStatus.ADAPTER_ERROR)
-    return AthenaSyncResult(
-        status=AthenaSyncStatus.COMPLETED,
-        page_count=result.page_count,
-        fetched_count=len(result.records),
-        replayed_count=result.replay_count,
-        # Persistence is intentionally absent in this slice.
-        imported_count=0,
-    )
+    except (SourceImportError, RuntimeError):
+        return AthenaSyncResult(AthenaSyncStatus.IMPORT_ERROR)
 
 
 def main(

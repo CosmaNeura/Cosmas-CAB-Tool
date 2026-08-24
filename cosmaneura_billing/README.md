@@ -93,7 +93,19 @@ and local-development exception are in `docs/ACCESS_CONTROL.md`.
 The read-first Athena sandbox architecture, including why it uses a private
 outbound sync job rather than a second public API, is in
 `docs/ATHENA_SANDBOX_INTEGRATION.md`; the exact Preview, synthetic/read-only
-enrollment request is in `docs/ATHENA_SANDBOX_ACCESS_REQUEST.md`.
+enrollment request is in `docs/ATHENA_SANDBOX_ACCESS_REQUEST.md`. The four-case
+mock now exercises source-agnostic durable receipts/checkpoints and atomic
+encounter persistence. Live OAuth/network execution remains deliberately
+unimplemented and all deployment gates default off. Provider lab analysis is a
+separate Sovereign integration and must not share this billing importer's OAuth
+client, secrets, tokens, or storage contract.
+
+Pilot ownership and operations are recorded in:
+
+- [`docs/ATHENA_SYSTEM_BOUNDARIES.md`](docs/ATHENA_SYSTEM_BOUNDARIES.md)
+- [`docs/MCD_INGESTION_SOURCE_INVENTORY.md`](docs/MCD_INGESTION_SOURCE_INVENTORY.md)
+- [`docs/PILOT_PERSONA_PROVISIONING.md`](docs/PILOT_PERSONA_PROVISIONING.md)
+- [`docs/PILOT_OPERATIONS_RUNBOOK.md`](docs/PILOT_OPERATIONS_RUNBOOK.md)
 
 Staging and production are PostgreSQL-only: set both
 `COSMANEURA_STATE_STORE=postgres` and `COSMANEURA_CHASE_STORE=postgres`, and use
@@ -378,10 +390,10 @@ with a different action payload returns 409.
 The worklist response intentionally omits patient references, gate payloads,
 assignee identities, attempt notes, and contact destinations. Opening a row uses
 `POST /api/chase/task` with the opaque `chaseId` in the JSON body. Operational
-rows point staff to the approved athenaNet patient-search workflow until a safe
-deep-link contract exists. Only an exact server-owned synthetic provenance
-marker can reveal one of the bundled fictional `+1 202-555-01xx` destinations;
-a lookalike row receives the operational placeholder.
+rows point staff to the approved practice source-system patient-search workflow
+until a safe deep-link contract exists. Only an exact server-owned synthetic
+provenance marker can reveal one of the bundled fictional `+1 202-555-01xx`
+destinations; a lookalike row receives the operational placeholder.
 
 The Admin-only demo seed requires this exact body:
 
@@ -526,7 +538,7 @@ cosmaneura_billing/
   guardrail_fuzz.py          adversarial cases behind the anti-inflation invariant
   consensus_fuzz.py          the same, with a second extraction engine in the loop
   chase/                     insurance-data chase (F9)
-    models.py                CoverageSnapshot (the athenaNet boundary), ChaseItem, states
+    models.py                CoverageSnapshot (the source-neutral insurance boundary), ChaseItem, states
     detector.py              F9a triggers + appointment-proximity priority
     policy.py                cadence/channels/templates as config; the PHI guard
     sequence.py              approval-gated state machine; phone = staff task

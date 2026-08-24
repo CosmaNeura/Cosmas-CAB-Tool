@@ -32,13 +32,17 @@ the spoof-resistance acceptance checks are deployed and verified.
 
 ## Platform parameters and secret boundary
 
-Keep `namePrefix`, `postgresAppLogin`, and `postgresChaseWorkerLogin` identical
-between the foundation and app parameter files. The worker login must differ
-from both the PostgreSQL administrator and API runtime logins.
+Keep `namePrefix`, `postgresAppLogin`, `postgresChaseWorkerLogin`, and
+`postgresAthenaImportLogin` identical between the foundation and app parameter
+files. The API, worker, Athena importer, and PostgreSQL administrator login
+names must all differ.
 
 The foundation owns credentials and creates these additional P4 inputs:
 
 - `postgresChaseWorkerLogin` and secure `postgresChaseWorkerPassword`
+- `provisionAthenaImportDatabase=false`, `postgresAthenaImportLogin`, and the
+  optional secure `postgresAthenaImportPassword`; the latter is required only
+  when provisioning the dormant import database boundary
 - secure `chaseGateHmacKey` (at least 32 bytes)
 - optional secure `acsEmailConnectionString`, empty until the real-email gates
   are satisfied
@@ -95,10 +99,10 @@ Secret access is intentionally partitioned:
 
 | Principal | May read | Must not read |
 |---|---|---|
-| API identity | `database-url`, Entra client secret, and `chase-gate-hmac-key` | migration-owner DSN, runtime/worker DB passwords, worker DSN, ACS connection string, any model API key |
-| Migration identity | `migration-database-url`, `database-runtime-password`, `chase-worker-database-password` | API DSN, worker DSN, gate key, ACS connection string |
-| Chase-worker identity | `chase-worker-database-url`, `chase-gate-hmac-key`, and (only when configured) `acs-email-connection-string` | API/owner DSNs, raw DB passwords, Entra client secret |
-| Athena-sync identity (optional) | only the operator-created secret named by `athenaClientSecretKeyVaultSecretName`, and only when sync is enabled | every API/migration/worker/database/Entra/chase/ACS/model secret |
+| API identity | `database-url`, Entra client secret, and `chase-gate-hmac-key` | migration-owner/import/worker DSNs, runtime/import/worker DB passwords, ACS connection string, any model API key |
+| Migration identity | `migration-database-url`, `database-runtime-password`, `chase-worker-database-password`, and (only when import provisioning is selected) `athena-import-database-password` | API/import/worker DSNs, Athena OAuth secret, gate key, ACS connection string |
+| Chase-worker identity | `chase-worker-database-url`, `chase-gate-hmac-key`, and (only when configured) `acs-email-connection-string` | API/owner/import DSNs, raw DB passwords, Athena OAuth secret, Entra client secret |
+| Athena-sync identity (optional) | `athena-import-database-url` and the operator-created OAuth secret named by `athenaClientSecretKeyVaultSecretName`, only when sync is enabled | every API/migration/worker DSN or credential, raw import-role password, Entra/chase/ACS/model secrets |
 
 The gate key is the only Key Vault secret shared by API and worker. ACS
 endpoint/sender/reply values are shared non-secret fingerprint metadata; the
@@ -125,15 +129,35 @@ version environment variables are injected only when active extraction or the
 isolated shadow lane is enabled; both mode markers remain false otherwise.
 Migration and chase-worker identities receive no Language role or configuration.
 
-The Athena lane is more tightly dormant. With `provisionAthenaSync=false`, no
-Athena identity, role assignment, or job exists. Provisioning alone creates a
-dedicated identity, its registry-scoped `AcrPull` assignment, and a bounded
-manual Container Apps Job; it does not resolve or grant the Athena credential.
-Only `enableAthenaSync=true` adds an exact secret-scoped Key Vault reader grant
-and injects the approved non-secret live connection metadata. The job has no
-ingress and no scheduler. It receives no API, migration, or chase-worker
-credential. A separate least-privilege database import role and its acceptance
-evidence are still required before a live data import may be enabled.
+The Athena lane is more tightly dormant. In the foundation,
+`provisionAthenaImportDatabase=false` creates neither import DSN nor password
+secret. In the app, `provisionAthenaSync=false` creates no Athena identity, role
+assignment, or job. Provisioning the two boundaries while leaving
+`enableAthenaSync=false` prepares a dedicated login, identity, and bounded
+manual Container Apps Job without granting the job either secret. Only
+`enableAthenaSync=true` adds exact secret-scoped reader grants for the dedicated
+OAuth secret and `athena-import-database-url`, and injects approved non-secret
+live metadata. The job has no ingress and no scheduler. It receives no API,
+migration-owner, or chase-worker credential. Live execution remains
+application-disabled with `ATHENA_LIVE_NOT_IMPLEMENTED` until a separately
+reviewed change supplies the vendor-approved read contract.
+
+These Bicep booleans are creation/configuration gates, not revocation controls:
+Azure Resource Manager incremental deployments do not delete a resource that a
+later template condition omits. Before setting either provision flag false
+after it was ever true, explicitly delete the Athena sync job, its identity,
+and both secret-scoped role assignments, remove the import role/binding through
+the reviewed migration/role procedure, then verify those resources and grants
+are absent. Setting `enableAthenaSync=false` updates the job to disabled but
+does not revoke residual identity RBAC; use the same explicit decommission path
+when authority must be removed.
+
+The import tables are source-agnostic and practice-bound. Athena Preview is one
+registered adapter; future MCD feeds may reuse the receipt/checkpoint substrate,
+but no MCD or Card Chase UI behavior is enabled by these templates. The
+Sovereign provider-lab application is a separate product boundary and must use
+its own Athena OAuth client, secrets, tokens, runtime, and storage. Never point
+both products at the same OAuth credential or Key Vault secret.
 
 ## Deployment sequence
 
@@ -160,7 +184,8 @@ evidence are still required before a live data import may be enabled.
    Keep `provisionAzureLanguage=false`, `enableAzureLanguageExtraction=false`,
    and `enableAzureLanguageShadow=false` unless the reviewed dormant Language
    resource slice is being provisioned.
-   Keep both `provisionAthenaSync=false` and `enableAthenaSync=false`, and leave
+   Keep `provisionAthenaImportDatabase=false`, `provisionAthenaSync=false`, and
+   `enableAthenaSync=false`, leave `postgresAthenaImportPassword` empty, and leave
    `athenaBaseUrl`, `athenaTokenUrl`, `athenaClientId`, and `athenaScopes` empty
    until Athena returns the exact synthetic/read-only sandbox contract. Never
    place the Athena OAuth client secret in a parameter file.
@@ -169,7 +194,7 @@ evidence are still required before a live data import may be enabled.
    is approved; provisioning still does not enable application inference.
 3. Create/select a resource group and deploy `foundation.bicep`. Keep
    `registryPublicNetworkAccess` set to its secure default, `Disabled`. This
-   deployment must precede `app.bicep`: it creates all three identities, the
+   deployment must precede `app.bicep`: it creates the platform identities, the
    worker DSN/password secrets, the shared gate-key secret, and their
    secret-scoped grants. The ACS secret/grant is created only when the
    foundation receives a non-empty credential. When
@@ -314,22 +339,42 @@ allowlist requirement. Do not infer endpoint paths or broaden a scope name.
 
 After that grant is reviewed:
 
-1. Store only the dedicated client secret directly in Key Vault under the
+1. Generate a new password for the dedicated import login. In the untracked
+   foundation parameters only, set `provisionAthenaImportDatabase=true`, keep
+   `postgresAthenaImportLogin=cosmaneura_athena_import` (or one reviewed unique
+   role name), and supply `postgresAthenaImportPassword`. Deploy the foundation;
+   it creates `athena-import-database-password` for the migration job and
+   `athena-import-database-url` for the sync job. Neither secret is readable by
+   the API or chase worker.
+2. Store only the dedicated client secret directly in Key Vault under the
    reviewed `athenaClientSecretKeyVaultSecretName`; keep the value out of Bicep,
-   parameter files, shell history, logs, and application configuration.
-2. A deployment with `provisionAthenaSync=true` and
+   parameter files, shell history, logs, and application configuration. Do not
+   reuse the Sovereign provider-lab OAuth client, secret, or token.
+3. After verifying the foundation deployment created both import secrets, set
+   the app parameter `athenaImportDatabaseProvisioned=true`. The app fails
+   validation if `provisionAthenaSync=true` without that assertion. A deployment
+   with `provisionAthenaSync=true` and
    `enableAthenaSync=false` may create the dedicated identity and manual job for
-   infrastructure inspection. A manual start still fails closed because the
-   sync enable marker is false, and the identity has no Athena secret grant.
-3. Do not set `enableAthenaSync=true` until static egress/allowlisting is
-   resolved, the mock adapter suite passes, a separate database import role is
-   implemented, and synthetic live acceptance is approved. Enabling requires
-   exact HTTPS URLs, client ID, and synthetic/read-only scopes and adds only the
-   one secret-scoped Key Vault reader assignment.
-4. Even after enablement, execution is manual: this template defines no Athena
+   infrastructure inspection. Start the migration job once to apply migration
+   `009` and create/rotate the practice/source-bound import login. A manual sync
+   start still fails closed because the sync enable marker is false, and the
+   sync identity has neither OAuth-secret nor import-DSN access.
+4. Prove the four-record mock through a disposable database: first run imports
+   four; exact replay imports zero without changing encounter or checkpoint
+   versions; a newer synthetic version changes one encounter; and an injected
+   page failure leaves both records and checkpoint unchanged. Inspect only
+   count/code output—never print the DSN, cursor, receipt key, or payload.
+5. Do not set `enableAthenaSync=true` until static egress/allowlisting is
+   resolved, the mock acceptance passes, and synthetic live acceptance is
+   approved. Enabling requires exact HTTPS URLs, client ID, and reviewed scopes
+   and adds exactly two secret-scoped Key Vault reader assignments: the OAuth
+   client secret and import DSN. The migration identity retains password-only
+   provisioning access and cannot read either of those job secrets.
+6. Even after enablement, execution is manual: this template defines no Athena
    cron or event trigger. Start one reviewed execution explicitly and require
    count-only logs, bounded pagination, idempotent replay, RLS, and credential
-   non-disclosure evidence before any further run.
+   non-disclosure evidence before any further run. The current binary will
+   still return `ATHENA_LIVE_NOT_IMPLEMENTED` before token or network activity.
 
 7. After staff assignments and the redirect URI are complete, redeploy with
    `externalIngress=true` and immediately run the acceptance checks below. If
@@ -609,11 +654,15 @@ email:
   no identity has a vault-scoped `Key Vault Secrets User` grant. In
   `record_only`, the worker job must have no `acs-email-connection-string`
   reference and the API must never have one.
-- The migration execution succeeds with migrations `004`–`008 applied, and
-  both runtime roles are practice-bound. The API role cannot claim/finalize
-  outbox deliveries; the worker role cannot read identity, encounter, feedback,
-  or access-audit tables or create policy approvals/releases. Neither role can
-  claim or mutate the reserved synthetic-demo encounter provenance.
+- The migration execution succeeds with migrations `004`–`009 applied, and
+  the API, chase-worker, and optional import roles are practice-bound. The API
+  role cannot claim/finalize outbox deliveries; the worker role cannot read
+  identity, encounter, feedback, or access-audit tables or create policy
+  approvals/releases. Neither role can claim or mutate reserved synthetic-demo
+  or Athena-import encounter provenance. The import role can read only its
+  registered feed checkpoint and can write only through the database-owned
+  atomic page function; it cannot directly read encounters or receipts, or
+  read identity, feedback, audit, or Card Chase tables.
 - With messaging disabled, app and worker report scheduler enabled,
   `record_only`, and both patient-messaging latches false. An Admin can register,
   approve, and activate the exact server-configured policy. Durable detection
@@ -660,14 +709,15 @@ from a private, controlled execution environment. See
 `../cosmaneura_billing/migrations/README.md` for the exact command and role
 rules. A missing/inactive member is denied, and a database outage fails closed.
 
-The API and worker runtime logins are deliberately unable to bypass row-level
-security, change schema, or manage roles; their table/function permissions are
-different and non-interchangeable. The migration owner is confined to the
-manual job and controlled membership administration. Owner, API, and worker
-DSNs plus both runtime-role passwords remain separate Key Vault secrets. All
-three workloads use different managed identities with secret-scoped grants, so
-the API identity cannot read the owner/worker credentials and the worker cannot
-read API/owner credentials.
+The API, worker, and source-import runtime logins are deliberately unable to
+bypass row-level security, change schema, or manage roles; their table/function
+permissions are different and non-interchangeable. The migration owner is
+confined to the manual job and controlled membership/role administration.
+Owner, API, worker, and import DSNs and raw role passwords remain separate Key
+Vault secrets. Each workload uses a different managed identity with
+secret-scoped grants, so the API and worker cannot read import credentials, the
+importer cannot read application credentials, and only the migration identity
+can read the raw import-role password for provisioning.
 
 ## Rotation and decommissioning
 

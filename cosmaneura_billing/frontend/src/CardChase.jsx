@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-  CalendarClock, CreditCard, LockKeyhole, Phone, RefreshCw,
-  ShieldAlert, UserRoundSearch,
+  CalendarClock, CheckCircle2, CreditCard, LockKeyhole, Phone,
+  RefreshCw, ShieldAlert, UserCheck, UserRoundSearch,
 } from "lucide-react";
 import { api } from "./api.js";
 import {
   seedConfirmationIsSafe,
+  syntheticSeedConfirmationMessage,
   syntheticSeedErrorMessage,
 } from "./syntheticDemoSeed.js";
 
@@ -33,7 +34,26 @@ function Pill({ tone, children }) {
   );
 }
 
-function FollowUpTask({ task, loading, error }) {
+const OUTCOMES = [
+  ["reached", "Reached patient"],
+  ["left_message", "Left message"],
+  ["no_answer", "No answer"],
+  ["declined", "Patient declined"],
+];
+
+function FollowUpTask({
+  task, loading, error, manageChase, actionBusy, actionError,
+  actionNotice, retryAction, onAction,
+}) {
+  const [outcome, setOutcome] = useState("reached");
+  const [minutes, setMinutes] = useState("0");
+  const [note, setNote] = useState("");
+  const [confirming, setConfirming] = useState(null);
+  const may = (action) => (
+    manageChase && Array.isArray(task?.allowedActions)
+      && task.allowedActions.includes(action)
+  );
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
@@ -94,11 +114,183 @@ function FollowUpTask({ task, loading, error }) {
         </p>
         <p className="mt-1">{task.systemOfRecord.instruction}</p>
       </div>
+
+      {!manageChase ? (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+          This worklist is read-only for your assigned role.
+        </div>
+      ) : !task.open ? (
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+          This task is closed. No additional patient contact is needed.
+        </div>
+      ) : (
+        <div className="mt-5 border-t border-slate-200 pt-4">
+          <p className="text-sm font-medium text-slate-900">Staff actions</p>
+          <p className="mt-1 text-xs text-slate-500">
+            These controls record work only. They never call, text, email, or write to a source system.
+          </p>
+
+          {!task.assigned && may("assign") && (
+            <button
+              type="button"
+              disabled={actionBusy}
+              onClick={() => onAction({ action: "assign" }, "Task assigned to you")}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <UserCheck size={14} /> Assign to me
+            </button>
+          )}
+
+          {may("log_attempt") && (
+            <form
+              className="mt-4 rounded-xl border border-slate-200 p-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                onAction({
+                  action: "log_attempt",
+                  channel: "phone",
+                  outcome,
+                  minutes_spent: Number(minutes),
+                  note,
+                }, "Manual attempt recorded");
+              }}
+            >
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-600">
+                Log a manual phone attempt
+              </p>
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_7rem]">
+                <label className="text-xs text-slate-600">
+                  Outcome
+                  <select
+                    value={outcome}
+                    onChange={(event) => setOutcome(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900"
+                  >
+                    {OUTCOMES.map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-slate-600">
+                  Minutes
+                  <input
+                    type="number"
+                    min="0"
+                    max="1440"
+                    step="0.5"
+                    required
+                    value={minutes}
+                    onChange={(event) => setMinutes(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm text-slate-900"
+                  />
+                </label>
+              </div>
+              <label className="mt-2 block text-xs text-slate-600">
+                Note (optional)
+                <textarea
+                  value={note}
+                  maxLength={4000}
+                  onChange={(event) => setNote(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm text-slate-900"
+                  rows={2}
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={actionBusy || Number(minutes) < 0 || Number(minutes) > 1440}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Phone size={14} /> Record attempt
+              </button>
+            </form>
+          )}
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {may("submitted") && (
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => setConfirming("submitted")}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Mark submitted
+              </button>
+            )}
+            {may("verify") && (
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => setConfirming("verify")}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
+              >
+                <CheckCircle2 size={14} /> Verify and close
+              </button>
+            )}
+          </div>
+
+          {!may("log_attempt") && !may("submitted") && !may("verify") && (
+            <p className="mt-3 text-xs text-amber-800">
+              This task requires a reviewed workflow transition before contact can be recorded.
+            </p>
+          )}
+
+          {confirming && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3" role="group" aria-label="Confirm staff action">
+              <p className="text-sm font-medium text-amber-950">
+                {confirming === "submitted"
+                  ? "Confirm that insurance information was submitted for staff review."
+                  : "Confirm that staff verified the insurance information in the system of record."}
+              </p>
+              <p className="mt-1 text-xs text-amber-800">
+                This records workflow state only; it does not write to a source system or contact the patient.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={async () => {
+                    const action = confirming;
+                    setConfirming(null);
+                    await onAction(
+                      { action },
+                      action === "submitted" ? "Submission recorded" : "Task verified and closed",
+                    );
+                  }}
+                  className="rounded-lg bg-amber-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-900 disabled:opacity-60"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={() => setConfirming(null)}
+                  className="rounded-lg border border-amber-300 px-3 py-1.5 text-sm text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {actionNotice && <p className="mt-3 text-xs text-emerald-800" role="status">{actionNotice}</p>}
+          {actionError && <p className="mt-3 text-xs text-red-700" role="alert">{actionError}</p>}
+          {retryAction && (
+            <button
+              type="button"
+              disabled={actionBusy}
+              onClick={retryAction}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-50 disabled:opacity-60"
+            >
+              <RefreshCw size={13} /> Retry the same action safely
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-export default function CardChase({ live, demoSeed = null }) {
+export default function CardChase({ live, demoSeed = null, manageChase = false }) {
   const [bucket, setBucket] = useState("");
   const [worklist, setWorklist] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -109,6 +301,13 @@ export default function CardChase({ live, demoSeed = null }) {
   const [task, setTask] = useState(null);
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskError, setTaskError] = useState(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const [actionNotice, setActionNotice] = useState(null);
+  const [retry, setRetry] = useState(null);
+  const [selectedChaseId, setSelectedChaseId] = useState(null);
+  const selectedChaseIdRef = useRef(null);
+  const taskRequestIdRef = useRef(0);
 
   const load = async () => {
     if (!live) return;
@@ -128,25 +327,83 @@ export default function CardChase({ live, demoSeed = null }) {
   };
 
   useEffect(() => {
+    selectedChaseIdRef.current = null;
+    setSelectedChaseId(null);
+    taskRequestIdRef.current += 1;
     setTask(null);
     setTaskError(null);
     load();
   }, [bucket, live]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openTask = async (row) => {
+  const openTaskById = async (chaseId) => {
+    const requestId = ++taskRequestIdRef.current;
     setTask(null);
     setTaskError(null);
     setTaskLoading(true);
     try {
       const result = await api("/api/chase/task", {
         method: "POST",
-        body: { chaseId: row.chaseId },
+        body: { chaseId },
       });
+      if (requestId !== taskRequestIdRef.current) return;
       setTask(result);
     } catch (loadError) {
+      if (requestId !== taskRequestIdRef.current) return;
       setTaskError(`Could not open contact task: ${loadError.message}`);
     } finally {
-      setTaskLoading(false);
+      if (requestId === taskRequestIdRef.current) setTaskLoading(false);
+    }
+  };
+
+  const openTask = async (row) => {
+    selectedChaseIdRef.current = row.chaseId;
+    setSelectedChaseId(row.chaseId);
+    setActionError(null);
+    setActionNotice(null);
+    setRetry(null);
+    await openTaskById(row.chaseId);
+  };
+
+  const submitAction = async (
+    payload, successMessage, actionId = null, targetChaseId = task?.chaseId,
+  ) => {
+    if (!manageChase || !targetChaseId) return;
+    const chaseId = targetChaseId;
+    setActionBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+    setRetry(null);
+    let stableActionId = actionId;
+    try {
+      stableActionId = stableActionId || crypto.randomUUID();
+      await api("/api/chase/action", {
+        method: "POST",
+        body: { chaseId, action_id: stableActionId, ...payload },
+      });
+      await load();
+      if (selectedChaseIdRef.current === chaseId) {
+        setActionNotice(successMessage);
+        await openTaskById(chaseId);
+      }
+    } catch (actionFailure) {
+      if (selectedChaseIdRef.current !== chaseId) return;
+      const retryable = !actionFailure?.status
+        || actionFailure.status === 429
+        || actionFailure.status >= 500;
+      setActionError(
+        actionFailure?.status === 409
+          ? "This task changed while you were working. Refresh it before trying again."
+          : actionFailure?.status === 422
+            ? "That action was not valid for the current task. Review the fields and try again."
+            : "The action could not be confirmed. No automatic contact was sent.",
+      );
+      if (retryable && stableActionId) {
+        setRetry({
+          payload, successMessage, actionId: stableActionId, chaseId,
+        });
+      }
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -228,9 +485,7 @@ export default function CardChase({ live, demoSeed = null }) {
             </div>
             {seedResult && (
               <p className="mt-2 text-xs text-emerald-800" role="status">
-                {seedResult.replayed
-                  ? `The same ${seedResult.casesReady} synthetic tasks were already ready; no duplicates were added.`
-                  : `${seedResult.casesReady} synthetic tasks are ready.`}
+                {syntheticSeedConfirmationMessage(seedResult)}
               </p>
             )}
             {seedError && <p className="mt-2 text-xs text-red-700" role="alert">{seedError}</p>}
@@ -240,8 +495,11 @@ export default function CardChase({ live, demoSeed = null }) {
         <div className="mt-4 flex flex-wrap gap-2">
           {FILTERS.map(([value, label]) => (
             <button
+              type="button"
               key={value || "all"}
               onClick={() => setBucket(value)}
+              disabled={actionBusy}
+              aria-pressed={bucket === value}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 ring-inset ${
                 bucket === value
                   ? "bg-slate-900 text-white ring-slate-900"
@@ -281,9 +539,12 @@ export default function CardChase({ live, demoSeed = null }) {
                 const [statusLabel, statusTone] = STATUS[row.state] || [row.state, "bg-slate-100 text-slate-600 ring-slate-300"];
                 return (
                   <button
+                    type="button"
                     key={row.chaseId}
                     onClick={() => openTask(row)}
-                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                    disabled={actionBusy}
+                    aria-pressed={selectedChaseId === row.chaseId}
+                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 px-4 py-3 text-left hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
                   >
                     <span>
                       <span className="flex flex-wrap items-center gap-2">
@@ -310,7 +571,20 @@ export default function CardChase({ live, demoSeed = null }) {
           )}
         </div>
 
-        <FollowUpTask task={task} loading={taskLoading} error={taskError} />
+        <FollowUpTask
+          key={task?.chaseId || "empty-task"}
+          task={task}
+          loading={taskLoading}
+          error={taskError}
+          manageChase={manageChase}
+          actionBusy={actionBusy}
+          actionError={actionError}
+          actionNotice={actionNotice}
+          retryAction={retry ? () => submitAction(
+            retry.payload, retry.successMessage, retry.actionId, retry.chaseId,
+          ) : null}
+          onAction={submitAction}
+        />
       </div>
     </div>
   );

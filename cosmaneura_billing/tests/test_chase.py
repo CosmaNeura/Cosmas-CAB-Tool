@@ -398,11 +398,11 @@ def test_only_verification_closes_the_row():
     runner = _runner()
     item = _detect(_snap(has_insurance_package=False))
     runner.mark_submitted(item)
-    runner.close_verified(item, verified_by="cindy", athena_write_id="ath-991",
+    runner.close_verified(item, verified_by="cindy", source_write_id="source-991",
                           eligibility_status="ACTIVE")
     assert item.state is State.VERIFIED_CLOSED and not item.is_open
     assert item.resolution["verified_by"] == "cindy"
-    assert item.resolution["athena_write_id"] == "ath-991"
+    assert item.resolution["source_write_id"] == "source-991"
 
 
 def test_closing_requires_the_verifier_identity():
@@ -573,7 +573,7 @@ def test_end_to_end_inactive_eligibility_to_verified_close():
     runner.mark_submitted(item, note="uploaded via the secure link")
     assert item.is_open
 
-    runner.close_verified(item, verified_by="cindy", athena_write_id="ath-1",
+    runner.close_verified(item, verified_by="cindy", source_write_id="source-1",
                           eligibility_status="ACTIVE")
     assert not item.is_open
 

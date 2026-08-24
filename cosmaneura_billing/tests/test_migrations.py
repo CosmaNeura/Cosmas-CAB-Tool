@@ -20,6 +20,7 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "006_chase_policy_revocation.up.sql",
         "007_synthetic_demo_release_candidate_source.up.sql",
         "008_synthetic_demo_encounter_immutability.up.sql",
+        "009_source_import_foundation.up.sql",
     ]
 
 

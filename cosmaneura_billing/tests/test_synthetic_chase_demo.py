@@ -99,7 +99,9 @@ def test_admin_seed_is_exact_idempotent_and_outbound_dormant(client):
     )
 
     assert first.status_code == replay.status_code == 200
-    assert first.json()["casesReady"] == replay.json()["casesReady"] == 4
+    assert first.json()["installedCaseCount"] == 4
+    assert replay.json()["installedCaseCount"] == 4
+    assert first.json()["openTaskCount"] == replay.json()["openTaskCount"] == 4
     assert first.json()["replayed"] is False
     assert replay.json()["replayed"] is True
     assert first.json()["outbound"] == {
@@ -124,6 +126,40 @@ def test_admin_seed_is_exact_idempotent_and_outbound_dormant(client):
     )
 
 
+def test_reseed_reports_closed_pack_case_separately_from_open_tasks(client):
+    first = client.post(
+        "/api/chase/demo-seed",
+        json={"seedDigest": EXPECTED_PACK_DIGEST},
+    )
+    row = next(
+        item for item in client.post("/api/chase/worklist", json={}).json()["rows"]
+        if item["state"] == "detected"
+    )
+    submitted = client.post("/api/chase/action", json={
+        "chaseId": row["chaseId"],
+        "action_id": str(uuid4()),
+        "action": "submitted",
+    })
+    closed = client.post("/api/chase/action", json={
+        "chaseId": row["chaseId"],
+        "action_id": str(uuid4()),
+        "action": "verify",
+    })
+    replay = client.post(
+        "/api/chase/demo-seed",
+        json={"seedDigest": EXPECTED_PACK_DIGEST},
+    )
+
+    assert first.status_code == submitted.status_code == closed.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["replayed"] is True
+    assert replay.json()["installedCaseCount"] == 4
+    assert replay.json()["openTaskCount"] == 3
+    counts = client.post("/api/chase/worklist", json={}).json()["counts"]
+    assert counts["open"] == 3
+    assert counts["closed"] == 1
+
+
 def test_task_returns_only_fixed_synthetic_contact_and_withholds_review_case(client):
     client.post(
         "/api/chase/demo-seed",
@@ -143,7 +179,9 @@ def test_task_returns_only_fixed_synthetic_contact_and_withholds_review_case(cli
     assert task.status_code == held.status_code == 200
     assert task.json()["contact"]["destination"].startswith("+1 202-555-01")
     assert task.json()["contact"]["mode"] == "synthetic_demo"
+    assert "log_attempt" in task.json()["allowedActions"]
     assert held.json()["contact"] is None
+    assert "log_attempt" not in held.json()["allowedActions"]
     assert "direct-contract" in held.json()["instruction"]
     assert "patient_ref" not in task.text + held.text
     assert ordinary["chaseId"] not in task.request.url.path
@@ -181,6 +219,7 @@ def test_operational_lookalike_never_unlocks_a_synthetic_destination(client):
     assert task["dataClass"] == "operational"
     assert task["contact"] is None
     assert task["systemOfRecord"]["deepLinkConfigured"] is False
+    assert task["systemOfRecord"]["name"] == "Practice source system"
 
 
 def test_seed_refuses_to_run_when_scheduler_is_enabled(tmp_path):
@@ -210,13 +249,15 @@ def test_seed_refuses_to_run_when_scheduler_is_enabled(tmp_path):
 
 def test_durable_seed_passes_one_complete_batch_and_audit_completion(tmp_path):
     class RecordingScheduler:
-        def __init__(self):
+        def __init__(self, store):
+            self.store = store
             self.entries = None
             self.audit_event = None
 
         def persist_detection_batch(self, entries, *, audit_event):
             self.entries = list(entries)
             self.audit_event = audit_event
+            self.store.extend(item for item, _contact in self.entries)
             return [object() for _ in self.entries]
 
     settings = Settings(
@@ -230,10 +271,11 @@ def test_durable_seed_passes_one_complete_batch_and_audit_completion(tmp_path):
         settings=settings,
         frontend_dist=tmp_path / "missing-frontend",
     )
-    scheduler = RecordingScheduler()
+    store = api._build_chase_context(settings)["store"]
+    scheduler = RecordingScheduler(store)
     application.state.atomic_chase_audit = True
     application.state.chase_context = {
-        "store": api._build_chase_context(settings)["store"],
+        "store": store,
         "scheduler": scheduler,
     }
 
@@ -243,7 +285,8 @@ def test_durable_seed_passes_one_complete_batch_and_audit_completion(tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json()["casesReady"] == 4
+    assert response.json()["installedCaseCount"] == 4
+    assert response.json()["openTaskCount"] == 4
     assert len(scheduler.entries) == 4
     assert scheduler.audit_event.action == "chase.decide"
     assert scheduler.audit_event.route == "/api/chase/demo-seed"

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import io
+import inspect
 import json
 import socket
 import urllib.request
+from dataclasses import replace
 
 import pytest
 
@@ -14,14 +16,21 @@ from cosmaneura_billing.athena_client import (
     ATHENA_PREVIEW_PRACTICE_ID,
     ATHENA_PREVIEW_SCOPE,
     ATHENA_PREVIEW_TOKEN_URL,
+    AthenaSchemaError,
+    MockAthenaClient,
 )
 from cosmaneura_billing.athena_sync import (
+    ATHENA_PREVIEW_ENCOUNTER_FEED,
+    ATHENA_PREVIEW_SOURCE_SYSTEM,
     AthenaSyncConfig,
     AthenaSyncStatus,
+    _run_mock_pages,
     main,
     run_once,
 )
 from cosmaneura_billing.settings import SettingsError
+from cosmaneura_billing.source_import import MemorySourceImportStore
+from cosmaneura_billing.source_import import source_import_external_id
 
 
 def _live_env(**changes: str) -> dict[str, str]:
@@ -33,6 +42,11 @@ def _live_env(**changes: str) -> dict[str, str]:
         "COSMANEURA_ATHENA_CLIENT_ID": "synthetic-client-id",
         "COSMANEURA_ATHENA_SCOPES": ATHENA_PREVIEW_SCOPE,
         "COSMANEURA_ATHENA_CLIENT_SECRET": "synthetic-client-secret",
+        "COSMANEURA_ATHENA_IMPORT_DB_ROLE": "cosmaneura_athena_import",
+        "COSMANEURA_ATHENA_IMPORT_DATABASE_URL": (
+            "postgresql://cosmaneura_athena_import:synthetic-db-secret@"
+            "database.invalid/cosmaneura?sslmode=require"
+        ),
         "COSMANEURA_PRACTICE_ID": "server-practice",
     }
     values.update(changes)
@@ -49,10 +63,11 @@ def test_defaults_are_inert_and_do_not_fall_back_to_api_settings():
     assert config.mode == "disabled"
     assert config.base_url == ""
     assert config.client_secret == ""
+    assert config.import_database_url == ""
     assert run_once(config).status is AthenaSyncStatus.DISABLED
 
 
-def test_mock_requires_explicit_enable_and_reads_four_without_importing():
+def test_mock_requires_explicit_enable_and_imports_four():
     disabled = AthenaSyncConfig(
         enabled=False,
         mode="mock",
@@ -70,8 +85,25 @@ def test_mock_requires_explicit_enable_and_reads_four_without_importing():
     assert result.page_count == 2
     assert result.fetched_count == 4
     assert result.replayed_count == 0
-    assert result.imported_count == 0
+    assert result.imported_count == 4
     assert result.exit_code == 0
+
+
+def test_mock_configuration_rejects_non_mock_client_before_any_read():
+    class NetworkCapableClient:
+        mode = "athena_sandbox"
+
+        def read_page(self, cursor=None):
+            raise AssertionError("non-mock client must never be invoked")
+
+    assert "client" not in inspect.signature(run_once).parameters
+    result = _run_mock_pages(
+        client=NetworkCapableClient(),
+        store=MemorySourceImportStore(practice_id="server-practice"),
+    )
+
+    assert result.status is AthenaSyncStatus.ADAPTER_ERROR
+    assert result.fetched_count == 0
 
 
 def test_mock_cli_output_is_count_and_code_only():
@@ -92,7 +124,7 @@ def test_mock_cli_output_is_count_and_code_only():
     assert parsed == {
         "code": "ATHENA_MOCK_COMPLETE",
         "fetched_count": 4,
-        "imported_count": 0,
+        "imported_count": 4,
         "page_count": 2,
         "replayed_count": 0,
         "status": "completed",
@@ -100,6 +132,234 @@ def test_mock_cli_output_is_count_and_code_only():
     assert "sensitive-practice-identifier" not in output
     assert "SYN-RC" not in output
     assert "cursor" not in output
+
+
+def test_mock_sync_replays_exactly_and_resumes_from_durable_cursor():
+    class RecordingStore(MemorySourceImportStore):
+        def __init__(self, *, practice_id: str) -> None:
+            super().__init__(practice_id=practice_id)
+            self.committed_checkpoints = []
+
+        def import_encounter_page(self, **kwargs):
+            outcome = super().import_encounter_page(**kwargs)
+            self.committed_checkpoints.append(outcome.checkpoint)
+            return outcome
+
+    config = AthenaSyncConfig(
+        enabled=True,
+        mode="mock",
+        target_practice_id="server-practice",
+    )
+    store = RecordingStore(practice_id="server-practice")
+
+    first = run_once(config, import_store=store)
+    terminal_checkpoint = store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    )
+    assert terminal_checkpoint is not None
+    store.committed_checkpoints.clear()
+    replay = run_once(config, import_store=store)
+
+    assert first.imported_count == 4
+    assert first.replayed_count == 0
+    assert replay.imported_count == 0
+    assert replay.replayed_count == 4
+    assert len(store.committed_checkpoints) == 2
+    assert all(
+        checkpoint == terminal_checkpoint
+        for checkpoint in store.committed_checkpoints
+    )
+    assert store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    ) == terminal_checkpoint
+
+    resume_store = MemorySourceImportStore(practice_id="server-practice")
+    base = MockAthenaClient(server_practice_id="server-practice")
+
+    class FailAfterFirstPage:
+        mode = "athena_mock"
+
+        def read_page(self, cursor=None):
+            if cursor is not None:
+                raise AthenaSchemaError()
+            return base.read_page(cursor)
+
+    failed = _run_mock_pages(
+        client=FailAfterFirstPage(),
+        store=resume_store,
+    )
+    checkpoint = resume_store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    )
+    assert failed.status is AthenaSyncStatus.ADAPTER_ERROR
+    assert failed.page_count == 1
+    assert failed.fetched_count == 2
+    assert failed.imported_count == 2
+    assert checkpoint is not None
+    assert checkpoint.next_cursor == "mock-cursor-v1-2"
+
+    resumed = run_once(config, import_store=resume_store)
+    assert resumed.status is AthenaSyncStatus.COMPLETED
+    assert resumed.page_count == 1
+    assert resumed.fetched_count == 2
+    assert resumed.imported_count == 2
+
+
+def test_cyclic_cursor_page_is_rejected_before_records_or_checkpoint_commit():
+    config = AthenaSyncConfig(
+        enabled=True,
+        mode="mock",
+        target_practice_id="server-practice",
+    )
+    store = MemorySourceImportStore(practice_id="server-practice")
+    base = MockAthenaClient(server_practice_id="server-practice")
+    first_page = base.read_page()
+    second_page = base.read_page(first_page.next_cursor)
+
+    class CyclicCursorClient:
+        mode = "athena_mock"
+
+        def read_page(self, cursor=None):
+            if cursor is None:
+                return first_page
+            return replace(second_page, next_cursor=first_page.next_cursor)
+
+    result = _run_mock_pages(client=CyclicCursorClient(), store=store)
+
+    assert result.status is AthenaSyncStatus.ADAPTER_ERROR
+    assert (result.page_count, result.fetched_count, result.imported_count) == (
+        1, 2, 2,
+    )
+    checkpoint = store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    )
+    assert checkpoint is not None
+    assert checkpoint.checkpoint == first_page.checkpoint
+    assert checkpoint.next_cursor == first_page.next_cursor
+    second_record_id = source_import_external_id(
+        practice_id="server-practice",
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+        source_record_id=second_page.records[0].source_record_id,
+    )
+    assert store.get_encounter(second_record_id) is None
+
+
+def test_resumed_cursor_cycle_is_rejected_before_cycle_page_commit():
+    config = AthenaSyncConfig(
+        enabled=True,
+        mode="mock",
+        target_practice_id="server-practice",
+    )
+    store = MemorySourceImportStore(practice_id="server-practice")
+    base = MockAthenaClient(server_practice_id="server-practice")
+    first_page = base.read_page()
+    store.import_encounter_page(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+        provenance="athena_preview_synthetic",
+        mapping_version=first_page.records[0].mapping_version,
+        records=first_page.records,
+        checkpoint=first_page.checkpoint,
+        next_cursor=first_page.next_cursor,
+    )
+    second_page = replace(
+        base.read_page(first_page.next_cursor),
+        next_cursor="mock-cursor-v1-cycle",
+    )
+    cycle_page = replace(
+        first_page,
+        checkpoint="mock-checkpoint-cycle-must-not-commit",
+        next_cursor=first_page.next_cursor,
+    )
+
+    class ResumedCycleClient:
+        mode = "athena_mock"
+
+        def read_page(self, cursor=None):
+            if cursor == first_page.next_cursor:
+                return second_page
+            if cursor == second_page.next_cursor:
+                return cycle_page
+            raise AssertionError("unexpected cursor")
+
+    result = _run_mock_pages(client=ResumedCycleClient(), store=store)
+
+    assert result.status is AthenaSyncStatus.ADAPTER_ERROR
+    assert (result.page_count, result.fetched_count, result.imported_count) == (
+        1, 2, 2,
+    )
+    checkpoint = store.load_checkpoint(
+        source_system=ATHENA_PREVIEW_SOURCE_SYSTEM,
+        feed=ATHENA_PREVIEW_ENCOUNTER_FEED,
+    )
+    assert checkpoint is not None
+    assert checkpoint.checkpoint == second_page.checkpoint
+    assert checkpoint.next_cursor == second_page.next_cursor
+
+
+def test_second_page_import_failure_reports_only_prior_committed_counts():
+    committed_pages = 0
+
+    def fail_second_page() -> None:
+        nonlocal committed_pages
+        committed_pages += 1
+        if committed_pages == 2:
+            raise RuntimeError("synthetic second-page failure")
+
+    result = run_once(
+        AthenaSyncConfig(
+            enabled=True,
+            mode="mock",
+            target_practice_id="server-practice",
+        ),
+        import_store=MemorySourceImportStore(
+            practice_id="server-practice",
+            transaction_check=fail_second_page,
+        ),
+    )
+
+    assert result.status is AthenaSyncStatus.IMPORT_ERROR
+    assert result.as_dict() == {
+        "code": "ATHENA_IMPORT_ERROR",
+        "fetched_count": 2,
+        "imported_count": 2,
+        "page_count": 1,
+        "replayed_count": 0,
+        "status": "import_error",
+    }
+
+
+def test_mock_import_failure_returns_only_static_code_and_zero_counts():
+    def fail_before_commit() -> None:
+        raise RuntimeError("cursor-and-record-values-must-not-escape")
+
+    result = run_once(
+        AthenaSyncConfig(
+            enabled=True,
+            mode="mock",
+            target_practice_id="server-practice",
+        ),
+        import_store=MemorySourceImportStore(
+            practice_id="server-practice",
+            transaction_check=fail_before_commit,
+        ),
+    )
+
+    assert result.status is AthenaSyncStatus.IMPORT_ERROR
+    assert result.as_dict() == {
+        "code": "ATHENA_IMPORT_ERROR",
+        "fetched_count": 0,
+        "imported_count": 0,
+        "page_count": 0,
+        "replayed_count": 0,
+        "status": "import_error",
+    }
+    assert "cursor-and-record-values" not in repr(result)
 
 
 def test_enabled_sync_cannot_use_disabled_mode_or_empty_practice():
@@ -111,6 +371,12 @@ def test_enabled_sync_cannot_use_disabled_mode_or_empty_practice():
         )
     with pytest.raises(SettingsError, match="PRACTICE_ID"):
         AthenaSyncConfig(enabled=True, mode="mock", target_practice_id="")
+    with pytest.raises(SettingsError, match="PRACTICE_ID"):
+        AthenaSyncConfig(
+            enabled=True,
+            mode="mock",
+            target_practice_id="invalid-\ud800-practice",
+        )
 
 
 def test_mock_mode_rejects_all_live_credentials():
@@ -159,6 +425,7 @@ def test_complete_live_config_is_validated_redacted_and_execution_refused(
     assert config.vendor_practice_id == ATHENA_PREVIEW_PRACTICE_ID
     assert config.introspection_url == ATHENA_PREVIEW_INTROSPECTION_URL
     assert "synthetic-client-secret" not in rendered
+    assert "synthetic-db-secret" not in rendered
     assert "<redacted>" in rendered
 
     result = run_once(config)
@@ -209,6 +476,17 @@ def test_complete_live_config_is_validated_redacted_and_execution_refused(
 def test_live_configuration_rejects_unsafe_metadata(changes, match):
     with pytest.raises(SettingsError, match=match):
         AthenaSyncConfig.from_env(_live_env(**changes))
+
+
+@pytest.mark.parametrize("role", ["bad:role", "pg_import", "postgres"])
+def test_import_database_role_must_be_a_safe_non_system_login(role):
+    with pytest.raises(SettingsError, match="IMPORT_DB_ROLE"):
+        AthenaSyncConfig(
+            enabled=True,
+            mode="mock",
+            target_practice_id="server-practice",
+            import_database_role=role,
+        )
 
 
 def test_invalid_boolean_and_mode_return_static_configuration_output():

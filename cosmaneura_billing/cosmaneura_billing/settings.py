@@ -485,6 +485,10 @@ class Settings:
     chase_worker_database_url: str = field(
         default="", repr=False, metadata={"secret": True}
     )
+    athena_import_database_role: str = "cosmaneura_athena_import"
+    athena_import_database_password: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
     bootstrap_admin_oid: str = ""
     chase_database_url: str = field(
         default="", repr=False, metadata={"secret": True}
@@ -915,6 +919,11 @@ class Settings:
         ):
             raise SettingsError("COSMANEURA_CHASE_WORKER_DB_ROLE must not be empty")
         if (
+            self.athena_import_database_password
+            and not self.athena_import_database_role.strip()
+        ):
+            raise SettingsError("COSMANEURA_ATHENA_IMPORT_DB_ROLE must not be empty")
+        if (
             self.state_store == "postgres" or self.database_runtime_password
         ) and not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_.-]{0,62}", self.database_runtime_role,
@@ -953,6 +962,28 @@ class Settings:
         ):
             raise SettingsError(
                 "the API runtime role and chase worker role must be distinct"
+            )
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_.-]{0,62}",
+            self.athena_import_database_role,
+        ):
+            raise SettingsError(
+                "COSMANEURA_ATHENA_IMPORT_DB_ROLE must be a safe PostgreSQL role name"
+            )
+        if (
+            self.athena_import_database_role.casefold().startswith("pg_")
+            or self.athena_import_database_role.casefold()
+            in {"postgres", "azure_pg_admin"}
+        ):
+            raise SettingsError(
+                "COSMANEURA_ATHENA_IMPORT_DB_ROLE must be a safe PostgreSQL role name"
+            )
+        if self.athena_import_database_role.casefold() in {
+            self.database_runtime_role.casefold(),
+            self.chase_worker_database_role.casefold(),
+        }:
+            raise SettingsError(
+                "the Athena import role must be distinct from API and chase roles"
             )
         if self.chase_worker_database_url:
             if not _database_url_uses_role(
@@ -1140,6 +1171,13 @@ class Settings:
             ),
             chase_worker_database_url=env.get(
                 "COSMANEURA_CHASE_WORKER_DATABASE_URL", ""
+            ),
+            athena_import_database_role=(
+                env.get("COSMANEURA_ATHENA_IMPORT_DB_ROLE")
+                or "cosmaneura_athena_import"
+            ).strip(),
+            athena_import_database_password=env.get(
+                "COSMANEURA_ATHENA_IMPORT_DB_PASSWORD", ""
             ),
             bootstrap_admin_oid=(
                 env.get("COSMANEURA_BOOTSTRAP_ADMIN_OID") or ""

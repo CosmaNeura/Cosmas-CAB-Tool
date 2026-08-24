@@ -424,6 +424,29 @@ def test_deployed_environments_require_postgres_and_runtime_credentials():
         )
 
 
+def test_athena_import_database_role_defaults_and_secret_are_separate():
+    secret = "synthetic-athena-import-password"
+    settings = Settings.from_env({
+        "COSMANEURA_ATHENA_IMPORT_DB_ROLE": "pilot_athena_import",
+        "COSMANEURA_ATHENA_IMPORT_DB_PASSWORD": secret,
+    })
+
+    assert settings.athena_import_database_role == "pilot_athena_import"
+    assert settings.athena_import_database_password == secret
+    assert secret not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    "role",
+    ("postgres", "pg_read_all_data", "unsafe role", "cosmaneura_app"),
+)
+def test_athena_import_database_role_rejects_privileged_unsafe_or_shared_names(
+    role,
+):
+    with pytest.raises(SettingsError, match="Athena import|safe PostgreSQL"):
+        Settings(athena_import_database_role=role)
+
+
 def test_acs_email_policy_metadata_is_all_or_none_without_echoing_secrets():
     secret = (
         "endpoint=https://pilot.communication.azure.com;"

@@ -310,6 +310,88 @@ def _provision_chase_worker_role(conn, settings: Settings) -> None:
     ).format(identifier))
 
 
+def _provision_athena_import_role(conn, settings: Settings) -> None:
+    """Create the practice/source-bound Athena importer after migration 009."""
+    if not settings.athena_import_database_password:
+        return
+    sql, identifier = _prepare_bound_login(
+        conn,
+        role=settings.athena_import_database_role,
+        password_value=settings.athena_import_database_password,
+        practice_id=settings.practice_id,
+        description="Athena import role",
+    )
+    source_system = "athena_preview"
+    provenance = "athena_preview_synthetic"
+    existing_role_binding = conn.execute(
+        """SELECT practice_id, source_system, provenance
+             FROM public.source_import_role_bindings
+            WHERE role_name = %s""",
+        (settings.athena_import_database_role,),
+    ).fetchone()
+    if existing_role_binding and tuple(existing_role_binding) != (
+        settings.practice_id,
+        source_system,
+        provenance,
+    ):
+        raise RuntimeError(
+            "Athena import role is already bound to another source or practice"
+        )
+    existing_source_binding = conn.execute(
+        """SELECT role_name, provenance
+             FROM public.source_import_role_bindings
+            WHERE practice_id = %s AND source_system = %s""",
+        (settings.practice_id, source_system),
+    ).fetchone()
+    if existing_source_binding and tuple(existing_source_binding) != (
+        settings.athena_import_database_role,
+        provenance,
+    ):
+        raise RuntimeError(
+            "Athena Preview source is already bound to another import role"
+        )
+    existing_provenance_binding = conn.execute(
+        """SELECT role_name, source_system
+             FROM public.source_import_role_bindings
+            WHERE practice_id = %s AND provenance = %s""",
+        (settings.practice_id, provenance),
+    ).fetchone()
+    if existing_provenance_binding and tuple(existing_provenance_binding) != (
+        settings.athena_import_database_role,
+        source_system,
+    ):
+        raise RuntimeError(
+            "Athena Preview provenance is already bound to another import role"
+        )
+    conn.execute(
+        """INSERT INTO public.source_import_role_bindings (
+               role_name, practice_id, source_system, provenance
+           ) VALUES (%s, %s, %s, %s)
+           ON CONFLICT (role_name) DO NOTHING""",
+        (
+            settings.athena_import_database_role,
+            settings.practice_id,
+            source_system,
+            provenance,
+        ),
+    )
+
+    # The importer can read only its bounded continuation state. All encounter,
+    # receipt, and checkpoint writes go through one database-owned atomic page
+    # primitive; direct table DML would permit a receipt/checkpoint bypass.
+    conn.execute(sql.SQL(
+        "GRANT SELECT ON public.source_import_checkpoints TO {}"
+    ).format(identifier))
+    conn.execute(sql.SQL(
+        "GRANT EXECUTE ON FUNCTION public.cosmaneura_practice_allowed(text), "
+        "public.cosmaneura_source_import_owner(), "
+        "public.cosmaneura_source_import_session(), "
+        "public.cosmaneura_source_import_allowed(text, text, text), "
+        "public.cosmaneura_commit_source_encounter_page("
+        "text, text, text, text, text, bigint, jsonb, text, text) TO {}"
+    ).format(identifier))
+
+
 def _bootstrap_practice_admin(conn, settings: Settings) -> None:
     """Provision only an explicitly configured immutable Entra administrator."""
     if not settings.bootstrap_admin_oid:
@@ -478,6 +560,7 @@ def apply_migrations(
                 _bootstrap_practice_admin(conn, config)
                 _provision_runtime_role(conn, config)
                 _provision_chase_worker_role(conn, config)
+                _provision_athena_import_role(conn, config)
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (_MIGRATION_LOCK,))
     return applied_now

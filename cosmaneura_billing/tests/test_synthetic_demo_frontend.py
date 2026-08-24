@@ -35,8 +35,14 @@ def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
 
 
 def test_synthetic_fixture_is_read_only_and_uses_only_the_stored_billing_route():
-    assert 'enc.dataClass === "synthetic_demo_release_candidate"' in BILLING
+    assert (
+        'synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture"'
+        in BILLING
+    )
+    assert 'athena_preview_synthetic: "Athena Preview synthetic fixture"' in BILLING
     assert "enc.readOnly === true" in BILLING
+    assert "SYNTHETIC_DATA_LABELS[enc.dataClass]" in BILLING
+    assert "{syntheticDataLabel} · documentation is read-only" in BILLING
     assert 'enc.encounterId === "SYN-RC-0001"' not in BILLING
     assert 'startsWith("SYN-RC-")' not in BILLING
     assert "documentation is read-only" in BILLING
@@ -84,6 +90,8 @@ def test_server_capabilities_control_the_three_tabs_and_encounter_loading():
     assert 'views.includes("coder")' in APP
     assert 'views.includes("chase")' in APP
     assert 'session.views.includes("provider") || session.views.includes("coder")' in APP
+    assert "session.capabilities?.manageChase === true" in APP
+    assert "manageChase={manageChase}" in APP
     assert "Provider &amp; biller" not in APP
     assert "Card chase" in APP
 
@@ -96,6 +104,9 @@ def test_admin_only_server_capability_drives_digest_pinned_synthetic_seed():
     assert 'api("/api/chase/demo-seed"' in CHASE
     assert "body: { seedDigest: demoSeed.seedDigest }" in CHASE
     assert "seedConfirmationIsSafe(result, demoSeed)" in CHASE
+    assert "syntheticSeedConfirmationMessage(seedResult)" in CHASE
+    assert "result?.installedCaseCount === descriptor.caseCount" in SEED
+    assert "result.openTaskCount <= result.installedCaseCount" in SEED
     assert "outbound?.schedulerEnabled === false" in SEED
     assert "outbound?.patientMessagingEnabled === false" in SEED
     assert "outbound?.operationallyActivated === false" in SEED
@@ -103,7 +114,7 @@ def test_admin_only_server_capability_drives_digest_pinned_synthetic_seed():
     assert 'outbound?.transport === "record_only"' in SEED
     assert "syntheticSeedErrorMessage(seedFailure)" in CHASE
     assert "seedFailure.message" not in CHASE
-    assert "no duplicates were added" in CHASE
+    assert "No duplicates were added." in SEED
     assert "await load()" in CHASE
     assert "fc207ef1419882f48dce5b12dae05233de2f99d9ea930ee5eb84d84e659d23ff" not in APP + CHASE
     assert "console." not in CHASE + SEED
@@ -113,13 +124,31 @@ def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
     assert 'api("/api/chase/worklist"' in CHASE
     assert 'api("/api/chase/task"' in CHASE
     assert 'api("/api/chase/demo-seed"' in CHASE
+    assert 'api("/api/chase/action"' in CHASE
     assert 'method: "POST"' in CHASE
-    assert "body: { chaseId: row.chaseId }" in CHASE
+    assert "body: { chaseId }" in CHASE
     assert "`/api/chase/${" not in CHASE
     assert "encodeURIComponent" not in CHASE
     assert "tel:" not in CHASE
     assert "mailto:" not in CHASE
     assert "does not dial, text, email, or open an external link" in CHASE
+    assert "They never call, text, email, or write to a source system." in CHASE
+    assert "it does not write to a source system or contact the patient" in CHASE
+    assert "crypto.randomUUID()" in CHASE
+    assert "retry.actionId" in CHASE
+    assert "retry.chaseId" in CHASE
+    assert "selectedChaseIdRef.current === chaseId" in CHASE
+    assert "requestId !== taskRequestIdRef.current" in CHASE
+    assert 'task.allowedActions.includes(action)' in CHASE
+    assert "Retry the same action safely" in CHASE
+    assert 'action: "assign"' in CHASE
+    assert 'action: "log_attempt"' in CHASE
+    assert 'setConfirming("submitted")' in CHASE
+    assert 'setConfirming("verify")' in CHASE
+    assert "This worklist is read-only for your assigned role." in CHASE
+    assert 'aria-pressed={selectedChaseId === row.chaseId}' in CHASE
+    assert 'role="tablist"' in APP
+    assert 'role="tab"' in APP
     assert "patientLabel}`" not in CHASE
     assert "chaseId}`" not in CHASE
 

@@ -207,6 +207,7 @@ def test_unknown_top_level_and_visit_fields_fail_closed():
     [
         lambda value: value.update(schema_version="vendor-v2"),
         lambda value: value.update(records="not-a-list"),
+        lambda value: value.update(next_cursor="é" * 300),
         lambda value: value["records"][0]["visit"].update(patient_age=True),
         lambda value: value["records"][0]["visit"].update(patient_age=126),
         lambda value: value["records"][0]["visit"].update(

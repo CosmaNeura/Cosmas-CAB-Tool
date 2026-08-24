@@ -41,6 +41,11 @@ class ReviewerNotAuthorized(PermissionError):
 
 
 SYNTHETIC_DEMO_SOURCE = "synthetic_demo_release_candidate"
+ATHENA_PREVIEW_SYNTHETIC_SOURCE = "athena_preview_synthetic"
+READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES = frozenset({
+    SYNTHETIC_DEMO_SOURCE,
+    ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+})
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,13 @@ class MemoryEncounterStore:
         source: str | None = None,
         **_kwargs,
     ) -> StoredEncounter:
+        if (
+            source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+            and source != SYNTHETIC_DEMO_SOURCE
+        ):
+            raise PersistenceUnavailable(
+                "reserved import provenance requires the source import store"
+            )
         prior = self._items.get(bundle.encounter_id)
         if (
             prior is not None
@@ -306,9 +318,13 @@ class PostgresEncounterStore:
         ingested_by_tenant_id: str | None = None,
         ingested_by_user_id: str | None = None,
     ) -> StoredEncounter:
-        if source == SYNTHETIC_DEMO_SOURCE:
+        if source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES:
+            if source == SYNTHETIC_DEMO_SOURCE:
+                raise PersistenceUnavailable(
+                    "reserved synthetic provenance requires the fixed seeder"
+                )
             raise PersistenceUnavailable(
-                "reserved synthetic provenance requires the fixed seeder"
+                "reserved import provenance requires the source import store"
             )
         effective_source = source or "explicit_import"
         resource_id = str(uuid4())
@@ -714,9 +730,12 @@ def postgres_services(settings: Settings) -> PostgresServices:
 
 
 __all__ = [
-    "MemoryEncounterStore", "PersistenceUnavailable", "PostgresAccessAuditStore",
+    "ATHENA_PREVIEW_SYNTHETIC_SOURCE", "MemoryEncounterStore",
+    "PersistenceUnavailable", "PostgresAccessAuditStore",
     "PostgresContext", "PostgresEncounterStore", "PostgresFeedbackStore",
-    "PostgresMembershipStore", "PostgresServices", "StoredEncounter",
-    "ReviewerNotAuthorized", "StaleEncounter", "UnknownEncounter",
+    "PostgresMembershipStore", "PostgresServices",
+    "READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES", "StoredEncounter",
+    "SYNTHETIC_DEMO_SOURCE", "ReviewerNotAuthorized", "StaleEncounter",
+    "UnknownEncounter",
     "postgres_services",
 ]

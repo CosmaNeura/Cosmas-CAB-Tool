@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from cosmaneura_billing.persistence import (
+    ATHENA_PREVIEW_SYNTHETIC_SOURCE,
     MemoryEncounterStore,
     PersistenceUnavailable,
     PostgresEncounterStore,
@@ -64,6 +65,14 @@ def test_postgres_general_upsert_cannot_claim_reserved_demo_provenance():
 
     with pytest.raises(PersistenceUnavailable, match="fixed seeder"):
         store.upsert(_bundle(), source=DEMO_SOURCE)
+
+
+def test_postgres_general_upsert_cannot_claim_reserved_athena_provenance():
+    store = object.__new__(PostgresEncounterStore)
+    store.context = None
+
+    with pytest.raises(PersistenceUnavailable):
+        store.upsert(_bundle(), source=ATHENA_PREVIEW_SYNTHETIC_SOURCE)
 
 
 def test_postgres_bundle_carries_persisted_source_independent_of_external_id():

@@ -29,6 +29,16 @@ param postgresChaseWorkerLogin string = 'cosmaneura_chase_worker'
 @description('Password for the least-privilege chase worker login. Supply it from an untracked parameter file.')
 param postgresChaseWorkerPassword string
 
+@description('Provision the dedicated practice-bound PostgreSQL login material used only by the dormant Athena import job.')
+param provisionAthenaImportDatabase bool = false
+
+@description('Least-privilege PostgreSQL login used only by the Athena import job.')
+param postgresAthenaImportLogin string = 'cosmaneura_athena_import'
+
+@secure()
+@description('Password for the least-privilege Athena import login. Required only when provisionAthenaImportDatabase is true.')
+param postgresAthenaImportPassword string = ''
+
 @secure()
 @minLength(32)
 @description('Stable HMAC key shared only by the API and chase worker for direct-contract gate evidence.')
@@ -86,6 +96,13 @@ var postgresChaseWorkerLoginConflicts = toLower(postgresChaseWorkerLogin) == toL
 var validatedPostgresChaseWorkerLogin = postgresChaseWorkerLoginConflicts
   ? fail('postgresChaseWorkerLogin must differ from both PostgreSQL administrator and API runtime logins')
   : postgresChaseWorkerLogin
+var postgresAthenaImportLoginConflicts = toLower(postgresAthenaImportLogin) == toLower(postgresAdminLogin) || toLower(postgresAthenaImportLogin) == toLower(postgresAppLogin) || toLower(postgresAthenaImportLogin) == toLower(postgresChaseWorkerLogin)
+var validatedPostgresAthenaImportLogin = postgresAthenaImportLoginConflicts
+  ? fail('postgresAthenaImportLogin must differ from PostgreSQL administrator, API runtime, and chase worker logins')
+  : postgresAthenaImportLogin
+var validatedPostgresAthenaImportPassword = provisionAthenaImportDatabase && empty(postgresAthenaImportPassword)
+  ? fail('provisionAthenaImportDatabase requires postgresAthenaImportPassword')
+  : postgresAthenaImportPassword
 var validatedChaseGateHmacKey = chaseGateHmacKey == 'REPLACE_IN_UNTRACKED_PARAMETERS_FILE_32_BYTES_MINIMUM'
   ? fail('chaseGateHmacKey placeholder must be replaced with a generated secret')
   : chaseGateHmacKey
@@ -105,9 +122,11 @@ var postgresHost = '${postgresName}.postgres.database.azure.com'
 var encodedAdminPassword = uriComponent(postgresAdminPassword)
 var encodedAppPassword = uriComponent(postgresAppPassword)
 var encodedChaseWorkerPassword = uriComponent(postgresChaseWorkerPassword)
+var encodedAthenaImportPassword = uriComponent(validatedPostgresAthenaImportPassword)
 var migrationDatabaseUrl = 'postgresql://${postgresAdminLogin}:${encodedAdminPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var runtimeDatabaseUrl = 'postgresql://${validatedPostgresAppLogin}:${encodedAppPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var chaseWorkerDatabaseUrl = 'postgresql://${validatedPostgresChaseWorkerLogin}:${encodedChaseWorkerPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
+var athenaImportDatabaseUrl = 'postgresql://${validatedPostgresAthenaImportLogin}:${encodedAthenaImportPassword}@${postgresHost}:5432/${databaseName}?sslmode=require'
 var acsEmailConfigured = !empty(acsEmailConnectionString)
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -664,6 +683,30 @@ resource chaseWorkerDatabasePasswordSecret 'Microsoft.KeyVault/vaults/secrets@20
   ]
 }
 
+resource athenaImportDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (provisionAthenaImportDatabase) {
+  parent: keyVault
+  name: 'athena-import-database-url'
+  properties: {
+    contentType: 'Practice-bound PostgreSQL connection string for the Athena import job only'
+    value: athenaImportDatabaseUrl
+  }
+  dependsOn: [
+    applicationDatabase
+  ]
+}
+
+resource athenaImportDatabasePasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (provisionAthenaImportDatabase) {
+  parent: keyVault
+  name: 'athena-import-database-password'
+  properties: {
+    contentType: 'Password used only by the migration job to provision the Athena import role'
+    value: validatedPostgresAthenaImportPassword
+  }
+  dependsOn: [
+    applicationDatabase
+  ]
+}
+
 resource chaseGateHmacKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: keyVault
   name: 'chase-gate-hmac-key'
@@ -724,6 +767,19 @@ resource migrationRuntimePasswordSecretReader 'Microsoft.Authorization/roleAssig
 resource migrationChaseWorkerPasswordSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: chaseWorkerDatabasePasswordSecret
   name: guid(chaseWorkerDatabasePasswordSecret.id, migrationIdentity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: migrationIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
+  }
+}
+
+resource migrationAthenaImportPasswordSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionAthenaImportDatabase) {
+  scope: athenaImportDatabasePasswordSecret
+  name: guid(athenaImportDatabasePasswordSecret!.id, migrationIdentity.id, 'key-vault-secrets-user')
   properties: {
     principalId: migrationIdentity.properties.principalId
     principalType: 'ServicePrincipal'

@@ -451,6 +451,10 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     assert admin_session["views"] == [
         "provider", "coder", "chase",
     ]
+    assert provider_session["capabilities"] == {"manageChase": False}
+    assert billing_staff_session["capabilities"] == {"manageChase": True}
+    assert coder_session["capabilities"] == {"manageChase": False}
+    assert admin_session["capabilities"] == {"manageChase": True}
     assert all(
         "actions" not in session
         for session in (provider_session, billing_staff_session, coder_session)
@@ -466,7 +470,11 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     ).json()["actions"] == admin_session["actions"]
     assert client.get(
         "/api/session", headers=provider_with_extra_staff,
-    ).json()["views"] == ["provider"]
+    ).json() == {
+        "views": ["provider"],
+        "defaultView": "provider",
+        "capabilities": {"manageChase": False},
+    }
     assert client.post(
         "/api/chase/worklist", json={}, headers=provider_with_extra_staff,
     ).status_code == 403
@@ -474,6 +482,12 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
         assert client.get("/api/session", headers=expanded).json()["views"] == [
             "provider", "coder", "chase",
         ]
+    assert client.get(
+        "/api/session", headers=provider_coder,
+    ).json()["capabilities"] == {"manageChase": False}
+    assert client.get(
+        "/api/session", headers=coder_billing_staff,
+    ).json()["capabilities"] == {"manageChase": True}
     seeded = client.post(
         "/api/chase/demo-seed",
         json={"seedDigest": EXPECTED_PACK_DIGEST},
@@ -483,6 +497,15 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     chase_id = client.post(
         "/api/chase/worklist", json={}, headers=coder_billing_staff,
     ).json()["rows"][0]["chaseId"]
+    coder_task = client.post(
+        "/api/chase/task", json={"chaseId": chase_id}, headers=coder,
+    )
+    staff_task = client.post(
+        "/api/chase/task", json={"chaseId": chase_id}, headers=billing_staff,
+    )
+    assert coder_task.status_code == staff_task.status_code == 200
+    assert coder_task.json()["allowedActions"] == []
+    assert "assign" in staff_task.json()["allowedActions"]
     # Multiple effective roles compose deliberately: Coder grants all views;
     # BillingStaff additionally grants staff transition authority.
     assert client.post(

@@ -17,7 +17,7 @@ from .knowledge.pos import PlaceOfService
 from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
 from .llm import LLMClient, describe_client, get_default_client
-from .persistence import SYNTHETIC_DEMO_SOURCE
+from .persistence import READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
 from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
     Disposition, FeedbackKind, ProviderCard, VisitBundle,
@@ -180,7 +180,7 @@ class BillingOrchestrator:
     ) -> BillingResult:
         if (
             self.settings.azure_openai_synthetic_only
-            and input_provenance != SYNTHETIC_DEMO_SOURCE
+            and input_provenance not in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
         ):
             raise InferenceInputPolicyError(
                 "model inference requires reserved stored synthetic provenance"

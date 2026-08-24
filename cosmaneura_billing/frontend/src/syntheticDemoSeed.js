@@ -8,7 +8,10 @@ export function seedConfirmationIsSafe(result, descriptor) {
     && Number.isInteger(descriptor.caseCount)
     && descriptor.caseCount > 0
     && result?.seedDigest === descriptor.seedDigest
-    && result?.casesReady === descriptor.caseCount
+    && result?.installedCaseCount === descriptor.caseCount
+    && Number.isInteger(result?.openTaskCount)
+    && result.openTaskCount >= 0
+    && result.openTaskCount <= result.installedCaseCount
     && typeof result?.replayed === "boolean"
     && outbound?.schedulerEnabled === false
     && outbound?.patientMessagingEnabled === false
@@ -16,6 +19,15 @@ export function seedConfirmationIsSafe(result, descriptor) {
     && outbound?.automaticContact === false
     && outbound?.transport === "record_only"
   );
+}
+
+export function syntheticSeedConfirmationMessage(result) {
+  const installed = result.installedCaseCount;
+  const open = result.openTaskCount;
+  const openText = `${open} ${open === 1 ? "task remains" : "tasks remain"} open`;
+  return result.replayed
+    ? `The same ${installed}-case synthetic pack is installed; ${openText}. No duplicates were added.`
+    : `${installed}-case synthetic pack installed; ${openText}.`;
 }
 
 export function syntheticSeedErrorMessage(error) {

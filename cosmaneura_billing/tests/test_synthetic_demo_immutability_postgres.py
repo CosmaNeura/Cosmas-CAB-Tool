@@ -59,16 +59,31 @@ def _immutability_schema():
                 ),
                 prepare=False,
             )
-        # 007 is safely repeatable and 008 deliberately uses a drop/create
-        # trigger sequence, so this module also exercises its reapply posture.
-        for name in (
-            "007_synthetic_demo_release_candidate_source.up.sql",
-            "008_synthetic_demo_encounter_immutability.up.sql",
-        ):
+        # Do not reapply 007 over a later migration's extended source allowlist.
+        # 008 deliberately uses a drop/create trigger sequence and remains safe
+        # to reapply so this module still exercises its guard replacement.
+        source_constraint = connection.execute(
+            """SELECT pg_catalog.pg_get_constraintdef(constraint_row.oid)
+                 FROM pg_catalog.pg_constraint AS constraint_row
+                WHERE constraint_row.conrelid =
+                      pg_catalog.to_regclass('public.encounters')
+                  AND constraint_row.conname = 'encounters_source_valid'"""
+        ).fetchone()[0]
+        if RESERVED_SOURCE not in source_constraint:
             connection.execute(
-                (migrations / name).read_text(encoding="utf-8"),
+                (
+                    migrations
+                    / "007_synthetic_demo_release_candidate_source.up.sql"
+                ).read_text(encoding="utf-8"),
                 prepare=False,
             )
+        connection.execute(
+            (
+                migrations
+                / "008_synthetic_demo_encounter_immutability.up.sql"
+            ).read_text(encoding="utf-8"),
+            prepare=False,
+        )
     yield
 
 

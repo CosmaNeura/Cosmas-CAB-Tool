@@ -58,7 +58,7 @@ from .orchestrator import BillingOrchestrator
 from .persistence import (
     MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
     PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
-    SYNTHETIC_DEMO_SOURCE, UnknownEncounter, postgres_services,
+    READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES, UnknownEncounter, postgres_services,
 )
 from .preferences import PreferenceStore
 from .runtime import PHISafeHTTPMiddleware, configure_json_logging
@@ -441,7 +441,7 @@ class CompletenessRequest(StrictRequest):
 
 class ChaseDetectRequest(StrictRequest):
     today: str = Field(min_length=1, max_length=32)
-    # Raw CoverageSnapshot fields — the adapter boundary standing in for athenaNet.
+    # Raw CoverageSnapshot fields — the source-neutral insurance adapter boundary.
     snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=5_000)
 
 
@@ -481,7 +481,7 @@ class ChaseActionRequest(ChaseTargetRequest):
     outcome: Optional[str] = Field(default=None, max_length=128)
     minutes_spent: float = Field(default=0.0, ge=0, le=1_440)
     note: str = Field(default="", max_length=4_000)
-    athena_write_id: str = Field(default="", max_length=256)
+    source_write_id: str = Field(default="", max_length=256)
     eligibility_status: str = Field(default="", max_length=128)
 
 
@@ -611,6 +611,15 @@ def session_capabilities(request: Request) -> dict[str, Any]:
     capabilities: dict[str, Any] = {
         "views": views,
         "defaultView": views[0],
+        "capabilities": {
+            # This is deliberately independent from the ability to see the
+            # worklist. A Coder can inspect all three pilot tabs, but only a
+            # BillingStaff or Admin membership may mutate Card Chase state.
+            "manageChase": bool(
+                "chase" in views
+                and principal.has_any_role(("BillingStaff", "Admin"))
+            ),
+        },
     }
     if principal.has_any_role(("Admin",)):
         # Presence of this object is the browser's capability check. Validate
@@ -684,10 +693,10 @@ def list_encounters(request: Request) -> list[dict[str, Any]]:
 
 
 def _encounter_data_policy(stored) -> dict[str, Any]:
-    is_synthetic_demo = stored.source == SYNTHETIC_DEMO_SOURCE
+    is_synthetic_demo = stored.source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
     return {
         "dataClass": (
-            SYNTHETIC_DEMO_SOURCE if is_synthetic_demo else "operational"
+            stored.source if is_synthetic_demo else "operational"
         ),
         "readOnly": is_synthetic_demo,
     }
@@ -710,7 +719,10 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
     """
     if not _request_settings(request).azure_openai_synthetic_only:
         return
-    if stored is None or stored.source != SYNTHETIC_DEMO_SOURCE:
+    if (
+        stored is None
+        or stored.source not in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+    ):
         raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
 
 
@@ -1069,7 +1081,9 @@ def _chase_row_json(item) -> dict[str, Any]:
     }
 
 
-def _chase_task_json(item, settings: Settings) -> dict[str, Any]:
+def _chase_task_json(
+    item, settings: Settings, *, principal: AuthPrincipal,
+) -> dict[str, Any]:
     """One audited contact task without copying operational destinations."""
     from .chase import State
     from .chase.synthetic_demo import synthetic_case_for
@@ -1078,6 +1092,29 @@ def _chase_task_json(item, settings: Settings) -> dict[str, Any]:
     needs_review = item.state is State.NEEDS_REVIEW
     awaiting_verification = item.state is State.SUBMITTED
     closed = not item.is_open
+    synthetic_manual_task = bool(
+        synthetic is not None
+        and not settings.chase_scheduler_enabled
+        and not settings.patient_messaging_enabled
+        and not settings.patient_messaging_operationally_activated
+        and settings.chase_transport == "record_only"
+    )
+    may_manage = principal.has_any_role(("BillingStaff", "Admin"))
+    allowed_actions: list[str] = []
+    if may_manage and not closed:
+        allowed_actions.append("assign")
+        if item.state is State.SUBMITTED:
+            allowed_actions.append("verify")
+        elif item.state is not State.NEEDS_REVIEW:
+            allowed_actions.append("submitted")
+            if (
+                (
+                    item.pending_task is not None
+                    and item.pending_task.get("channel") == "phone"
+                )
+                or synthetic_manual_task
+            ):
+                allowed_actions.append("log_attempt")
     contact = None
     if synthetic is not None and not (needs_review or awaiting_verification or closed):
         contact = {
@@ -1095,7 +1132,7 @@ def _chase_task_json(item, settings: Settings) -> dict[str, Any]:
         instruction = synthetic.contact.instruction
     else:
         instruction = (
-            "Open the approved patient record in athenaNet. The contact "
+            "Open the approved patient record in the practice source system. The contact "
             "destination is not copied into this application."
         )
     return {
@@ -1104,17 +1141,36 @@ def _chase_task_json(item, settings: Settings) -> dict[str, Any]:
             synthetic.display_label if synthetic is not None else "Patient record"
         ),
         "dataClass": "synthetic_demo" if synthetic is not None else "operational",
+        "state": item.state.value,
+        "assigned": bool(item.assignee),
+        "touches": item.touches,
+        "staffMinutes": item.staff_minutes,
+        "open": item.is_open,
+        "hasPendingTask": item.pending_task is not None,
+        "allowedActions": allowed_actions,
         "instruction": instruction,
         "contact": contact,
         "systemOfRecord": {
-            "name": "athenaNet",
+            "name": "Practice source system",
             "deepLinkConfigured": False,
             "instruction": (
-                "Use the approved athenaNet patient-search workflow; no patient "
+                "Use the approved source-system patient-search workflow; no patient "
                 "identifier is placed in a URL or application log."
             ),
         },
         "outbound": _chase_outbound_status(settings),
+    }
+
+
+def _chase_action_json(item) -> dict[str, Any]:
+    """Minimum-necessary acknowledgement for a staff mutation."""
+    return {
+        "chaseId": item.chase_id,
+        "state": item.state.value,
+        "assigned": bool(item.assignee),
+        "touches": item.touches,
+        "staffMinutes": item.staff_minutes,
+        "open": item.is_open,
     }
 
 
@@ -1192,14 +1248,16 @@ def chase_worklist(
 @router.post("/api/chase/task")
 def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
     """Return one audited, minimum-necessary manual contact task."""
-    _require_view(request, "chase")
+    principal = _require_view(request, "chase")
     store = _request_chase_context(request)["store"]
     item = store.get(req.chaseId)
     if item is None:
         raise HTTPException(status_code=404, detail="chase task was not found")
     if hasattr(store, "audit_resource_id"):
         _set_audit_resource(request, store.audit_resource_id(req.chaseId))
-    return _chase_task_json(item, _request_settings(request))
+    return _chase_task_json(
+        item, _request_settings(request), principal=principal,
+    )
 
 
 @router.post("/api/chase/demo-seed")
@@ -1232,7 +1290,10 @@ def chase_demo_seed(
         return {
             "seedId": seed.seed_id,
             "seedDigest": seed.digest,
-            "casesReady": len(existing),
+            "installedCaseCount": len(existing),
+            "openTaskCount": sum(
+                item.is_open for item in existing if item is not None
+            ),
             "replayed": True,
             "outbound": _chase_outbound_status(settings),
         }
@@ -1267,20 +1328,31 @@ def chase_demo_seed(
                 ),
             ))
         try:
-            results = scheduler.persist_detection_batch(
+            scheduler.persist_detection_batch(
                 entries,
                 audit_event=_scheduler_audit_event(request),
             )
             request.state.audit_completion_committed = True
         except Exception as exc:
             _raise_scheduler_http(exc)
-        ready = len(results)
+        installed = [context["store"].get(item.chase_id) for item in items]
+        if not all(
+            item is not None and synthetic_case_for(item) is not None
+            for item in installed
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="synthetic chase seed confirmation is unavailable",
+            )
     else:
-        ready = len(context["store"].extend(items))
+        installed = context["store"].extend(items)
     return {
         "seedId": seed.seed_id,
         "seedDigest": seed.digest,
-        "casesReady": ready,
+        "installedCaseCount": len(installed),
+        "openTaskCount": sum(
+            item.is_open for item in installed if item is not None
+        ),
         "replayed": False,
         "outbound": _chase_outbound_status(settings),
     }
@@ -1560,9 +1632,23 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
     existing = store.get(chase_id)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
+    if action == "log_attempt" and req.channel not in {None, "phone"}:
+        raise HTTPException(
+            status_code=422,
+            detail="staff tasks can only log a manual phone call",
+        )
     if hasattr(store, "audit_resource_id"):
         _set_audit_resource(request, store.audit_resource_id(chase_id))
     scheduler = ctx.get("scheduler")
+    settings = _request_settings(request)
+    from .chase.synthetic_demo import synthetic_case_for
+    synthetic_manual_task = bool(
+        synthetic_case_for(existing) is not None
+        and not settings.chase_scheduler_enabled
+        and not settings.patient_messaging_enabled
+        and not settings.patient_messaging_operationally_activated
+        and settings.chase_transport == "record_only"
+    )
     if scheduler is not None and action == "release":
         gate_fingerprint = str(
             (existing.direct_contract or {}).get("gate_fingerprint") or ""
@@ -1587,12 +1673,11 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
             raise
         except Exception as exc:
             _raise_scheduler_http(exc)
-    if scheduler is not None and action == "log_attempt":
-        if req.channel not in {None, "phone"}:
-            raise HTTPException(
-                status_code=422,
-                detail="scheduler staff tasks can only log a manual phone call",
-            )
+    if (
+        scheduler is not None
+        and action == "log_attempt"
+        and not synthetic_manual_task
+    ):
         try:
             result = scheduler.complete_staff_task(
                 ctx["policy"], ctx["delivery"],
@@ -1626,7 +1711,13 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
     )
 
     def transition(item):
+        from .chase import State
+
+        if not item.is_open:
+            raise ValueError("the chase task is already closed")
         if action == "release":
+            if item.state is not State.NEEDS_REVIEW:
+                raise ValueError("only a task awaiting review can be released")
             runner.release(item, by=actor, reason=req.reason)
         elif action == "suppress":
             runner.suppress(item, by=actor, reason=req.reason)
@@ -1636,16 +1727,36 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
                 selected_assignee = membership_store.validate_assignee(assignee)
             item.assignee = selected_assignee
         elif action == "log_attempt":
+            channel = Channel(req.channel or "phone")
+            if (
+                item.state is State.NEEDS_REVIEW
+                or not (
+                    (
+                        item.pending_task is not None
+                        and item.pending_task.get("channel") == channel.value
+                    )
+                    or synthetic_manual_task
+                )
+            ):
+                raise ValueError(
+                    "a staff attempt requires an approved manual contact task"
+                )
             runner.log_staff_attempt(
-                item, channel=Channel(req.channel or "phone"),
+                item, channel=channel,
                 template_id=req.template_id or "phone.call", actor=actor,
                 outcome=req.outcome or "reached",
                 minutes_spent=req.minutes_spent, note=req.note)
         elif action == "submitted":
+            if item.state is State.NEEDS_REVIEW:
+                raise ValueError("a task awaiting review must be released first")
+            if item.state is State.SUBMITTED:
+                raise ValueError("the submission is already awaiting verification")
             runner.mark_submitted(item, note=req.note)
         elif action == "verify":
+            if item.state is not State.SUBMITTED:
+                raise ValueError("only a submitted task can be verified")
             runner.close_verified(item, verified_by=actor,
-                                  athena_write_id=req.athena_write_id,
+                                  source_write_id=req.source_write_id,
                                   eligibility_status=req.eligibility_status)
         else:
             raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
@@ -1693,7 +1804,7 @@ def chase_action(request: Request, req: ChaseActionRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(e)) from e
     if item is None:
         raise HTTPException(status_code=404, detail=f"unknown chase '{chase_id}'")
-    return item.to_dict()
+    return _chase_action_json(item)
 
 
 @router.get("/api/feedback/summary")
