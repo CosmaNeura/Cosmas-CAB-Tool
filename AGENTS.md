@@ -62,6 +62,9 @@ deployed independently.
 - Preserve current GitHub approval settings. Current repository guidance
   records strict protected checks/admin enforcement but zero required approving
   reviews; this document does not change that process.
+- This private repository's GitHub Team plan provides no required environment
+  reviewer gate. Do not claim that control exists or substitute it for the
+  independent agent review record.
 - Target production policy is founder-only manual promotion from a merged
   `main` commit and an already-built digest. The run is explicit
   self-authorization, not independent review.
