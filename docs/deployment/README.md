@@ -30,3 +30,27 @@ branch intentionally moves beyond that baseline. Always resolve current GitHub
 repository or deployment status.
 
 Real-PHI readiness has not been established.
+
+## Workflow containment status
+
+The tracked `Build & Deploy` workflow is manual-only. Both Azure-capable jobs
+depend on a permissionless authorization job and directly require
+`workflow_dispatch`, exact current `main`, `github.actor == JohnClem`,
+`github.triggering_actor == JohnClem`, and a durable independent-agent review
+record for that commit. The workflow rechecks `main` immediately before image,
+migration, and application mutations so a stale rerun fails closed.
+
+At the time this containment was prepared, `AZURE_CLIENT_ID` was not configured
+for this repository, so the workflow was inert. This source change does not
+create credentials, environments, or a deployment. The existing `pilot`
+environment reference does not resolve to a configured GitHub environment:
+the repository currently has no environments and therefore no required-reviewer
+gate. A future run could implicitly create an unprotected `pilot` environment
+unless it is separately configured. Founder promotion is self-authorization,
+and the independent-agent record is not a GitHub approval.
+
+This is containment, not the complete target state. Build/publish and deploy
+remain coupled in one manual run rather than promotion consuming a separately
+retained, already-built and attested digest. Live digest/configuration/schema
+reconciliation also remains required before any promotion. See the
+[containment flight plan](../flight-plans/2026-08-25-cab-deployment-containment.md).

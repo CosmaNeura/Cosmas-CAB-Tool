@@ -68,9 +68,12 @@ deployed independently.
 - Target production policy is founder-only manual promotion from a merged
   `main` commit and an already-built digest. The run is explicit
   self-authorization, not independent review.
-- There is no tracked build/promotion workflow, and the running pilot image is
-  not traceable to a commit. Those are deployment blockers, not permissions to
-  repeat a manual push. Do not claim the target control exists.
+- A tracked build/deploy workflow now exists, but Azure identity is not wired
+  for this repository and it has not established commit-to-live traceability.
+  Once credentials are separately approved, its source gate is founder-only,
+  manual, exact-current-`main`, and bound to an independent-agent review
+  record. It still builds during the promotion run rather than consuming a
+  separately retained reviewed artifact; treat that as an adoption gap.
 - Reconcile live digest, configuration, schema, and deployed-only behavior
   before promotion; choose keep, assimilate, or replace. Never blindly deploy
   `main` over drift.
