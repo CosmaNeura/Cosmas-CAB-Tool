@@ -1,0 +1,178 @@
+name: Build & Deploy
+
+# Two deliberately separate concerns:
+#
+#   build-publish  runs on every merge to main. It builds one immutable image and
+#                  records its sha256 digest against the commit. Publishing an
+#                  image deploys nothing, so this is safe to run always — and it
+#                  is what makes the running pilot traceable to a commit.
+#
+#   deploy         is manual, gated on the `pilot` environment and on
+#                  vars.CAB_DEPLOY_ENABLED. It never rebuilds: it deploys the
+#                  exact digest that build-publish produced.
+#
+# This workflow NEVER touches COSMANEURA_PATIENT_MESSAGING_ENABLED or
+# COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED. Those are the
+# irreversible gates and they are changed by a human, on purpose, elsewhere.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cab-deploy
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: ${{ vars.CAB_RESOURCE_GROUP || 'cosmaneura-cab-pilot' }}
+  REGISTRY: ${{ vars.CAB_REGISTRY_HOST || 'cosmaneurapiloti4akwqry.azurecr.io' }}
+  API_APP: ${{ vars.CAB_API_APP || 'cosmaneura-pilot-api-i4akwqry' }}
+  WORKER_JOB: ${{ vars.CAB_WORKER_JOB || 'cosmaneura-pilot-wrk-i4akwqry' }}
+  MIGRATION_JOB: ${{ vars.CAB_MIGRATION_JOB || 'cosmaneura-pilot-mig-i4akwqry' }}
+  IMAGE_REPO: cosmaneura-billing
+
+jobs:
+  build-publish:
+    name: Build & publish immutable image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Inert until Azure OIDC is wired for this repo. Without the credential the
+    # job is skipped rather than failing every merge.
+    if: ${{ vars.AZURE_CLIENT_ID != '' }}
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Managed-identity login. This registry has adminUserEnabled=false and
+      # public access disabled — there is no static credential to leak, and we
+      # are not introducing one.
+      - name: Registry login (managed identity, no admin credential)
+        run: az acr login --name "${REGISTRY%%.*}"
+
+      - name: Build and push, pinned to the commit
+        id: push
+        working-directory: cosmaneura_billing
+        run: |
+          set -euo pipefail
+          tag="${REGISTRY}/${IMAGE_REPO}:${GITHUB_SHA}"
+          docker build -t "$tag" .
+          docker push "$tag"
+          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$tag" | cut -d@ -f2)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Bad digest: $digest" >&2; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Commit ${GITHUB_SHA} → ${digest}"
+
+      - name: Record provenance
+        run: |
+          {
+            echo "### Image provenance"
+            echo ""
+            echo "| Commit | Digest |"
+            echo "|---|---|"
+            echo "| \`${GITHUB_SHA}\` | \`${{ steps.push.outputs.digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy pilot
+    needs: build-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: pilot
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.CAB_DEPLOY_ENABLED == 'true' }}
+    env:
+      DIGEST: ${{ needs.build-publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Refuse to deploy from a stale commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          [[ "$head" == "$GITHUB_SHA" ]] || { echo "main advanced; refusing." >&2; exit 1; }
+
+      - name: Record the messaging gates before deploying
+        run: |
+          set -euo pipefail
+          az containerapp job show -n "$WORKER_JOB" -g "$RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?contains(name,'PATIENT_MESSAGING')].{n:name,v:value}" \
+            -o table | tee gates-before.txt
+
+      - name: Run the ordered-SQL migration job
+        run: |
+          set -euo pipefail
+          az containerapp job update -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+            --image "${REGISTRY}/${IMAGE_REPO}@${DIGEST}" -o none
+          exec_name=$(az containerapp job start -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --query name -o tsv)
+          echo "Migration execution: $exec_name"
+          for _ in $(seq 1 60); do
+            status=$(az containerapp job execution show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+              --job-execution-name "$exec_name" --query properties.status -o tsv)
+            case "$status" in
+              Succeeded) echo "Migration succeeded."; exit 0 ;;
+              Failed|Degraded) echo "Migration $status — not deploying." >&2; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "Migration timed out." >&2; exit 1
+
+      - name: Deploy API and chase worker at the same digest
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${IMAGE_REPO}@${DIGEST}"
+          az containerapp update -n "$API_APP" -g "$RESOURCE_GROUP" --image "$image" -o none
+          az containerapp job update -n "$WORKER_JOB" -g "$RESOURCE_GROUP" --image "$image" -o none
+
+      - name: Verify the messaging gates are unchanged
+        run: |
+          set -euo pipefail
+          az containerapp job show -n "$WORKER_JOB" -g "$RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?contains(name,'PATIENT_MESSAGING')].{n:name,v:value}" \
+            -o table > gates-after.txt
+          diff gates-before.txt gates-after.txt || {
+            echo "Messaging gates changed during deploy. This must never happen." >&2
+            exit 1
+          }
+          echo "Messaging gates unchanged."
+
+      - name: Smoke — protected API must fail closed
+        run: |
+          set -euo pipefail
+          fqdn=$(az containerapp show -n "$API_APP" -g "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "https://${fqdn}/api/health" || echo 000)
+          [[ "$code" == "401" ]] || { echo "Expected 401 without a principal, got $code" >&2; exit 1; }
+          echo "Fail-closed verified (401)."
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Messaging gates: unchanged, verified"
+          } >> "$GITHUB_STEP_SUMMARY"
