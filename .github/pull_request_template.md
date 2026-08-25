@@ -54,9 +54,11 @@ new review.
 - Previous known-good artifact/data boundary:
 
 Target production policy is founder-only manual promotion from merged `main`
-and an already-built digest, recorded as self-authorization. This repository
-does not yet provide that workflow or commit-to-live traceability; this
-checklist does not claim those blockers are resolved.
+and an already-built digest, recorded as self-authorization. The tracked
+workflow now enforces the founder/manual/current-main/review boundary once
+credentials are separately wired, but still builds during that promotion run
+and has not established commit-to-live traceability. This checklist does not
+claim those remaining blockers are resolved.
 
 ## Change record
 
