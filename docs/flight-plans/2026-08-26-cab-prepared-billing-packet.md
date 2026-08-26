@@ -66,6 +66,11 @@ outreach, deployment, or real-PHI use.
    explicit disabled adaptive-preference provider that neither constructs nor
    queries a feedback store and records `adaptivePreferencesApplied=false`
    with no revision. Source-scoped learning is a separate future design.
+10. Packet v1 has one decisioning inference path and records
+    `multiEngineDecisioningApplied=false`. A non-influencing shadow may remain
+    active, but its output is excluded from the packet. Active consensus or any
+    secondary influence fails packet issuance until a versioned provenance and
+    adjudication contract is separately approved.
 
 ## Risk and dependencies
 
@@ -79,6 +84,11 @@ outreach, deployment, or real-PHI use.
   for payment reasons. Generic labels remain the default; official AMA
   descriptors are excluded unless the practice's license and distribution
   right are verified.
+- Multi-engine boundary: current Language/TA4H shadow operation may remain
+  observational because it cannot affect decisions. Packet v1 does not encode
+  consensus provenance; enabling a secondary decisioning path makes snapshot
+  issuance unavailable rather than silently collapsing multiple models into
+  the primary model label.
 - Required predecessor: merge the provider/coder demo slices that bind review
   context to the server-owned recommendation manifest and require affirmative
   coder decisions. Legacy `/api/feedback` remains backward-compatible but can
@@ -138,9 +148,10 @@ The snapshot contains:
   references; database keys never become request authority;
 - encounter version, source/provenance, canonical source snapshot digest,
   fixture pack ID, case digest, manifest version, and combined seed digest;
-- engine, structured ruleset/configuration, inference-mode/model, and fixed
-  `adaptivePreferencesApplied=false` without a preference revision, endpoint,
-  or secret;
+- engine, structured ruleset/configuration, inference-mode/model, fixed
+  `adaptivePreferencesApplied=false`, and fixed
+  `multiEngineDecisioningApplied=false`, without preference revision, shadow
+  output, endpoint, or secret;
 - server UUID recommendation/evidence IDs, kind, code, generic label,
   disposition, rationale, guardrail actions, primary flag, verified source,
   one or more exact ordered UTF-8 byte segments, bounded source slices, and
@@ -229,6 +240,21 @@ Canonical JSON v1 is UTF-8, sorted object keys, compact separators,
 not normalize Unicode. Snapshot and packet digests are SHA-256 over the
 canonical body excluding the corresponding digest field. Golden vectors pin
 this rule across Python and browser tests.
+
+Each idempotency request hash is SHA-256 over canonical JSON v1 for the entire
+strictly parsed, schema- and domain-valid request. No request field is omitted;
+`elapsedMilliseconds` is included and frozen by the client for exact retry.
+A changed canonical request under the same review ID returns 409.
+
+Every digest-bearing array has one domain order: rulesets use unique names and
+lexical `(name, version)` order; recommendations use contiguous ordinal;
+snapshot evidence uses first-reference order across recommendations and then
+lexically ordered completeness rules; all evidence-reference arrays follow
+that catalog; segments use ascending byte position; decisions and exclusions
+follow recommendation order; manual additions use lexical client UUID order;
+additional evidence follows its manual addition; final codes retain accepted
+recommendation order followed by manual additions; and guardrail actions retain
+deterministic pipeline order. Alternative or duplicate orderings fail closed.
 
 Idempotency is `(practice_id, review_id)`. After authorization, feature/schema/
 store readiness, and RLS, prepare first looks up a completed packet and compares
@@ -342,7 +368,8 @@ leave-dormant recovery. No deployed migration is authorized by this plan.
 
 Dependency-ordered PRs, each below 2,000 changed lines and 50 files:
 
-1. Docs-only approved flight plan plus canonical schema examples/golden vectors.
+1. Approved flight plan, followed by a contract-artifact-only Tier 1 slice with
+   canonical schema examples, golden vectors, and dependency-free tests.
 2. One dormant expand migration with DB and old-binary compatibility tests.
 3. Shared seeder/packet fixture-manifest API, packet-specific no-preference
    orchestrator, canonical packet domain + PostgreSQL transaction behind the
@@ -380,6 +407,8 @@ Synthetic canary acceptance requires:
 - mixed-practice feedback canaries and a query spy prove packet inference
   neither constructs nor reads the adaptive feedback store and always records
   `adaptivePreferencesApplied=false` without a revision;
+- shadow-only secondary processing cannot change packet bytes, while any active
+  consensus or secondary decisioning configuration blocks snapshot issuance;
 - golden JSON/schema/digest vectors and corrupt stored-payload fail-closed;
 - explicit decisions; unknown/duplicate IDs, changed accept code, missing
   reason/rationale/evidence (including rejection without evidence), invalid

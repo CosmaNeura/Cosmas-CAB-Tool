@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cosmas:cab:prepared-billing-packet-contracts:v1",
+  "$comment": "Draft synthetic-only non-runtime contract bundle.",
+  "title": "Cosmas CAB prepared billing packet contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/reviewSnapshotRequest"},
+    {"$ref": "#/$defs/reviewSnapshot"},
+    {"$ref": "#/$defs/prepareRequest"},
+    {"$ref": "#/$defs/preparedPacket"}
+  ],
+  "$defs": {
+    "uuid4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "practiceRef": {
+      "type": "string",
+      "pattern": "^prc_[0-9a-f]{32}$"
+    },
+    "encounterRef": {
+      "type": "string",
+      "pattern": "^enc_[0-9a-f]{32}$"
+    },
+    "reviewerRef": {
+      "type": "string",
+      "pattern": "^usr_[0-9a-f]{32}$"
+    },
+    "encounterId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^[A-Z0-9][A-Z0-9.-]{0,31}$"
+    },
+    "codeKind": {
+      "type": "string",
+      "enum": ["EM", "ICD10", "PROCEDURE", "MODIFIER"]
+    },
+    "reasonCode": {
+      "type": "string",
+      "enum": [
+        "em_doc_supports_higher_level",
+        "em_doc_supports_lower_level",
+        "em_mdm_element_disagreement",
+        "em_time_based_leveling",
+        "dx_not_supported_by_doc",
+        "dx_contradicted_by_doc",
+        "dx_needs_more_specific_code",
+        "dx_primary_secondary_swap",
+        "dx_missed_by_engine",
+        "modifier_required",
+        "procedure_bundling_ncci",
+        "medical_necessity_coverage",
+        "other"
+      ]
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S"
+    },
+    "evidenceSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startByte", "endByte", "text", "textDigest"],
+      "properties": {
+        "startByte": {"type": "integer", "minimum": 0, "maximum": 2000000},
+        "endByte": {"type": "integer", "minimum": 1, "maximum": 2000000},
+        "text": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "textDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceId", "purpose", "source", "verificationMode", "segments"],
+      "properties": {
+        "evidenceId": {"$ref": "#/$defs/uuid4"},
+        "purpose": {"type": "string", "enum": ["supporting", "contradicting"]},
+        "source": {"type": "string", "enum": ["intake_text", "transcript", "signed_note"]},
+        "verificationMode": {"type": "string", "enum": ["exact", "normalized", "ellipsis"]},
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/evidenceSegment"}
+        }
+      }
+    },
+    "guardrailAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "reasonCode", "detail", "fromCode", "toCode"],
+      "properties": {
+        "action": {"type": "string", "enum": ["CAPTURE", "HOLD", "DOWNGRADE", "REJECT"]},
+        "reasonCode": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+        "detail": {"$ref": "#/$defs/boundedText"},
+        "fromCode": {"type": ["string", "null"], "pattern": "^[A-Z0-9][A-Z0-9.-]{0,31}$"},
+        "toCode": {"type": ["string", "null"], "pattern": "^[A-Z0-9][A-Z0-9.-]{0,31}$"}
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommendationId", "ordinal", "kind", "code", "label", "disposition", "rationale", "primary", "evidenceIds", "guardrailActions"],
+      "properties": {
+        "recommendationId": {"$ref": "#/$defs/uuid4"},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 127},
+        "kind": {"$ref": "#/$defs/codeKind"},
+        "code": {"$ref": "#/$defs/code"},
+        "label": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "disposition": {"type": "string", "enum": ["captured", "needs_review", "rejected"]},
+        "rationale": {"$ref": "#/$defs/boundedText"},
+        "primary": {"type": "boolean"},
+        "evidenceIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/uuid4"}
+        },
+        "guardrailActions": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/guardrailAction"}
+        }
+      }
+    },
+    "completenessResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleId", "status", "evidenceIds"],
+      "properties": {
+        "ruleId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+        "status": {"type": "string", "enum": ["present", "missing", "ambiguous"]},
+        "evidenceIds": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/uuid4"}
+        }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "rulepackVersion", "providerAttestationApplied", "results"],
+      "properties": {
+        "status": {"type": "string", "enum": ["complete", "blocked", "not_applicable"]},
+        "rulepackVersion": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+        "providerAttestationApplied": {"const": false},
+        "results": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/completenessResult"}
+        }
+      }
+    },
+    "sourceProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "sourceSnapshotDigest", "fixtureManifestVersion", "fixturePackId", "fixtureCaseDigest", "fixtureCombinedSeedDigest"],
+      "properties": {
+        "source": {"const": "synthetic_demo_release_candidate"},
+        "sourceSnapshotDigest": {"$ref": "#/$defs/sha256"},
+        "fixtureManifestVersion": {"const": "cosmas.cab.synthetic-fixture-manifest.v1"},
+        "fixturePackId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._+-]{0,127}$"},
+        "fixtureCaseDigest": {"$ref": "#/$defs/sha256"},
+        "fixtureCombinedSeedDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ruleset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"}
+      }
+    },
+    "engineProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engineVersion", "rulesets", "configurationDigest", "inferenceMode", "inferenceModel", "adaptivePreferencesApplied", "multiEngineDecisioningApplied"],
+      "properties": {
+        "engineVersion": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "rulesets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/ruleset"}
+        },
+        "configurationDigest": {"$ref": "#/$defs/sha256"},
+        "inferenceMode": {"type": "string", "enum": ["mock", "azure_openai"]},
+        "inferenceModel": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S"},
+        "adaptivePreferencesApplied": {"const": false},
+        "multiEngineDecisioningApplied": {"const": false}
+      }
+    },
+    "degraded": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["reasonCode", "detail"],
+      "properties": {
+        "reasonCode": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+        "detail": {"$ref": "#/$defs/boundedText"}
+      }
+    },
+    "reviewSnapshotRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "reviewId", "encounterId"],
+      "properties": {
+        "schemaVersion": {"const": "cosmas.cab.review-snapshot-request.v1"},
+        "reviewId": {"$ref": "#/$defs/uuid4"},
+        "encounterId": {"$ref": "#/$defs/encounterId"}
+      }
+    },
+    "reviewSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "snapshotId", "reviewId", "issuedAt", "practiceRef", "encounterRef", "encounterVersion", "sourceProvenance", "engineProvenance", "evidence", "recommendations", "suppressedWithoutEvidenceCount", "completeness", "degraded", "clinicalNoteModified", "snapshotDigest"],
+      "properties": {
+        "schemaVersion": {"const": "cosmas.cab.review-snapshot.v1"},
+        "snapshotId": {"$ref": "#/$defs/uuid4"},
+        "reviewId": {"$ref": "#/$defs/uuid4"},
+        "issuedAt": {"$ref": "#/$defs/timestamp"},
+        "practiceRef": {"$ref": "#/$defs/practiceRef"},
+        "encounterRef": {"$ref": "#/$defs/encounterRef"},
+        "encounterVersion": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "sourceProvenance": {"$ref": "#/$defs/sourceProvenance"},
+        "engineProvenance": {"$ref": "#/$defs/engineProvenance"},
+        "evidence": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/evidence"}},
+        "recommendations": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/recommendation"}},
+        "suppressedWithoutEvidenceCount": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "completeness": {"$ref": "#/$defs/completeness"},
+        "degraded": {"$ref": "#/$defs/degraded"},
+        "clinicalNoteModified": {"const": false},
+        "snapshotDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "acceptDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommendationId", "action"],
+      "properties": {
+        "recommendationId": {"$ref": "#/$defs/uuid4"},
+        "action": {"const": "accept"}
+      }
+    },
+    "editDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommendationId", "action", "replacementCode", "reasonCode", "rationale", "evidenceIds"],
+      "properties": {
+        "recommendationId": {"$ref": "#/$defs/uuid4"},
+        "action": {"const": "edit"},
+        "replacementCode": {"$ref": "#/$defs/code"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"},
+        "rationale": {"$ref": "#/$defs/boundedText"},
+        "evidenceIds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/uuid4"}}
+      }
+    },
+    "rejectDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommendationId", "action", "reasonCode", "rationale", "evidenceIds"],
+      "properties": {
+        "recommendationId": {"$ref": "#/$defs/uuid4"},
+        "action": {"const": "reject"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"},
+        "rationale": {"$ref": "#/$defs/boundedText"},
+        "evidenceIds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/uuid4"}}
+      }
+    },
+    "decisionRequest": {
+      "oneOf": [
+        {"$ref": "#/$defs/acceptDecision"},
+        {"$ref": "#/$defs/editDecision"},
+        {"$ref": "#/$defs/rejectDecision"}
+      ]
+    },
+    "snapshotEvidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceId"],
+      "properties": {"evidenceId": {"$ref": "#/$defs/uuid4"}}
+    },
+    "sourceEvidenceSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "startByte", "endByte", "textDigest"],
+      "properties": {
+        "source": {"type": "string", "enum": ["intake_text", "transcript", "signed_note"]},
+        "startByte": {"type": "integer", "minimum": 0, "maximum": 2000000},
+        "endByte": {"type": "integer", "minimum": 1, "maximum": 2000000},
+        "textDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "manualAdditionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clientAdditionId", "kind", "code", "reasonCode", "rationale", "evidence"],
+      "properties": {
+        "clientAdditionId": {"$ref": "#/$defs/uuid4"},
+        "kind": {"type": "string", "enum": ["ICD10", "PROCEDURE", "MODIFIER"]},
+        "code": {"$ref": "#/$defs/code"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"},
+        "rationale": {"$ref": "#/$defs/boundedText"},
+        "evidence": {
+          "oneOf": [
+            {"$ref": "#/$defs/snapshotEvidenceReference"},
+            {"$ref": "#/$defs/sourceEvidenceSelection"}
+          ]
+        }
+      }
+    },
+    "prepareRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "reviewId", "reviewSnapshotId", "reviewSnapshotDigest", "decisions", "manualAdditions", "elapsedMilliseconds"],
+      "properties": {
+        "schemaVersion": {"const": "cosmas.cab.prepare-billing-packet-request.v1"},
+        "reviewId": {"$ref": "#/$defs/uuid4"},
+        "reviewSnapshotId": {"$ref": "#/$defs/uuid4"},
+        "reviewSnapshotDigest": {"$ref": "#/$defs/sha256"},
+        "decisions": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/decisionRequest"}},
+        "manualAdditions": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/manualAdditionRequest"}},
+        "elapsedMilliseconds": {"type": "integer", "minimum": 0, "maximum": 86400000}
+      }
+    },
+    "decisionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommendationId", "action", "originalCode", "finalCode", "reasonCode", "rationale", "evidenceIds"],
+      "properties": {
+        "recommendationId": {"$ref": "#/$defs/uuid4"},
+        "action": {"type": "string", "enum": ["accept", "edit", "reject"]},
+        "originalCode": {"$ref": "#/$defs/code"},
+        "finalCode": {"type": ["string", "null"], "pattern": "^[A-Z0-9][A-Z0-9.-]{0,31}$"},
+        "reasonCode": {"oneOf": [{"$ref": "#/$defs/reasonCode"}, {"type": "null"}]},
+        "rationale": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000, "pattern": "\\S"},
+        "evidenceIds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/uuid4"}}
+      }
+    },
+    "manualAdditionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clientAdditionId", "kind", "code", "reasonCode", "rationale", "evidenceIds"],
+      "properties": {
+        "clientAdditionId": {"$ref": "#/$defs/uuid4"},
+        "kind": {"type": "string", "enum": ["ICD10", "PROCEDURE", "MODIFIER"]},
+        "code": {"$ref": "#/$defs/code"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"},
+        "rationale": {"$ref": "#/$defs/boundedText"},
+        "evidenceIds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/uuid4"}}
+      }
+    },
+    "finalCode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "origin", "primary", "recommendationId", "clientAdditionId", "evidenceIds"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/codeKind"},
+        "code": {"$ref": "#/$defs/code"},
+        "origin": {"type": "string", "enum": ["engine", "human"]},
+        "primary": {"type": "boolean"},
+        "recommendationId": {"oneOf": [{"$ref": "#/$defs/uuid4"}, {"type": "null"}]},
+        "clientAdditionId": {"oneOf": [{"$ref": "#/$defs/uuid4"}, {"type": "null"}]},
+        "evidenceIds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/uuid4"}}
+      }
+    },
+    "excludedCode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "origin", "outcome", "recommendationId", "reasonCode", "rationale", "evidenceIds"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/codeKind"},
+        "code": {"$ref": "#/$defs/code"},
+        "origin": {"const": "engine"},
+        "outcome": {"type": "string", "enum": ["reviewer_rejected", "replaced_by_edit"]},
+        "recommendationId": {"$ref": "#/$defs/uuid4"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"},
+        "rationale": {"$ref": "#/$defs/boundedText"},
+        "evidenceIds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/uuid4"}}
+      }
+    },
+    "transmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "destination"],
+      "properties": {
+        "performed": {"const": false},
+        "destination": {"const": null}
+      }
+    },
+    "preparedPacket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "packetId", "packetVersion", "status", "preparedAt", "reviewSnapshot", "reviewerRef", "reviewedAt", "elapsedMilliseconds", "decisions", "manualAdditions", "additionalEvidence", "finalCodes", "excludedCodes", "priorPacketId", "clinicalNoteModified", "transmission", "packetDigest"],
+      "properties": {
+        "schemaVersion": {"const": "cosmas.cab.prepared-billing-packet.v1"},
+        "packetId": {"$ref": "#/$defs/uuid4"},
+        "packetVersion": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "status": {"const": "prepared_not_transmitted"},
+        "preparedAt": {"$ref": "#/$defs/timestamp"},
+        "reviewSnapshot": {"$ref": "#/$defs/reviewSnapshot"},
+        "reviewerRef": {"$ref": "#/$defs/reviewerRef"},
+        "reviewedAt": {"$ref": "#/$defs/timestamp"},
+        "elapsedMilliseconds": {"type": "integer", "minimum": 0, "maximum": 86400000},
+        "decisions": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/decisionRecord"}},
+        "manualAdditions": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/manualAdditionRecord"}},
+        "additionalEvidence": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/evidence"}},
+        "finalCodes": {"type": "array", "minItems": 1, "maxItems": 192, "items": {"$ref": "#/$defs/finalCode"}},
+        "excludedCodes": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/excludedCode"}},
+        "priorPacketId": {"oneOf": [{"$ref": "#/$defs/uuid4"}, {"type": "null"}]},
+        "clinicalNoteModified": {"const": false},
+        "transmission": {"$ref": "#/$defs/transmission"},
+        "packetDigest": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}
