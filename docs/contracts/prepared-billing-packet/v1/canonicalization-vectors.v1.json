@@ -1,0 +1,159 @@
+{
+  "vectorVersion": "cosmas.cab.canonicalization-vectors.v1",
+  "algorithm": "cosmas-canonical-json-v1",
+  "positive": [
+    {
+      "name": "unicode-key-order-array-order-max-safe-integer",
+      "value": {"z": [3, 2, 1], "nil": null, "n": 9007199254740991, "b": true, "a": "Café 👩🏽‍⚕️"},
+      "canonicalUtf8Base64": "eyJhIjoiQ2Fmw6kg8J+RqfCfj73igI3impXvuI8iLCJiIjp0cnVlLCJuIjo5MDA3MTk5MjU0NzQwOTkxLCJuaWwiOm51bGwsInoiOlszLDIsMV19",
+      "sha256": "3cd4c01d815e5eb212112583e3b4103804519d0fa7b31ca11903282ebdf581b5"
+    },
+    {
+      "name": "unicode-nfc-is-not-normalized",
+      "value": {"text": "é"},
+      "canonicalUtf8Base64": "eyJ0ZXh0Ijoiw6kifQ==",
+      "sha256": "42d3cbf59fdccced04e5dff14433fb52d34d58e385e9770ffd896ff517d63b92"
+    },
+    {
+      "name": "unicode-nfd-remains-distinct",
+      "value": {"text": "é"},
+      "canonicalUtf8Base64": "eyJ0ZXh0IjoiZcyBIn0=",
+      "sha256": "9b53287cd41955684903378d2b1b4a3ddea9d80d67dcd026319a7c5a9a8a8b42"
+    },
+    {
+      "name": "control-and-string-escaping",
+      "value": {"z": [3, 2, 1], "control": "line\r\n\tquote\" slash\\"},
+      "canonicalUtf8Base64": "eyJjb250cm9sIjoibGluZVxyXG5cdHF1b3RlXCIgc2xhc2hcXCIsInoiOlszLDIsMV19",
+      "sha256": "f995f1e4d74d8cbde94f24efdd424e63df6a22ea9b6fca5063d77b519d564d1e"
+    },
+    {
+      "name": "array-order-first-second",
+      "value": {"items": ["first", "second"]},
+      "canonicalUtf8Base64": "eyJpdGVtcyI6WyJmaXJzdCIsInNlY29uZCJdfQ==",
+      "sha256": "6495b0561e8bffbb852cb2ac5e97a2b80a6766a0a9a21f891a0ef274bf6a8068"
+    },
+    {
+      "name": "array-order-second-first",
+      "value": {"items": ["second", "first"]},
+      "canonicalUtf8Base64": "eyJpdGVtcyI6WyJzZWNvbmQiLCJmaXJzdCJdfQ==",
+      "sha256": "ee7ef66469ac5ddc91ecfdfbb04230c14c3c1f033731a0a409a3630f54e159fd"
+    },
+    {
+      "name": "numeric-looking-keys-use-lexical-order",
+      "value": {"2": "two", "10": "ten", "a": 1},
+      "canonicalUtf8Base64": "eyIxMCI6InRlbiIsIjIiOiJ0d28iLCJhIjoxfQ==",
+      "sha256": "38fdb27844a7e4a224666f97c3c626753d824468eb1b347cd652122f47b28829"
+    },
+    {
+      "name": "maximum-safe-integer",
+      "value": {"n": 9007199254740991},
+      "canonicalUtf8Base64": "eyJuIjo5MDA3MTk5MjU0NzQwOTkxfQ==",
+      "sha256": "e1da48c6a6089f06ecb4e0a2259e658e3786b2420f52baccdf929ec6460d7b41"
+    }
+  ],
+  "digestExclusion": {
+    "name": "remove-only-root-snapshot-digest",
+    "digestField": "snapshotDigest",
+    "sealedValue": {
+      "schemaVersion": "cosmas.cab.test.v1",
+      "nestedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshotDigest": "f5fe0e93d062c0bbdc592e031388b8292b9b574060846593fbe146930a2c29ac"
+    },
+    "digestInputUtf8Base64": "eyJuZXN0ZWREaWdlc3QiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hVmVyc2lvbiI6ImNvc21hcy5jYWIudGVzdC52MSJ9",
+    "sha256": "f5fe0e93d062c0bbdc592e031388b8292b9b574060846593fbe146930a2c29ac",
+    "sealedCanonicalUtf8Base64": "eyJuZXN0ZWREaWdlc3QiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hVmVyc2lvbiI6ImNvc21hcy5jYWIudGVzdC52MSIsInNuYXBzaG90RGlnZXN0IjoiZjVmZTBlOTNkMDYyYzBiYmRjNTkyZTAzMTM4OGI4MjkyYjliNTc0MDYwODQ2NTkzZmJlMTQ2OTMwYTJjMjlhYyJ9"
+  },
+  "requestDigests": {
+    "algorithm": "sha256-over-entire-canonical-request-v1",
+    "reviewSnapshotRequestSha256": "d8ff468ef4c905549c14c8e989ddfa0683e9e12256006093d99090ca3be02310",
+    "prepareRequestSha256": "f8008693c5ec28121076f4a87bc6d5a0424855dfb5f1aa995b1d5272438777de"
+  },
+  "fixtureProtocolSeparation": {
+    "value": {"text": "é"},
+    "fixtureManifestV1Sha256": "d804508ba860f371e3f4ad571e0b760745ca1347987ba8ad41cb3eef8b4c284f",
+    "packetCanonicalJsonV1Sha256": "42d3cbf59fdccced04e5dff14433fb52d34d58e385e9770ffd896ff517d63b92"
+  },
+  "evidenceUtf8": {
+    "sourceUtf8Base64": "Q2Fmw6kg4oCUIHRlbGVoZWFsdGgg8J+RqfCfj73igI3impXvuI8gY29uc2VudCBkb2N1bWVudGVkLg==",
+    "segments": [
+      {"startByte": 0, "endByte": 5, "text": "Café", "textDigest": "73473dcc12b763085904a5279d048c4d5b3b008c46f1f32443b99de04aa83a14"},
+      {"startByte": 10, "endByte": 20, "text": "telehealth", "textDigest": "27abc9432be1217750707494b103578f2293daff50159c6f8a28f9faf18997da"},
+      {"startByte": 21, "endByte": 38, "text": "👩🏽‍⚕️", "textDigest": "2ca1ee10b17b1e56a0e1a0e7766a4aeb33819911b0b68cbf8e9df46d49894644"},
+      {"startByte": 39, "endByte": 58, "text": "consent documented.", "textDigest": "8a4e4743a69317d2ea0c2d4cffe44ebd2f719301440a9031a5aa9cf0c513c545"}
+    ]
+  },
+  "evidenceAnchoring": [
+    {
+      "name": "normalized-punctuation",
+      "source": "Plan: hydration — return precautions.",
+      "quote": "hydration - return precautions",
+      "expectedStatus": "anchored",
+      "segments": [
+        {"startByte": 6, "endByte": 38, "text": "hydration — return precautions", "textDigest": "716a26d44403e6c3968c46699d2da4520ff792e4428102b06ec2942c768dc62d"}
+      ]
+    },
+    {
+      "name": "normalized-whitespace",
+      "source": "Plan:\tfluids  and\nrest.",
+      "quote": "fluids and rest",
+      "expectedStatus": "anchored",
+      "segments": [
+        {"startByte": 6, "endByte": 22, "text": "fluids  and\nrest", "textDigest": "078c63a85e08c1a3c6ea180631bd8e06181d88e34b85b045e11597785acd5ad9"}
+      ]
+    },
+    {
+      "name": "ellipsis-two-segments",
+      "source": "Assessment: acute cough. Plan: supportive care.",
+      "quote": "acute cough ... supportive care",
+      "expectedStatus": "anchored",
+      "segments": [
+        {"startByte": 12, "endByte": 23, "text": "acute cough", "textDigest": "69555708b1183d9d2576f4d14a0bbae92b69f04fadf9c75e4ec1ca89256faf6f"},
+        {"startByte": 31, "endByte": 46, "text": "supportive care", "textDigest": "4a9fdaed0fa05dc01982fb54005038d0add3d6c710c7a91b05dba81762faa4f8"}
+      ]
+    },
+    {
+      "name": "repeated-phrase-is-ambiguous",
+      "source": "pain improved; pain improved",
+      "quote": "pain improved",
+      "expectedStatus": "ambiguous",
+      "segments": []
+    },
+    {
+      "name": "impossible-anchor",
+      "source": "No matching phrase.",
+      "quote": "diabetes",
+      "expectedStatus": "unanchorable",
+      "segments": []
+    }
+  ],
+  "fixtureManifestExpected": {
+    "basePackDigest": "556b4913553e7fddc8063f1c6d47b64e1cdec7a9e85ab873fdb81cc4e13be68f",
+    "extensionPackDigest": "804a4b4c33d166604daacaab415a46871b97879b174beb33666e31f2b859e8bb",
+    "combinedSeedDigest": "3ef6297b7a1987477b491c27393772caea3e4c41eeb3fbca39b14de3e77cc304",
+    "caseDigests": [
+      {"caseId": "SYN-RC-0001", "sha256": "c847409a34bc382634eea22a0de7c611d99effc73079c31b29fc6e9c5b970879"},
+      {"caseId": "SYN-RC-0002", "sha256": "a440c9e483b5b536647ccdfbeca03c5706cfecf9c22f3b05dbe549c0ff5ac96a"},
+      {"caseId": "SYN-RC-0003", "sha256": "2504ca7325d70af1911faa8fe81929654532f54db9c741a86d407f75d494bb13"},
+      {"caseId": "SYN-RC-0004", "sha256": "fdb0ed9b4f1790fbd2bf353cdd3689c2bcd150335c226f26eaca53d12ad07b2c"},
+      {"caseId": "SYN-RC-0005", "sha256": "e37fea284509a38e41a7ba8b91cbad1db61b282f3238065b3d6a60dc732d4e05"},
+      {"caseId": "SYN-RC-0006", "sha256": "9408df5774f8c1f6d322c03549ab44dc923271003476845bce689c1f1de1449c"},
+      {"caseId": "SYN-RC-0007", "sha256": "d2044bb683cf9500ce52eb3075424b412790768dda2b8b039c34689f345ada1e"},
+      {"caseId": "SYN-RC-0008", "sha256": "4d73046b079b2e19e13c0bb2bede4fb879ba382d8e839dccd5b90857dede10db"},
+      {"caseId": "SYN-RC-0009", "sha256": "ece109a602a57cabd6b5b5d09718a88702e082fc617aa22493104e8fffa0d3c8"},
+      {"caseId": "SYN-RC-0010", "sha256": "116e3f36a4e5fbae152cda859a95c961893872ea5facccc5328640e2f8a2a830"},
+      {"caseId": "SYN-RC-0011", "sha256": "d46bd1ffefa39108224ec2cad0197a932b27fa3390570f71953b4ca7616a7b52"},
+      {"caseId": "SYN-RC-0012", "sha256": "e9f85fb8b20b0387b0cd1c16be95b9e08858c1faf03373f9ed7d10796e4d0095"}
+    ]
+  },
+  "invalidJsonUtf8Base64": [
+    {"name": "duplicate-key", "value": "eyJhIjoxLCJhIjoyfQ=="},
+    {"name": "nonfinite-number", "value": "eyJuIjpOYU59"},
+    {"name": "utf8-bom", "value": "77u/eyJhIjoxfQ=="},
+    {"name": "trailing-data", "value": "eyJhIjoxfSB0cmFpbGluZw=="},
+    {"name": "float", "value": "eyJuIjoxLjB9"},
+    {"name": "unsafe-integer", "value": "eyJuIjo5MDA3MTk5MjU0NzQwOTkyfQ=="},
+    {"name": "negative-zero", "value": "eyJuIjotMH0="},
+    {"name": "lone-surrogate", "value": "eyJ0ZXh0IjoiXHVkODAwIn0="},
+    {"name": "non-utf8", "value": "/w=="}
+  ]
+}

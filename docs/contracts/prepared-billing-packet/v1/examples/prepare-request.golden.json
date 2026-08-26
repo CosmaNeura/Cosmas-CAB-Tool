@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "cosmas.cab.prepare-billing-packet-request.v1",
+  "reviewId": "22222222-2222-4222-8222-222222222222",
+  "reviewSnapshotId": "11111111-1111-4111-8111-111111111111",
+  "reviewSnapshotDigest": "af05fb4858dc0c451908f787d571f98e0fc56cc4f2692ad346b52cf98274f019",
+  "decisions": [
+    {
+      "recommendationId": "44444444-4444-4444-8444-444444444441",
+      "action": "accept"
+    },
+    {
+      "recommendationId": "44444444-4444-4444-8444-444444444442",
+      "action": "reject",
+      "reasonCode": "dx_contradicted_by_doc",
+      "rationale": "The signed note explicitly denies the suggested symptom code.",
+      "evidenceIds": ["33333333-3333-4333-8333-333333333332"]
+    }
+  ],
+  "manualAdditions": [],
+  "elapsedMilliseconds": 42000
+}
