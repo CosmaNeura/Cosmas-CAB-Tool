@@ -11,6 +11,7 @@ Azure state is not a substitute for reviewed infrastructure code.
 |---|---|
 | What code should be built? | GitHub `main`, identified by a full commit SHA |
 | What retained image artifact was built? | The `Build CAB Release Artifact` run for that full commit SHA, its GitHub artifact digest, and `release-metadata.json` |
+| What is the latest verified retained artifact? | [2026-08-25 CAB release-artifact evidence](2026-08-25-cab-release-artifact-evidence.md) |
 | What image is live? | OCI manifest digest from the deployment record, reconciled to the live Container Apps revision and its commit-derived discovery tag |
 | What Azure state was accepted? | [2026-08-19 deployment and acceptance evidence](2026-08-19-demo-release-candidate-evidence.md) plus a fresh read-only operator audit |
 | What was approved to cost? | [Azure OpenAI cost-plan addendum](2026-08-18-azure-openai-cost-plan.md) |
