@@ -455,6 +455,10 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     assert admin_session["views"] == [
         "provider", "coder", "chase",
     ]
+    assert provider_session["persona"] == "Provider"
+    assert billing_staff_session["persona"] == "Billing staff"
+    assert coder_session["persona"] == "Medical coder"
+    assert admin_session["persona"] == "Administrator"
     assert provider_session["capabilities"] == {"manageChase": False}
     assert billing_staff_session["capabilities"] == {"manageChase": True}
     assert coder_session["capabilities"] == {"manageChase": False}
@@ -475,6 +479,7 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     assert client.get(
         "/api/session", headers=provider_with_extra_staff,
     ).json() == {
+        "persona": "Provider",
         "views": ["provider"],
         "defaultView": "provider",
         "capabilities": {"manageChase": False},

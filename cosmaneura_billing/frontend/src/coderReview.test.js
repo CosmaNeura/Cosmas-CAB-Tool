@@ -46,6 +46,22 @@ test("a reasoned rejected exclusion without evidence is suppressed, not made act
   assert.equal(reviewable.contractViolations, 0);
 });
 
+test("a degraded no-code response suppresses an evidence-free held fallback", () => {
+  const reviewable = reviewableCoderView({
+    ...engine,
+    em: null,
+    dx: [],
+    degraded: { reason: "offline_model_unsupported_encounter" },
+    withheld: [{
+      id: "99212", kind: "EM", code: "99212", status: "held",
+      why: "Fallback level was held.", evidence: "", evidenceSpans: [],
+    }],
+  });
+  assert.deepEqual(reviewable.withheld, []);
+  assert.equal(reviewable.suppressedExclusions, 1);
+  assert.equal(reviewable.contractViolations, 0);
+});
+
 test("edits, rejections, and human additions require rationale and evidence", () => {
   const draft = initialCoderDraft(engine);
   draft.decisions.em = { action: "modify", finalCode: "99215", reasonCode: "", rationale: "" };

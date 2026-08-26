@@ -5,6 +5,7 @@ import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
 import { isSyntheticDemoEncounter } from "./providerBilling.js";
+import { sessionPersonaLabel } from "./sessionPresentation.js";
 
 function Pill({ tone, title, children }) {
   return (
@@ -77,6 +78,7 @@ function SafetyBanner() {
 export default function App() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
+  const [persona, setPersona] = useState(null);         // server-owned display identity
   const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
   const [manageChase, setManageChase] = useState(false); // Server-owned staff mutation capability
   const [health, setHealth] = useState(null);           // null = probing, false = offline
@@ -104,6 +106,7 @@ export default function App() {
         ]);
         setHealth(h);
         setViews(session.views);
+        setPersona(sessionPersonaLabel(session.persona));
         setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
         setManageChase(session.capabilities?.manageChase === true);
         setView((current) => (
@@ -168,6 +171,14 @@ export default function App() {
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <BrandLockup />
           <div className="flex items-center gap-2">
+            {persona && (
+              <Pill
+                tone="bg-white text-slate-700 ring-slate-300"
+                title="Server-assigned pilot persona"
+              >
+                Role · {persona}
+              </Pill>
+            )}
             {health === null && <Pill tone="bg-slate-100 text-slate-500 ring-slate-300">connecting…</Pill>}
             {health === false && (
               <Pill tone="bg-amber-50 text-amber-700 ring-amber-200">
@@ -228,7 +239,7 @@ export default function App() {
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-sm">
             <p className="text-sm font-medium">No synthetic demo encounter is loaded</p>
             <p className="mt-1 text-sm text-amber-800">
-              Load the approved synthetic release-candidate fixture before starting a review.
+              Load the approved synthetic demo fixture before starting a review.
               No mock claim or expected code has been substituted.
             </p>
           </div>

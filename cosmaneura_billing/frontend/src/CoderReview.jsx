@@ -236,6 +236,7 @@ export default function CoderReview({
   const pendingPayload = useRef(null);
   const validationRef = useRef(null);
   const receiptRef = useRef(null);
+  const activeLoadEncounter = useRef(null);
 
   useEffect(() => {
     const requestId = ++loadRequest.current;
@@ -249,9 +250,14 @@ export default function CoderReview({
     savingRef.current = false;
     pendingPayload.current = null; reviewId.current = null;
     const cancelRequests = () => {
+      if (loadRequest.current === requestId) ++loadRequest.current;
       controller.abort();
       saveAbort.current?.abort();
       ++saveRequest.current;
+      if (activeLoadEncounter.current === encounterId) {
+        onStatusChange(encounterId, { processingStatus: "Coder review canceled" });
+        activeLoadEncounter.current = null;
+      }
     };
     if (!encounterId) return cancelRequests;
     if (!live) {
@@ -259,6 +265,7 @@ export default function CoderReview({
       onStatusChange(encounterId, { processingStatus: "Service unavailable", reviewState: "Needs review" });
       return cancelRequests;
     }
+    activeLoadEncounter.current = encounterId;
     onStatusChange(encounterId, { processingStatus: "Loading coder review", reviewState: "Needs review" });
     (async () => {
       try {
@@ -281,10 +288,12 @@ export default function CoderReview({
           processingStatus: reviewable.degraded ? "Inference unavailable" : "Ready for coder decisions",
           reviewState: reviewable.degraded ? "Awaiting provider clarification" : "Needs review",
         });
+        activeLoadEncounter.current = null;
       } catch (error) {
         if (error?.name === "AbortError" || requestId !== loadRequest.current) return;
         setLoadError({ encounterId, message: coderErrorMessage(error, "load") });
         onStatusChange(encounterId, { processingStatus: "Coder load failed", reviewState: "Needs review" });
+        activeLoadEncounter.current = null;
       }
     })();
     return cancelRequests;

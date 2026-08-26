@@ -31,6 +31,36 @@ it to prevent a merge.
 
 ## The pilot demo (API + web UI)
 
+### Recommended deterministic synthetic demo
+
+After installing the Python development package and the pinned frontend
+dependencies once, launch the complete browser demo with one command:
+
+```bash
+python -m pip install -e ".[dev]"
+cd frontend && npm ci && cd ..       # one-time dependency setup
+python -m cosmaneura_billing.local_demo
+```
+
+Open the loopback URL printed after the readiness check. The launcher builds the
+frontend into a temporary directory, starts a fresh in-memory service bound only
+to `127.0.0.1`, and loads the honest local `ENC-100237` teaching case, the
+digest-verified twelve-case release-candidate corpus, and the fixed four-case
+Card Chase pack. Every restart discards local feedback and Card Chase actions.
+`Ctrl-C` stops the child service and removes its temporary state.
+
+The launcher does not read cloud configuration, make model or Athena calls,
+send messages, schedule work, write an EHR, or transmit a claim. It rejects API
+routes outside the bounded synthetic walkthrough and prints a reminder never
+to enter real patient information in its free-text review fields. The
+release-candidate packs
+remain byte-for-byte unchanged; `ENC-100237` is clearly labeled local-only and
+is not represented as a deployable fixture. See
+[`docs/SYNTHETIC_DEMO_RUNBOOK.md`](docs/SYNTHETIC_DEMO_RUNBOOK.md) for the
+five-to-seven-minute script and verification checklist.
+
+### Developer two-terminal mode
+
 Two terminals:
 
 ```bash
@@ -44,9 +74,10 @@ cd frontend && npm install && npm run dev     # -> http://localhost:5173
 
 `GET /api/session` gives the UI server-owned view capabilities. `Provider` sees
 only Provider; `BillingStaff` sees only Insurance follow-up; `Coder` and `Admin`
-see all three tabs. Every underlying route repeats that authorization check, so
-hiding a tab is never the enforcement boundary. The UI shows a live-engine
-status pill (NCCI / coverage / CPT), lets authorized users pick
+see all three tabs, while Coder remains read-only in Card Chase. Every
+underlying route repeats that authorization check, so hiding a tab is never the
+enforcement boundary. The UI shows an explicit synthetic-pilot connection
+status, lets authorized users pick
 an encounter (the GI-bleed demo plus ACI-Bench visits), edit the documentation,
 run the pipeline, and — on the Coder review tab — accept/edit/reject each code
 and submit feedback. Local development uses `coder_feedback.jsonl` (override
