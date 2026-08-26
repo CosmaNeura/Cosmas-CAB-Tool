@@ -45,8 +45,10 @@ as one adapter (`athena_preview` / `encounters`) rather than making the shared
 tables Athena-specific. A future reviewed MCD Card Chase adapter can reuse the
 same checkpoint and receipt transaction without putting raw patient or source
 identifiers in operational output. Normalized coverage persistence and its
-Card Chase adapter remain a future migration after `009` (expected `010`); they
-must not overload the encounter schema or add Athena-only shared object names.
+Card Chase adapter remain a future migration after `009`; their migration
+number must be allocated from then-current `main` immediately before
+implementation. They must not overload the encounter schema or add Athena-only
+shared object names.
 
 The mock path writes normalized encounters with the exact server-owned
 provenance `athena_preview_synthetic`. An import page's new receipts, encounter
