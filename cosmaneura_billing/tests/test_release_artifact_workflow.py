@@ -156,6 +156,8 @@ def test_preflight_is_first_and_rejects_wrong_authority_or_evidence(tmp_path: Pa
     ]
     assert "uses:" not in steps[0][1]
     assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" in steps[1][1]
+    assert "ref: ${{ github.sha }}" in steps[1][1]
+    assert "ref: ${{ inputs.release_sha }}" not in steps[1][1]
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -220,7 +222,7 @@ def test_workflow_cannot_publish_or_deploy() -> None:
         )
     )
     assert upload == {
-        "name": "cab-release-${{ inputs.release_sha }}",
+        "name": "cab-release-${{ github.sha }}",
         "if-no-files-found": "error",
         "retention-days": "90",
         "compression-level": "0",

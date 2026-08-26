@@ -22,7 +22,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: cab-release-artifact-${{ inputs.release_sha }}
+  group: cab-release-artifact-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -88,11 +88,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
 
       - name: Verify checkout identity
         env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
@@ -100,7 +100,7 @@ jobs:
 
       - name: Build and seal image archive without cloud credentials
         env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_SHA: ${{ github.sha }}
           REVIEW_URL: ${{ inputs.agent_review_url }}
         run: |
           set -euo pipefail
@@ -140,7 +140,7 @@ jobs:
       - name: Reverify current main before retention
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_SHA: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -151,7 +151,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: cab-release-${{ inputs.release_sha }}
+          name: cab-release-${{ github.sha }}
           path: |
             ${{ runner.temp }}/cab-release/image.tar.gz
             ${{ runner.temp }}/cab-release/migrations.sha256
@@ -165,7 +165,7 @@ jobs:
         env:
           ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
-          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           {
             echo "### Retained CAB image release"
