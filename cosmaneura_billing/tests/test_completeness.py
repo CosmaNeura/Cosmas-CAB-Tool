@@ -10,6 +10,7 @@ import pytest
 from cosmaneura_billing.completeness import (
     OverrideRequiresReason, applicable_rulepack, check_note,
 )
+from cosmaneura_billing.corpus.demo_release_candidate import load_demo_release_candidate
 
 COMPLETE_NOTE = (
     "This visit was conducted via two-way audio-video telehealth. "
@@ -70,6 +71,24 @@ def test_empty_note_flags_everything():
     report = check_note("")
     assert [r.rule_id for r in report.outstanding] == RULE_IDS
     assert all(r.status == "missing" for r in report.results)
+
+
+def test_syn_rc_0003_remains_the_deterministic_completeness_demo():
+    case = next(
+        case for case in load_demo_release_candidate()["cases"]
+        if case["case_id"] == "SYN-RC-0003"
+    )
+    report = check_note(case["visit"]["signed_note"])
+    statuses = {result.rule_id: result.status for result in report.results}
+    assert report.complete is False
+    assert statuses == {
+        "telehealth.modality": "ambiguous",
+        "telehealth.duration": "missing",
+        "telehealth.patient_location": "missing",
+        "telehealth.provider_location": "missing",
+        "telehealth.consent": "missing",
+    }
+    assert report.attestation_block(pos="10") is None
 
 
 # --------------------------------------------------------------------------- #

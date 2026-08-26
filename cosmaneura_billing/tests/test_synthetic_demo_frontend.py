@@ -7,6 +7,8 @@ FRONTEND = ROOT / "cosmaneura_billing" / "frontend" / "src"
 INDEX = (FRONTEND.parent / "index.html").read_text(encoding="utf-8")
 APP = (FRONTEND / "App.jsx").read_text(encoding="utf-8")
 BILLING = (FRONTEND / "BillingReview.jsx").read_text(encoding="utf-8")
+QUEUE = (FRONTEND / "ProviderQueue.jsx").read_text(encoding="utf-8")
+PROVIDER = (FRONTEND / "providerBilling.js").read_text(encoding="utf-8")
 CODER = (FRONTEND / "CoderReview.jsx").read_text(encoding="utf-8")
 CHASE = (FRONTEND / "CardChase.jsx").read_text(encoding="utf-8")
 SEED = (FRONTEND / "syntheticDemoSeed.js").read_text(encoding="utf-8")
@@ -32,37 +34,33 @@ def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
     assert "No mock claim or expected code has been substituted." in APP
     assert "billing service offline · no mock claim loaded" in APP
     assert "engine offline · mock data" not in APP
+    assert "encs[0]" not in APP
+    assert "Select an encounter to begin" in BILLING
 
 
 def test_synthetic_fixture_is_read_only_and_uses_only_the_stored_billing_route():
     assert (
         'synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture"'
-        in BILLING
+        in PROVIDER
     )
-    assert 'athena_preview_synthetic: "Athena Preview synthetic fixture"' in BILLING
-    assert "enc.readOnly === true" in BILLING
-    assert "SYNTHETIC_DATA_LABELS[enc.dataClass]" in BILLING
-    assert "{syntheticDataLabel} · documentation is read-only" in BILLING
-    assert 'enc.encounterId === "SYN-RC-0001"' not in BILLING
-    assert 'startsWith("SYN-RC-")' not in BILLING
-    assert "documentation is read-only" in BILLING
-    assert "readOnly={documentationReadOnly}" in BILLING
-
-    request_start = BILLING.index("const j = documentationReadOnly")
-    request_end = BILLING.index("setResult(j);", request_start)
-    request_branch = BILLING[request_start:request_end]
-    stored_branch, editable_branch = request_branch.split(
-        ': await api("/api/billing"', maxsplit=1
-    )
-
-    assert 'api("/api/encounters/billing"' in stored_branch
-    assert 'method: "POST"' in stored_branch
-    assert "body: { encounterId: enc.encounterId }" in stored_branch
-    assert "body:" in editable_branch
+    assert 'athena_preview_synthetic: "Athena Preview synthetic fixture"' in PROVIDER
+    assert "detail.readOnly === true" in BILLING
+    assert "sourceLabel(encounter.dataClass)" in BILLING
+    assert 'startsWith("SYN-RC-")' not in BILLING + QUEUE + PROVIDER
+    assert "Read-only documentation" in BILLING
+    assert "available.filter(isSyntheticDemoEncounter)" in APP
+    assert "!isSyntheticDemoEncounter(detail)" in BILLING
+    assert 'api("/api/encounters/billing-tab"' in BILLING
+    assert 'api("/api/encounters/billing"' not in BILLING
+    assert 'api("/api/billing"' not in BILLING
+    assert 'method: "POST"' in BILLING
+    assert "body: { encounterId: requestedEncounterId }" in BILLING
+    assert "mockBillingApi" not in BILLING
+    assert "DEMO_ENCOUNTER" not in BILLING
 
 
 def test_billing_and_coder_skip_requests_without_an_encounter_id():
-    billing_guard = BILLING.index("if (!encounterId) { setEnc(null); return; }")
+    billing_guard = BILLING.index("if (!selectedId)")
     billing_request = BILLING.index(
         'api("/api/encounters/detail"', billing_guard
     )
@@ -79,9 +77,47 @@ def test_billing_and_coder_skip_requests_without_an_encounter_id():
 
 
 def test_frontend_never_places_an_encounter_identifier_in_a_request_target():
-    assert "encodeURIComponent(encounterId)" not in BILLING + CODER
-    assert "encodeURIComponent(enc.encounterId)" not in BILLING + CODER
-    assert "`/api/encounters/${" not in BILLING + CODER
+    assert "encodeURIComponent" not in BILLING + QUEUE + CODER
+    assert "`/api/encounters/${" not in BILLING + QUEUE + CODER
+
+
+def test_provider_queue_and_persistent_safety_boundary_are_explicit():
+    for label in (
+        "Synthetic data", "Decision support only", "Human review required",
+        "No EHR or claim transmission", "Patient outreach disabled",
+    ):
+        assert label in APP
+    for heading in (
+        "Encounter", "Visit type", "Review state", "Completeness",
+        "Coder review", "Provenance", "Processing",
+    ):
+        assert heading in QUEUE
+    assert "session; they do not claim that a review was saved or transmitted" in QUEUE
+    assert 'aria-current={selected ? "true" : undefined}' in QUEUE
+
+
+def test_provider_review_uses_rich_contract_and_rejects_stale_cross_encounter_results():
+    assert 'api("/api/completeness"' in BILLING
+    assert 'api("/api/encounters/billing-tab"' in BILLING
+    assert "review.visit_id !== requestedEncounterId" in BILLING
+    assert "selectedId !== requestedEncounterId" in BILLING
+    assert "detail.id !== selectedId" in BILLING
+    assert "controller.abort()" in BILLING
+    assert "clinical_note_modified !== false" in BILLING
+    assert "!isSyntheticDemoEncounter(review)" in BILLING
+    assert "review.dataClass !== encounter.dataClass" in BILLING
+    assert "No browser fallback or canned result was substituted." in BILLING
+
+
+def test_provider_copy_and_completeness_wording_never_imply_transmission_or_saved_overrides():
+    assert "Copy suggested codes" in BILLING
+    assert "Copy prepared Athena-friendly block" in BILLING
+    assert "copied — not sent" in BILLING
+    assert "Nothing was sent" in BILLING
+    assert "this view does not create or persist them" in BILLING
+    assert "Documentation completeness blocks a ready state" in BILLING
+    assert "report.complete && attestation" in BILLING
+    assert "Apply reasoned override" not in BILLING
 
 
 def test_server_capabilities_control_the_three_tabs_and_encounter_loading():
@@ -147,8 +183,10 @@ def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
     assert 'setConfirming("verify")' in CHASE
     assert "This worklist is read-only for your assigned role." in CHASE
     assert 'aria-pressed={selectedChaseId === row.chaseId}' in CHASE
-    assert 'role="tablist"' in APP
-    assert 'role="tab"' in APP
+    assert '<nav' in APP
+    assert 'aria-label="Workspace"' in APP
+    assert 'role="tablist"' not in APP
+    assert 'role="tab"' not in APP
     assert "patientLabel}`" not in CHASE
     assert "chaseId}`" not in CHASE
 
@@ -158,9 +196,8 @@ def test_degraded_results_suppress_claim_cards_and_feedback_actions():
     billing_normal = BILLING.index(": result ?", billing_degraded)
     billing_banner = BILLING[billing_degraded:billing_normal]
     assert "Inference is unavailable for this encounter" in billing_banner
-    assert "No claim suggestions or feedback are shown" in billing_banner
-    assert "ProviderCard" not in billing_banner
-    assert "BillerCard" not in billing_banner
+    assert "No code recommendations, copy actions, or prepared block are shown" in billing_banner
+    assert "CandidateGroup" not in billing_banner
 
     coder_degraded = CODER.index("if (engine.degraded)")
     coder_normal = CODER.index("const set =", coder_degraded)

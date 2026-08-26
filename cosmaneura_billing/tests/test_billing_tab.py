@@ -91,6 +91,8 @@ def test_golden_demo_encounter():
 
     # the primary diagnosis leads
     assert view["icd_candidates"][0]["code"] == "K62.5"
+    assert view["icd_candidates"][0]["primary"] is True
+    assert all(c["primary"] is False for c in view["icd_candidates"][1:])
 
 
 def test_the_clinical_note_is_never_modified():
@@ -126,6 +128,19 @@ def test_distinct_findings_are_not_merged():
          "evidence_spans": [{"source": "s", "text": "constipation", "loc": None}]},
     ])
     assert [r["code"] for r in rows] == ["K62.5", "K59.00"]
+
+
+def test_dedupe_keeps_the_server_selected_primary_as_the_visible_mapping():
+    from cosmaneura_billing.billing_tab import _dedupe
+
+    span = [{"source": "signed_note", "text": "shared finding", "loc": None}]
+    rows = _dedupe([
+        {"code": "A00.0", "evidence_spans": span, "alternates": [], "status": "suggested"},
+        {"code": "B00.0", "evidence_spans": list(span), "alternates": [], "status": "suggested"},
+    ], preferred_code="B00.0")
+    assert len(rows) == 1
+    assert rows[0]["code"] == "B00.0"
+    assert rows[0]["alternates"] == ["A00.0"]
 
 
 # --------------------------------------------------------------------------- #
