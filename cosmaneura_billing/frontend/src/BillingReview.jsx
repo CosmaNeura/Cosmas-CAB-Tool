@@ -1,433 +1,471 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Stethoscope, FileText, ShieldCheck, AlertTriangle, Check, X, Clock,
-  ArrowUp, Heart, RefreshCw,
+  AlertTriangle, Ban, ChevronDown, ClipboardCheck, Copy, Database,
+  FileText, RefreshCw, ShieldCheck, Stethoscope, X,
 } from "lucide-react";
+
 import { api } from "./api.js";
+import ProviderQueue from "./ProviderQueue.jsx";
+import {
+  completenessLabel, evidenceSupportedEm, isSyntheticDemoEncounter,
+  preparedBillingBlock, sourceLabel,
+  suggestedCandidates, visitTypeLabel,
+} from "./providerBilling.js";
 
-/*
-  Provider card + biller worksheet, wired to the live engine:
-    POST /api/encounters/detail  -> populate the documentation
-    POST /api/encounters/billing -> run a server-classified read-only fixture
-    POST /api/billing           -> run edited non-SYN-RC documentation
-  When the engine is unreachable (`live` prop false) the demo encounter and a
-  canned result keep the page walkable.
-*/
-
-const DEMO_ENCOUNTER = {
-  encounterId: "ENC-100237",
-  dataClass: "operational",
-  readOnly: false,
-  submittedEm: "99213",
-  intake:
-    "Hi doctor, I am a 26 year old male. I am 5 feet and 9 inches tall and weigh 255 pounds. " +
-    "When I eat spicy food, I poop blood. Sometimes when I have constipation as well, I poop a " +
-    "little bit of blood. I am really scared that I have colon cancer. I do have diarrhea often. " +
-    "I do not have a family history of colon cancer. I got blood tests done last night.",
-  transcript:
-    "Provider: Tell me about the bleeding — how much, what color, how often?\n" +
-    "Patient: Bright red, a little, mostly after spicy food or when constipated. A few times a month.\n" +
-    "Provider: Any weight loss or other changes?\n" +
-    "Patient: I've lost a bit of weight and I get diarrhea pretty often.\n" +
-    "Provider: I reviewed the CBC you brought — reassuring, no anemia. Given the bleeding and weight " +
-    "change, I'll order a stool occult blood test and refer you for a colonoscopy to be safe.",
-  signedNote:
-    "26 y/o male, established patient. CC: intermittent hematochezia. HPI: bright red blood per rectum, " +
-    "small volume, with spicy food and constipation; frequent diarrhea; mild weight loss. Denies family " +
-    "history of colorectal cancer. Data: reviewed outside CBC (no anemia). Ordered FOBT. Vitals: 69in, " +
-    "255lb, BMI 37.6. A/P: (1) Hematochezia — refer for colonoscopy, FOBT today; (2) Constipation — fiber, " +
-    "hydration; (3) Diarrhea — monitor. Electronically signed.",
-};
-
-// Offline fallback — the result the engine produces for the demo encounter.
-function mockBillingApi() {
-  return {
-    encounterId: "ENC-100237",
-    summary: "Rectal bleeding with bowel changes; patient anxious about colon cancer.",
-    captured: [
-      { kind: "EM", code: "99214", label: "Office visit, established · moderate MDM",
-        disposition: "captured", denialRisk: "low", correctedFrom: "99213",
-        evidence: [{ source: "transcript", quote: "refer you for a colonoscopy to be safe" }] },
-      { kind: "ICD10", code: "K62.5", label: "Hemorrhage of anus and rectum", primary: true,
-        disposition: "captured", denialRisk: "low",
-        evidence: [{ source: "intake", quote: "When I eat spicy food, I poop blood" }] },
-      { kind: "ICD10", code: "K59.00", label: "Constipation, unspecified",
-        disposition: "captured", denialRisk: "medium",
-        evidence: [{ source: "intake", quote: "Sometimes when I have constipation" }] },
-      { kind: "ICD10", code: "R19.7", label: "Diarrhea, unspecified",
-        disposition: "captured", denialRisk: "medium",
-        evidence: [{ source: "intake", quote: "I do have diarrhea often" }] },
-    ],
-    declined: [
-      { kind: "ICD10", code: "Z80.0", label: "Family history of malignant neoplasm of digestive organs",
-        disposition: "rejected", denialRisk: "unknown", evidence: [],
-        reason: "Patient explicitly denied family history of colorectal cancer." },
-      { kind: "ICD10", code: "E66.8", label: "Other obesity",
-        disposition: "needs_review", denialRisk: "unknown", evidence: [],
-        reason: "BMI 37.6 is documented in vitals but obesity is not addressed in the plan." },
-    ],
-    em: { code: "99214", label: "Office visit, established · moderate MDM" },
-    primary: { code: "K62.5", label: "Hemorrhage of anus and rectum" },
-    diagnoses: [
-      { code: "K62.5", label: "Hemorrhage of anus and rectum", denialRisk: "low" },
-      { code: "K59.00", label: "Constipation, unspecified", denialRisk: "medium" },
-      { code: "R19.7", label: "Diarrhea, unspecified", denialRisk: "medium" },
-    ],
-    denialFlags: [
-      "K59.00 & R19.7 are low-specificity — add type/acuity/cause where known to support a more specific code.",
-    ],
-    requiresSignoff: true,
-    audit: [
-      { action: "CAPTURE", code: "99214", detail: "within MDM ceiling, evidence attached" },
-      { action: "CAPTURE", code: "K62.5", detail: "linked to documented finding" },
-      { action: "REJECT", code: "Z80.0", detail: "family history denied by patient" },
-      { action: "HOLD", code: "E66.8", detail: "documented, not addressed in plan" },
-    ],
-    feedback: [
-      { kind: "coding_education", target: "provider", tone: "subtle",
-        message: "Submitted as 99213, but the documentation already supports 99214. No additional work — the level reflects the visit you documented.",
-        patientBenefit: "Accurate coding of work already performed; no change to care." },
-      { kind: "documentation_gap", target: "provider", tone: "subtle",
-        message: "BMI 37.6 is in the vitals but obesity isn't addressed in the plan; it's reportable only if you assess/manage it.",
-        patientBenefit: "Complete documentation reflects the care actually delivered." },
-    ],
-    revenueIntegrityNote:
-      "4 codes captured (3 dx + E/M), each linked to documentation. 1 rejected as unsupported, 1 held for sign-off. No code exceeds its MDM ceiling.",
-  };
-}
-
-const RISK = {
-  low: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  medium: "bg-amber-50 text-amber-700 ring-amber-200",
-  high: "bg-red-50 text-red-700 ring-red-200",
-  unknown: "bg-slate-100 text-slate-500 ring-slate-300",
-};
-
-const SYNTHETIC_DATA_LABELS = Object.freeze({
-  synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture",
-  athena_preview_synthetic: "Athena Preview synthetic fixture",
+const TONES = Object.freeze({
+  suggested: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+  held: "bg-amber-50 text-amber-800 ring-amber-200",
+  removed: "bg-rose-50 text-rose-800 ring-rose-200",
+  present: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+  missing: "bg-rose-50 text-rose-800 ring-rose-200",
+  ambiguous: "bg-amber-50 text-amber-800 ring-amber-200",
 });
 
-function Pill({ tone, children }) {
+function Pill({ tone = "bg-slate-100 text-slate-700 ring-slate-200", children }) {
+  return <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>{children}</span>;
+}
+
+function ErrorNotice({ children }) {
+  return <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">{children}</div>;
+}
+
+function Evidence({ span }) {
+  const location = span.loc && Number.isInteger(span.loc.start)
+    ? `characters ${span.loc.start}–${span.loc.end}` : "verified excerpt";
   return (
-    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>
-      {children}
-    </span>
+    <details className="group rounded-lg border border-slate-200 bg-slate-50">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+        <ChevronDown size={14} className="transition group-open:rotate-180" aria-hidden="true" />
+        Evidence from {String(span.source || "documentation").replaceAll("_", " ")} · {location}
+      </summary>
+      <blockquote className="border-t border-slate-200 px-3 py-2 text-sm italic leading-relaxed text-slate-700">“{span.text}”</blockquote>
+    </details>
   );
 }
 
-function SectionLabel({ children }) {
-  return <p className="mt-5 mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">{children}</p>;
+function DocumentDisclosure({ title, text }) {
+  return (
+    <details className="group rounded-xl border border-slate-200 bg-white">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+        <span className="inline-flex items-center gap-2"><FileText size={15} aria-hidden="true" />{title}</span>
+        <ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="max-h-72 overflow-auto whitespace-pre-wrap border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-relaxed text-slate-700">
+        {text || "No text supplied."}
+      </div>
+    </details>
+  );
 }
 
-function ProviderCard({ r }) {
+function EmReview({ em, supportedEm }) {
+  if (!em) return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-semibold">E/M review</h2><p className="mt-2 text-sm text-slate-600">No evidence-supported E/M level was produced.</p></section>;
+  const hasVerifiedEvidence = (em.evidence_spans || []).some(
+    (span) => typeof span?.text === "string" && span.text.trim().length > 0,
+  );
+  const reviewedLabel = supportedEm
+    ? "Evidence-supported"
+    : hasVerifiedEvidence ? "Held for review" : "Withheld — no verified evidence";
+  const reviewedCode = hasVerifiedEvidence ? (supportedEm?.code || em.suggested_level) : null;
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-2.5">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
-          <Stethoscope size={18} />
-        </span>
-        <div>
-          <p className="text-sm font-medium text-slate-900">Provider view</p>
-          <p className="text-xs text-slate-500">post-visit · {r.encounterId}</p>
-        </div>
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="em-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 id="em-heading" className="text-base font-semibold text-slate-950">E/M review</h2><p className="mt-1 text-sm text-slate-600">Compare the provider-selected level with documented support.</p></div>
+        <Pill tone={TONES[em.status]}>{em.status}</Pill>
       </div>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">{r.summary}</p>
-
-      <SectionLabel>Captured this visit</SectionLabel>
-      <div className="divide-y divide-slate-100">
-        {r.captured.map((c) => (
-          <div key={c.code} className="py-2.5">
-            <div className="flex flex-wrap items-baseline gap-2">
-              <code className="w-16 font-mono text-sm text-slate-900">{c.code}</code>
-              <span className="flex-1 text-sm text-slate-700">{c.label}</span>
-              {c.denialPrior != null && (
-                <span className="text-xs text-slate-400" title="Medicare denial rate for this code (CMS PSPS 2024): pilot state, then national">
-                  {c.denialPriorState
-                    ? `denials ${c.denialPriorState.state} ${(c.denialPriorState.rate * 100).toFixed(1)}% · natl ${(c.denialPrior * 100).toFixed(1)}%`
-                    : `natl denial ${(c.denialPrior * 100).toFixed(1)}%`}
-                </span>
-              )}
-              {c.correctedFrom && (
-                <Pill tone={RISK.low}><ArrowUp size={12} className="mr-0.5" />from {c.correctedFrom}</Pill>
-              )}
-              {c.primary && <Pill tone="bg-sky-50 text-sky-700 ring-sky-200">primary</Pill>}
-            </div>
-            {c.evidence[0] && (
-              <p className="mt-1 pl-16 text-xs italic text-slate-500">“{c.evidence[0].quote}”</p>
-            )}
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Provider selected</dt><dd className="mt-1 font-mono text-lg font-semibold">{em.provider_selected_level || "None"}</dd></div>
+        <div className={`rounded-xl p-3 ring-1 ${supportedEm ? "bg-sky-50 ring-sky-100" : "bg-amber-50 ring-amber-100"}`}><dt className={`text-xs font-medium uppercase tracking-wide ${supportedEm ? "text-sky-700" : "text-amber-700"}`}>{reviewedLabel}</dt><dd className={`mt-1 font-mono text-lg font-semibold ${supportedEm ? "text-sky-950" : "text-amber-950"}`}>{reviewedCode || "No code displayed"}</dd></div>
+      </dl>
+      <p className="mt-3 text-sm text-slate-700">Pathway: <strong>{String(em.pathway || "not reported").replaceAll("_", " ")}</strong>{em.mdm_code ? ` · MDM ${em.mdm_code}` : ""}{em.total_time_minutes != null ? ` · ${em.total_time_minutes} documented minutes` : ""}</p>
+      {em.status_reason && <p className="mt-2 text-sm text-amber-800">{em.status_reason}</p>}
+      {em.why && <p className="mt-2 text-sm text-slate-700"><strong>Why:</strong> {em.why}</p>}
+      <h3 className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">Medical decision-making facts</h3>
+      <div className="mt-2 grid gap-3 md:grid-cols-3">
+        {(em.mdm_facts || []).map((fact) => (
+          <div key={fact.element} className="rounded-xl border border-slate-200 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{fact.element}</p>
+            <p className="mt-1 text-sm font-semibold capitalize text-slate-900">{fact.finding || "Not established"}</p>
+            <div className="mt-2">{fact.evidence_span ? <Evidence span={fact.evidence_span} /> : <p className="text-xs text-slate-500">No element-specific evidence span was reported.</p>}</div>
           </div>
         ))}
       </div>
+      {(em.evidence_spans || []).length > 0 && (
+        <details className="group mt-4 rounded-xl border border-slate-200 bg-slate-50">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />All E/M evidence ({em.evidence_spans.length})</summary>
+          <div className="space-y-2 border-t border-slate-200 p-3">{em.evidence_spans.filter((span) => span?.text?.trim()).map((span, index) => <Evidence key={`${span.source}-${span.loc?.start ?? index}-${index}`} span={span} />)}</div>
+        </details>
+      )}
+      {(em.guardrail_actions || []).length > 0 && (
+        <details className="group mt-4 rounded-xl border border-slate-200 bg-slate-50">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />Compliance guardrail actions</summary>
+          <ul className="space-y-1 border-t border-slate-200 px-5 py-3 text-sm text-slate-700">{em.guardrail_actions.map((action) => <li key={action}>{action}</li>)}</ul>
+        </details>
+      )}
+    </section>
+  );
+}
 
-      <SectionLabel>Worth a look — no extra work</SectionLabel>
-      {r.feedback.filter((f) => f.kind === "coding_education" || f.kind === "documentation_gap").map((f, i) => (
-        <div key={i} className="mb-2 flex gap-2 text-sm text-slate-700">
-          {f.kind === "coding_education"
-            ? <ArrowUp size={16} className="mt-0.5 shrink-0 text-emerald-600" />
-            : <FileText size={16} className="mt-0.5 shrink-0 text-slate-400" />}
-          <span>{f.message}</span>
+function CodeCandidate({ candidate, primary, onCopy }) {
+  const evidence = candidate.evidence_spans || [];
+  return (
+    <article className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="font-mono text-base font-semibold text-slate-950">{candidate.code}</code>
+            <Pill tone={TONES[candidate.status]}>{candidate.status}</Pill>
+            {primary && <Pill tone="bg-sky-50 text-sky-800 ring-sky-200">primary diagnosis</Pill>}
+          </div>
+          <p className="mt-1 text-sm text-slate-700">{candidate.description}</p>
         </div>
-      ))}
+        {candidate.status === "suggested" && (
+          <button type="button" onClick={() => onCopy(candidate.code, `Code ${candidate.code} copied — not sent.`)} aria-label={`Copy suggested code ${candidate.code}`} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+            <Copy size={15} aria-hidden="true" />Copy
+          </button>
+        )}
+      </div>
+      {candidate.status !== "suggested" && (
+        <div className={`mt-3 flex gap-2 rounded-lg p-3 text-sm ${candidate.status === "removed" ? "bg-rose-50 text-rose-900" : "bg-amber-50 text-amber-900"}`}>
+          {candidate.status === "removed" ? <X size={16} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />}
+          <span><strong>{candidate.status === "removed" ? "Removed:" : "Held:"}</strong> {candidate.status_reason || candidate.why}</span>
+        </div>
+      )}
+      {candidate.status === "suggested" && candidate.why && <p className="mt-3 text-sm text-slate-700"><strong>Why:</strong> {candidate.why}</p>}
+      {candidate.denial_risk && <p className="mt-2 text-xs text-slate-500">Denial-risk classification: <strong>{candidate.denial_risk}</strong></p>}
+      {candidate.coverage_note && <p className="mt-2 text-xs text-slate-500">Coverage context: {candidate.coverage_note}</p>}
+      {(candidate.alternates || []).length > 0 && <p className="mt-2 text-sm text-slate-700">Alternate mappings: <span className="font-mono">{candidate.alternates.join(", ")}</span></p>}
+      {(candidate.linked_plan_items || []).length > 0 && (
+        <details className="group mt-3 rounded-lg border border-slate-200 bg-slate-50">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={14} className="transition group-open:rotate-180" aria-hidden="true" />Linked assessment / plan items ({candidate.linked_plan_items.length})</summary>
+          <ul className="list-disc space-y-1 border-t border-slate-200 px-7 py-2 text-sm text-slate-700">{candidate.linked_plan_items.map((item) => <li key={item}>{item}</li>)}</ul>
+        </details>
+      )}
+      {evidence.length > 0 ? <div className="mt-3 space-y-2">{evidence.map((span, index) => <Evidence key={`${span.source}-${span.loc?.start ?? index}-${index}`} span={span} />)}</div> : candidate.status === "removed" ? <p className="mt-3 text-xs text-slate-500">Shown only for its server-supplied contradiction/removal reason; this code is not copyable.</p> : null}
+    </article>
+  );
+}
 
-      <SectionLabel>For the patient</SectionLabel>
-      {r.feedback.filter((f) => f.kind === "care_quality").map((f, i) => (
-        <div key={i} className="mb-2 flex gap-2 text-sm text-slate-700">
-          <Heart size={16} className="mt-0.5 shrink-0 text-sky-600" />
-          <span>{f.message}</span>
-        </div>
-      ))}
+function CandidateGroup({ title, candidates, primaryCode, onCopy }) {
+  if (!candidates?.length) return null;
+  const headingId = `${title.replaceAll(" ", "-").toLowerCase()}-heading`;
+  return (
+    <section aria-labelledby={headingId}>
+      <h2 id={headingId} className="text-base font-semibold text-slate-950">{title}</h2>
+      <p className="mb-3 text-xs text-slate-500">Server ordered; coverage context may rank legitimate codes but never creates one.</p>
+      <div className="space-y-3">{candidates.map((candidate, index) => <CodeCandidate key={`${candidate.code}-${candidate.status}-${index}`} candidate={candidate} primary={candidate.code === primaryCode} onCopy={onCopy} />)}</div>
+    </section>
+  );
+}
 
-      <SectionLabel>Not billed — transparency</SectionLabel>
-      {r.declined.map((c) => (
-        <div key={c.code} className="mb-2 flex gap-2 text-sm text-slate-700">
-          {c.disposition === "rejected"
-            ? <X size={16} className="mt-0.5 shrink-0 text-red-500" />
-            : <Clock size={16} className="mt-0.5 shrink-0 text-amber-500" />}
-          <span><code className="font-mono text-xs">{c.code}</code> — {c.reason}</span>
-        </div>
-      ))}
+function CompletenessReview({ report, loading, error }) {
+  if (loading) return <p role="status" className="text-sm text-slate-600">Checking documentation completeness…</p>;
+  if (error) return <ErrorNotice>{error}</ErrorNotice>;
+  if (!report) return <p className="text-sm text-slate-600">Completeness has not been checked.</p>;
+  if (report.rulepack == null) return <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">No deterministic completeness rule pack covers this visit type yet. This is not a passing result.</div>;
+  const attestation = report.attestation_block ?? report.attestationBlock ?? null;
+  const overrideCount = (report.results || []).filter((item) => item.provider_override?.overridden === true).length;
+  const clearedWithOverride = report.complete === true && overrideCount > 0;
+  return (
+    <div>
+      <div className={`mb-4 rounded-xl border p-4 ${clearedWithOverride ? "border-violet-200 bg-violet-50 text-violet-900" : report.complete ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-rose-200 bg-rose-50 text-rose-900"}`}>
+        <p className="font-semibold">{clearedWithOverride ? "Completeness cleared with reasoned override" : report.complete ? "All completeness requirements were found" : "Documentation completeness blocks a ready state"}</p>
+        <p className="mt-1 text-sm">Rule pack <code className="font-mono">{report.rulepack}</code> · {completenessLabel(report)}</p>
+      </div>
+      <div className="space-y-3">
+        {(report.results || []).map((item) => {
+          const overridden = item.provider_override?.overridden === true;
+          return (
+            <article key={item.rule_id} className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div><p className="font-mono text-xs text-slate-500">{item.rule_id}</p><p className="mt-1 text-sm font-medium text-slate-900">Document {item.asks_for}.</p></div>
+                <Pill tone={overridden ? "bg-violet-50 text-violet-800 ring-violet-200" : TONES[item.status]}>{overridden ? "overridden with reason" : item.status}</Pill>
+              </div>
+              {item.evidence && <p className="mt-2 text-sm italic text-slate-700">“{item.evidence}”</p>}
+              {overridden ? <p className="mt-2 rounded-lg bg-violet-50 p-3 text-sm text-violet-900"><strong>Override reason:</strong> {item.provider_override.reason}</p> : item.status !== "present" ? <p className="mt-2 text-sm text-slate-600">{item.fix_hint}</p> : null}
+            </article>
+          );
+        })}
+      </div>
+      {report.complete && attestation && (
+        <details className="group mt-4 rounded-xl border border-emerald-200 bg-emerald-50">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold text-emerald-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />View completeness attestation</summary>
+          <pre className="overflow-auto whitespace-pre-wrap border-t border-emerald-200 px-4 py-3 text-xs leading-relaxed text-emerald-950">{attestation}</pre>
+        </details>
+      )}
     </div>
   );
 }
 
-function BillerCard({ r }) {
-  const actionTone = {
-    CAPTURE: "text-emerald-600", REJECT: "text-red-500", HOLD: "text-amber-600",
-    DOWNGRADE: "text-amber-600", "EVIDENCE-REMOVED": "text-red-500",
-    "EVIDENCE-RELABELED": "text-slate-500", CPT: "text-slate-500",
-  };
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-2.5">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-          <FileText size={18} />
-        </span>
-        <div className="flex-1">
-          <p className="text-sm font-medium text-slate-900">Biller worksheet</p>
-          <p className="text-xs text-slate-500">claim-ready · {r.encounterId}</p>
-        </div>
-        {r.requiresSignoff && <Pill tone={RISK.medium}><Clock size={12} className="mr-1" />needs sign-off</Pill>}
-      </div>
-
-      <SectionLabel>Claim lines</SectionLabel>
-      <div className="flex items-center justify-between border-t border-slate-100 py-2">
-        <span className="text-sm text-slate-500">E/M code</span>
-        <span className="text-right">
-          <code className="font-mono text-sm text-slate-900">{r.em?.code}</code>
-          {r.em?.label && <span className="ml-2 text-xs text-slate-500">{r.em.label}</span>}
-        </span>
-      </div>
-      <div className="flex items-center justify-between border-t border-slate-100 py-2">
-        <span className="text-sm text-slate-500">Primary diagnosis</span>
-        <code className="font-mono text-sm text-slate-900">{r.primary?.code}</code>
-      </div>
-
-      <SectionLabel>Diagnoses (claim order)</SectionLabel>
-      <div className="divide-y divide-slate-100">
-        {r.diagnoses.map((d) => (
-          <div key={d.code} className="flex items-center gap-2 py-2">
-            <code className="w-16 font-mono text-sm text-slate-900">{d.code}</code>
-            <span className="flex-1 text-sm text-slate-700">{d.label}</span>
-            <Pill tone={RISK[d.denialRisk] || RISK.unknown}>denial: {d.denialRisk}</Pill>
-          </div>
-        ))}
-      </div>
-
-      <SectionLabel>Denial-risk flags</SectionLabel>
-      {r.denialFlags.length === 0 && <p className="text-sm text-slate-400">none</p>}
-      {r.denialFlags.map((f, i) => (
-        <div key={i} className="mb-2 flex gap-2 text-sm text-slate-700">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-500" />
-          <span>{f}</span>
-        </div>
-      ))}
-
-      <SectionLabel>Audit trail</SectionLabel>
-      <div className="rounded-lg bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-600">
-        {r.audit.map((a, i) => (
-          <div key={i}>
-            <span className={`font-medium ${actionTone[a.action] || "text-slate-500"}`}>{a.action}</span>{" "}
-            <span className="text-slate-900">{a.code}</span> — {a.detail}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function safeCandidates(candidates = []) {
+  return candidates.flatMap((candidate) => {
+    const evidence = Array.isArray(candidate.evidence_spans)
+      ? candidate.evidence_spans.filter(
+        (span) => typeof span?.text === "string" && span.text.trim().length > 0,
+      ) : [];
+    if (candidate.status === "removed") {
+      return candidate.status_reason || candidate.why
+        ? [{ ...candidate, evidence_spans: evidence }] : [];
+    }
+    return evidence.length > 0 ? [{ ...candidate, evidence_spans: evidence }] : [];
+  });
 }
 
-function Field({ label, value, onChange, rows = 3, readOnly = false }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">{label}</span>
-      <textarea
-        value={value} onChange={(e) => onChange(e.target.value)} rows={rows} readOnly={readOnly}
-        className={`w-full resize-y rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 shadow-sm outline-none ${
-          readOnly ? "bg-slate-50" : "bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-        }`}
-      />
-    </label>
-  );
+function billingErrorMessage(error) {
+  if (error?.status === 401) return "Your session expired. Sign in again before reviewing this encounter.";
+  if (error?.status === 403) return "Your assigned role cannot review this encounter.";
+  if (error?.status === 404) return "This encounter is no longer available. Refresh the queue.";
+  return "The billing review could not be generated. No browser fallback or canned result was substituted.";
 }
 
-export default function BillingReview({ encounterId, live }) {
-  const [enc, setEnc] = useState(null);
+export default function BillingReview({ encounters, selectedId, live, statuses, onSelect, onStatusChange }) {
+  const [encounter, setEncounter] = useState(null);
   const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [loadError, setLoadError] = useState(null);
+  const [reviewError, setReviewError] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [completeness, setCompleteness] = useState(null);
+  const [completenessLoading, setCompletenessLoading] = useState(false);
+  const [completenessError, setCompletenessError] = useState(null);
+  const [copyStatus, setCopyStatus] = useState("");
+  const detailRequest = useRef(0);
+  const reviewRequest = useRef(0);
+  const reviewAbort = useRef(null);
+  const copyRequest = useRef(0);
+  const activeDetailEncounter = useRef(null);
+  const activeReviewEncounter = useRef(null);
 
-  // load the selected encounter's documentation into the editor
   useEffect(() => {
-    setResult(null);
-    setError(null);
-    setLoadError(null);
-    if (!encounterId) { setEnc(null); return; }
-    if (!live) { setEnc(DEMO_ENCOUNTER); return; }
-    setEnc(null);
+    const requestId = ++detailRequest.current;
+    ++reviewRequest.current;
+    ++copyRequest.current;
+    reviewAbort.current?.abort();
+    const controller = new AbortController();
+    setEncounter(null); setResult(null); setLoadError(null); setReviewError(null);
+    setCompleteness(null); setCompletenessError(null); setCopyStatus("");
+    setCompletenessLoading(false); setRunning(false);
+    const cancelRequests = () => {
+      controller.abort();
+      reviewAbort.current?.abort();
+      if (activeDetailEncounter.current === selectedId) {
+        onStatusChange(selectedId, { processingStatus: "Load canceled" });
+        activeDetailEncounter.current = null;
+      }
+      const canceledReview = activeReviewEncounter.current;
+      if (canceledReview) {
+        onStatusChange(canceledReview, { processingStatus: "Review canceled" });
+        activeReviewEncounter.current = null;
+      }
+    };
+    if (!selectedId) return cancelRequests;
+    if (!live) {
+      setLoadError("The billing service is unavailable. No browser fallback or canned result was loaded.");
+      onStatusChange(selectedId, { processingStatus: "Service unavailable" });
+      return () => { controller.abort(); reviewAbort.current?.abort(); };
+    }
+    activeDetailEncounter.current = selectedId;
+    onStatusChange(selectedId, { processingStatus: "Loading" });
     (async () => {
       try {
-        const e = await api("/api/encounters/detail", {
-          method: "POST",
-          body: { encounterId },
-        });
-        setEnc({
-          encounterId: e.id, submittedEm: e.submittedEm || "",
-          intake: e.intake || "", transcript: e.transcript || "", signedNote: e.signedNote || "",
-          dataClass: e.dataClass, readOnly: e.readOnly === true,
-        });
-      } catch (loadFailure) {
-        setLoadError(loadFailure.message || "could not load encounter");
+        const detail = await api("/api/encounters/detail", { method: "POST", body: { encounterId: selectedId }, signal: controller.signal });
+        if (requestId !== detailRequest.current) return;
+        if (detail.id !== selectedId) {
+          setLoadError("The server returned a different encounter than the one selected. Nothing was loaded.");
+          onStatusChange(selectedId, { processingStatus: "Encounter mismatch" });
+          activeDetailEncounter.current = null;
+          return;
+        }
+        const listed = encounters.find((item) => item.id === selectedId);
+        if (!isSyntheticDemoEncounter(detail) || detail.dataClass !== listed?.dataClass) {
+          setLoadError("The server did not confirm this as an approved read-only synthetic encounter. Nothing was loaded.");
+          onStatusChange(selectedId, { processingStatus: "Synthetic check failed" });
+          activeDetailEncounter.current = null;
+          return;
+        }
+        const loaded = {
+          encounterId: detail.id, encounterType: detail.encounterType,
+          placeOfService: detail.placeOfService, submittedEm: detail.submittedEm || null,
+          intake: detail.intake || "", transcript: detail.transcript || "",
+          signedNote: detail.signedNote || "", dataClass: detail.dataClass,
+          readOnly: detail.readOnly === true,
+        };
+        setCompletenessLoading(true);
+        try {
+          const report = await api("/api/completeness", {
+            method: "POST", signal: controller.signal,
+            body: { note: loaded.signedNote, placeOfService: loaded.placeOfService, encounterType: loaded.encounterType },
+          });
+          if (requestId !== detailRequest.current) return;
+          setCompleteness(report);
+          setEncounter(loaded);
+          onStatusChange(selectedId, { completenessState: completenessLabel(report) });
+        } catch (error) {
+          if (error?.name === "AbortError" || requestId !== detailRequest.current) return;
+          setEncounter(loaded);
+          setCompletenessError("Completeness could not be checked. This encounter cannot be presented as ready.");
+          onStatusChange(selectedId, { completenessState: "Check failed" });
+        } finally {
+          if (requestId === detailRequest.current) {
+            setCompletenessLoading(false);
+            onStatusChange(selectedId, { processingStatus: "Ready to review" });
+            activeDetailEncounter.current = null;
+          }
+        }
+      } catch (error) {
+        if (error?.name === "AbortError" || requestId !== detailRequest.current) return;
+        setLoadError(billingErrorMessage(error));
+        onStatusChange(selectedId, { processingStatus: "Load failed" });
+        activeDetailEncounter.current = null;
       }
     })();
-  }, [encounterId, live]);
+    return cancelRequests;
+  }, [selectedId, live, onStatusChange, encounters]);
 
-  // UI SEAM (P2): a live API failure must never substitute a canned claim.
-  if (!enc) {
-    if (!encounterId) return null;
-    return <p>{loadError ? `Could not load encounter: ${loadError}` : "Loading encounter…"}</p>;
-  }
-
-  const documentationReadOnly = enc.readOnly === true;
-  const syntheticDataLabel = documentationReadOnly
-    ? SYNTHETIC_DATA_LABELS[enc.dataClass] || null
-    : null;
-
-  const run = async () => {
-    setLoading(true);
-    setError(null);
+  const runReview = async () => {
+    if (!encounter || !live) return;
+    const requestedEncounterId = encounter.encounterId;
+    const requestId = ++reviewRequest.current;
+    ++copyRequest.current;
+    reviewAbort.current?.abort();
+    const controller = new AbortController();
+    reviewAbort.current = controller;
+    activeReviewEncounter.current = requestedEncounterId;
+    setRunning(true); setReviewError(null); setResult(null); setCopyStatus("");
+    onStatusChange(requestedEncounterId, { processingStatus: "Reviewing" });
     try {
-      if (live) {
-        const j = documentationReadOnly
-          ? await api("/api/encounters/billing", {
-              method: "POST",
-              body: { encounterId: enc.encounterId },
-            })
-          : await api("/api/billing", {
-              method: "POST",
-              body: {
-                encounterId: enc.encounterId, submittedEm: enc.submittedEm || null,
-                intake: enc.intake, transcript: enc.transcript, signedNote: enc.signedNote,
-              },
-            });
-        setResult(j);
-      } else {
-        await new Promise((r) => setTimeout(r, 500));
-        setResult(mockBillingApi());
+      const review = await api("/api/encounters/billing-tab", { method: "POST", body: { encounterId: requestedEncounterId }, signal: controller.signal });
+      if (requestId !== reviewRequest.current || selectedId !== requestedEncounterId) return;
+      if (review.visit_id !== requestedEncounterId) throw new Error("encounter-mismatch-response");
+      if (!isSyntheticDemoEncounter(review) || review.dataClass !== encounter.dataClass) {
+        throw new Error("synthetic-boundary-response");
       }
-    } catch (e) {
-      setError(String(e.message || e));
+      if (review.clinical_note_modified !== false) throw new Error("note-integrity-response");
+      setResult(review);
+      if (review.completeness) {
+        setCompleteness(review.completeness);
+        setCompletenessError(null);
+        setCompletenessLoading(false);
+      }
+      onStatusChange(requestedEncounterId, {
+        ...(review.degraded
+          ? { reviewState: "Manual review", processingStatus: "Inference unavailable" }
+          : { reviewState: "Provider review", processingStatus: "Review generated" }),
+        ...(review.completeness
+          ? { completenessState: completenessLabel(review.completeness) }
+          : {}),
+      });
+    } catch (error) {
+      if (error?.name === "AbortError" || requestId !== reviewRequest.current) return;
+      setReviewError(billingErrorMessage(error));
+      onStatusChange(requestedEncounterId, { processingStatus: "Review failed" });
     } finally {
-      setLoading(false);
+      if (requestId === reviewRequest.current) {
+        setRunning(false);
+        activeReviewEncounter.current = null;
+      }
     }
   };
 
+  const copyText = async (text, confirmation) => {
+    const requestId = ++copyRequest.current;
+    if (!text || !navigator.clipboard?.writeText) { setCopyStatus("Copy is unavailable in this browser. Nothing was sent."); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      if (requestId === copyRequest.current) setCopyStatus(confirmation);
+    } catch (_error) {
+      if (requestId === copyRequest.current) setCopyStatus("Copy permission was denied. Nothing was sent.");
+    }
+  };
+
+  const icdCandidates = safeCandidates(result?.icd_candidates);
+  const cptCandidates = safeCandidates(result?.cpt_candidates);
+  const primaryDiagnosis = icdCandidates.find((candidate) => candidate.primary === true)?.code || null;
+  const supportedEm = evidenceSupportedEm(result);
+  const preparedBlock = useMemo(
+    () => preparedBillingBlock(result ? { ...result, completeness } : result, encounter),
+    [result, completeness, encounter],
+  );
+  const suggested = suggestedCandidates(result);
+  const derivedCopyAll = suggested.map((candidate) => candidate.code).join(" ");
+  const safeCopyAll = result?.copy_all === derivedCopyAll ? result.copy_all : derivedCopyAll;
+  const completenessReady = completeness?.complete === true;
+  const completenessBlocked = completeness?.complete === false;
+  const completenessOverridden = completenessReady && (completeness?.results || []).some(
+    (item) => item.provider_override?.overridden === true,
+  );
+
   return (
-    <>
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-slate-900">Encounter {enc.encounterId}</p>
-            {syntheticDataLabel && (
-              <p className="mt-1 text-xs text-slate-500">
-                {syntheticDataLabel} · documentation is read-only
-              </p>
-            )}
-          </div>
-          <span className="text-xs text-slate-500">
-            {enc.submittedEm ? <>submitted as <code className="font-mono">{enc.submittedEm}</code></> : "no code submitted yet"}
-          </span>
-        </div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <Field label="Intake chatbot text" value={enc.intake} onChange={(v) => setEnc({ ...enc, intake: v })} rows={6} readOnly={documentationReadOnly} />
-          <Field label="Visit transcript" value={enc.transcript} onChange={(v) => setEnc({ ...enc, transcript: v })} rows={6} readOnly={documentationReadOnly} />
-          <Field label="Signed note" value={enc.signedNote} onChange={(v) => setEnc({ ...enc, signedNote: v })} rows={6} readOnly={documentationReadOnly} />
-        </div>
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            onClick={run} disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 active:scale-95 disabled:opacity-60"
-          >
-            {loading ? <RefreshCw size={16} className="animate-spin" /> : <Check size={16} />}
-            {loading ? "Reviewing…" : "Process encounter"}
-          </button>
-          <span className="text-xs text-slate-400">Runs the 5-agent pipeline · guardrail can only downgrade or remove</span>
-        </div>
-        {error && (
-          <p className="mt-3 rounded-lg bg-red-50 p-2.5 text-sm text-red-700">engine error: {error}</p>
-        )}
-      </div>
-
-      {result?.degraded ? (
-        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-sm">
-          <p className="text-sm font-medium">Inference is unavailable for this encounter</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-800">{result.degraded.detail}</p>
-          <p className="mt-2 text-xs text-amber-700">
-            Encounter {result.encounterId} · {result.inferenceMode} mode
-            {result.inferenceModel ? ` (${result.inferenceModel})` : ""}
-          </p>
-          <p className="mt-2 text-xs text-amber-700">
-            No claim suggestions or feedback are shown for this degraded run.
-          </p>
-        </div>
-      ) : result ? (
+    <div className="space-y-5">
+      <ProviderQueue encounters={encounters} selectedId={selectedId} statuses={statuses} onSelect={onSelect} />
+      {!selectedId ? (
+        <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-7 text-center">
+          <ClipboardCheck size={26} className="mx-auto text-slate-400" aria-hidden="true" />
+          <h2 className="mt-2 font-semibold text-slate-950">Select an encounter to begin</h2>
+          <p className="mt-1 text-sm text-slate-600">Start with documentation completeness, then run the evidence-linked billing review.</p>
+        </section>
+      ) : loadError ? <ErrorNotice>{loadError}</ErrorNotice> : !encounter || encounter.encounterId !== selectedId ? (
+        <p role="status" className="text-sm text-slate-600">Loading encounter documentation…</p>
+      ) : (
         <>
-          <div className="mt-5 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-            <ShieldCheck size={18} className="mt-0.5 shrink-0" />
-            <span>{result.revenueIntegrityNote}</span>
-          </div>
-          <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
-            <ProviderCard r={result} />
-            <BillerCard r={result} />
-          </div>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="provider-review-heading">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-center gap-2"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-sky-800" aria-hidden="true"><Stethoscope size={18} /></span><div><h1 id="provider-review-heading" className="text-lg font-semibold text-slate-950">Provider Billing Review</h1><p className="text-sm text-slate-600">Review documented support, then copy a prepared reference for a human-controlled handoff.</p></div></div>
+              <div className="text-right text-xs text-slate-600"><p className="font-mono font-semibold text-slate-900">{encounter.encounterId}</p><p>{visitTypeLabel(encounter.encounterType)}</p></div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Pill tone="bg-violet-50 text-violet-800 ring-violet-200"><Database size={12} className="mr-1" aria-hidden="true" />{sourceLabel(encounter.dataClass)}</Pill>
+              {encounter.readOnly && <Pill><ShieldCheck size={12} className="mr-1" aria-hidden="true" />Read-only documentation</Pill>}
+              <Pill>Submitted E/M: {encounter.submittedEm || "none"}</Pill>
+            </div>
+            <div className="mt-4 grid gap-2 md:grid-cols-3"><DocumentDisclosure title="Intake" text={encounter.intake} /><DocumentDisclosure title="Visit transcript" text={encounter.transcript} /><DocumentDisclosure title="Signed note" text={encounter.signedNote} /></div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button type="button" onClick={runReview} disabled={running} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-wait disabled:opacity-60">
+                {running ? <RefreshCw size={16} className="animate-spin" aria-hidden="true" /> : <ClipboardCheck size={16} aria-hidden="true" />}{running ? "Generating review…" : result ? "Regenerate billing review" : "Run billing review"}
+              </button>
+              <p className="text-xs text-slate-500">Uses server-stored documentation. CAB does not edit the signed note.</p>
+            </div>
+            {reviewError && <div className="mt-4"><ErrorNotice>{reviewError}</ErrorNotice></div>}
+          </section>
 
-          <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-                <RefreshCw size={18} />
-              </span>
-              <div>
-                <p className="text-sm font-medium text-slate-900">Feedback loop</p>
-                <p className="text-xs text-slate-500">routed to the platform · every nudge states a patient benefit</p>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {result.feedback.map((f, i) => (
-                <div key={i} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="mb-1 flex items-center gap-2">
-                    <Pill tone="bg-slate-100 text-slate-600 ring-slate-300">{f.kind.replace(/_/g, " ")}</Pill>
-                    <span className="text-xs text-slate-400">→ {f.target.replace(/_/g, " ")}</span>
-                  </div>
-                  <p className="text-sm text-slate-700">{f.message}</p>
-                  <p className="mt-1 flex items-start gap-1 text-xs text-slate-500">
-                    <Heart size={12} className="mt-0.5 shrink-0 text-sky-500" />{f.patientBenefit}
-                  </p>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="completeness-heading">
+            <h2 id="completeness-heading" className="text-base font-semibold text-slate-950">Documentation completeness</h2>
+            <p className="mb-4 mt-1 text-sm text-slate-600">Deterministic rules only. Missing or ambiguous requirements block a ready state. Overrides are displayed only when returned with a reason; this view does not create or persist them.</p>
+            <CompletenessReview report={completeness} loading={completenessLoading} error={completenessError} />
+          </section>
+
+          {result?.degraded ? (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950 shadow-sm" aria-labelledby="degraded-heading"><div className="flex gap-3"><AlertTriangle size={20} className="mt-0.5 shrink-0" aria-hidden="true" /><div><h2 id="degraded-heading" className="font-semibold">Inference is unavailable for this encounter</h2><p className="mt-1 text-sm">{result.degraded.detail}</p><p className="mt-2 text-sm">No code recommendations, copy actions, or prepared block are shown. Route this encounter to manual review.</p></div></div></section>
+          ) : result ? (
+            <>
+              <div className={`rounded-xl border p-4 ${completenessBlocked ? "border-rose-200 bg-rose-50 text-rose-900" : completenessOverridden ? "border-violet-200 bg-violet-50 text-violet-950" : completenessReady ? "border-sky-200 bg-sky-50 text-sky-950" : "border-amber-200 bg-amber-50 text-amber-950"}`}><div className="flex gap-3">{completenessBlocked ? <Ban size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : completenessReady ? <ShieldCheck size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />}<div><p className="font-semibold">{completenessBlocked ? "Prepared review has unresolved completeness blockers" : completenessOverridden ? "Prepared for human review after reasoned completeness override — not transmitted" : completenessReady ? "Prepared for human review — not transmitted" : "Completeness is not verified — manual review required"}</p><p className="mt-1 text-sm">Decision support only. A provider and coder remain responsible for the final billing decision.</p></div></div></div>
+              <EmReview em={result.em} supportedEm={supportedEm} />
+              <div className="grid gap-5 lg:grid-cols-2"><CandidateGroup title="ICD-10-CM candidates" candidates={icdCandidates} primaryCode={primaryDiagnosis} onCopy={copyText} /><CandidateGroup title="CPT and E/M candidates" candidates={cptCandidates} onCopy={copyText} /></div>
+              {result.withheld_without_evidence > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result.withheld_without_evidence} candidate{result.withheld_without_evidence === 1 ? " was" : "s were"} withheld because verified evidence was unavailable.</div>}
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="copy-heading">
+                <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="copy-heading" className="text-base font-semibold text-slate-950">Human-controlled handoff</h2><p className="mt-1 text-sm text-slate-600">Copying places text on this device’s clipboard. It does not send anything.</p></div><Pill>{suggested.length} evidence-backed suggestion{suggested.length === 1 ? "" : "s"}</Pill></div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" disabled={!safeCopyAll} onClick={() => copyText(safeCopyAll, "Suggested codes copied — not sent.")} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"><Copy size={15} aria-hidden="true" />Copy suggested codes</button>
+                  <button type="button" disabled={!preparedBlock} onClick={() => copyText(preparedBlock, "Prepared Athena-friendly block copied — not sent.")} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"><Copy size={15} aria-hidden="true" />Copy prepared Athena-friendly block</button>
                 </div>
-              ))}
-            </div>
-          </div>
+                <p className="mt-3 min-h-5 text-sm font-medium text-sky-800" role="status" aria-live="polite">{copyStatus}</p>
+                <details className="group mt-3 rounded-xl border border-slate-200 bg-slate-50"><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />Preview prepared block</summary><pre className="overflow-auto whitespace-pre-wrap border-t border-slate-200 px-3 py-3 text-xs leading-relaxed text-slate-700">{preparedBlock}</pre></details>
+              </section>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="provenance-heading">
+                <h2 id="provenance-heading" className="text-base font-semibold text-slate-950">Provenance and controls</h2>
+                <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                  <div><dt className="text-xs uppercase tracking-wide text-slate-500">Source</dt><dd className="mt-1">{sourceLabel(result.dataClass || encounter.dataClass)}</dd></div>
+                  <div><dt className="text-xs uppercase tracking-wide text-slate-500">Engine / ruleset bundle</dt><dd className="mt-1 break-words font-mono text-xs">{result.engine_version || "Not reported"}</dd></div>
+                  <div><dt className="text-xs uppercase tracking-wide text-slate-500">Inference</dt><dd className="mt-1">{result.inferenceMode || "Not reported"}{result.inferenceModel ? ` · ${result.inferenceModel}` : ""}</dd></div>
+                  <div><dt className="text-xs uppercase tracking-wide text-slate-500">Clinical note modified</dt><dd className="mt-1 font-semibold text-emerald-800">{result.clinical_note_modified === false ? "No" : "Not confirmed"}</dd></div>
+                  <div><dt className="text-xs uppercase tracking-wide text-slate-500">Transmission</dt><dd className="mt-1 font-semibold">None</dd></div>
+                  <div><dt className="text-xs uppercase tracking-wide text-slate-500">Human review</dt><dd className="mt-1 font-semibold">Required</dd></div>
+                </dl>
+              </section>
+            </>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center"><ClipboardCheck size={24} className="mx-auto text-slate-400" aria-hidden="true" /><p className="mt-2 font-medium text-slate-950">Ready for provider review</p><p className="mt-1 text-sm text-slate-600">Run the billing review to see evidence-supported recommendations. Billing inference and transmission do not run automatically.</p></div>
+          )}
         </>
-      ) : null}
-    </>
+      )}
+    </div>
   );
 }

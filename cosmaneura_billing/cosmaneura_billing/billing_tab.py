@@ -152,7 +152,9 @@ def _candidate(
     }
 
 
-def _dedupe(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _dedupe(
+    candidates: list[dict[str, Any]], *, preferred_code: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """One row per documented finding, with the other codes as alternates.
 
     Sherin's progesterone-deficiency case: a finding that legitimately maps to
@@ -171,7 +173,13 @@ def _dedupe(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         kept = by_finding[key]
         if cand["code"] != kept["code"] and cand["code"] not in kept["alternates"]:
-            kept["alternates"].append(cand["code"])
+            if cand["code"] == preferred_code:
+                cand["alternates"] = list(dict.fromkeys(
+                    [kept["code"], *kept["alternates"], *cand["alternates"]]
+                ))
+                by_finding[key] = cand
+            else:
+                kept["alternates"].append(cand["code"])
     return [by_finding[k] for k in order]
 
 
@@ -218,13 +226,17 @@ def build_billing_tab_view(
     renderable = [s for s in considered if _renderable(s)]
     dropped = [s for s in considered if not _renderable(s)]
 
-    def bucket(kind_set: set[CodeKind]) -> list[dict[str, Any]]:
+    def bucket(
+        kind_set: set[CodeKind], *, preferred_code: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
         cands = [_candidate(s, bundle, plan_items)
                  for s in renderable if s.kind in kind_set]
-        return _dedupe(cands)
+        return _dedupe(cands, preferred_code=preferred_code)
 
     primary = ws.primary_diagnosis.code if ws.primary_diagnosis else None
-    icd = _order(bucket({CodeKind.ICD10}), primary)
+    icd = _order(bucket({CodeKind.ICD10}, preferred_code=primary), primary)
+    for candidate in icd:
+        candidate["primary"] = bool(primary and candidate["code"] == primary)
     cpt = _order(bucket({CodeKind.EM, CodeKind.PROCEDURE, CodeKind.MODIFIER}), None)
 
     rulepack = applicable_rulepack(bundle.place_of_service, bundle.encounter_type)
