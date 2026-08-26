@@ -73,8 +73,8 @@ normalizer cannot resume a partially processed feed without an explicit
 reviewed restart/backfill. An `encounters` receipt must link its encounter. The
 generic schema permits a non-encounter receipt without `encounter_uid`, but a
 future MCD Card Chase adapter must add its own narrow database commit primitive
-(expected with the normalized coverage migration `010`); the Athena importer
-cannot write such receipts directly. This migration adds no coverage/lab table,
+in a migration numbered from then-current `main`; the Athena importer cannot
+write such receipts directly. This migration adds no coverage/lab table,
 Card Chase UI, OAuth behavior, or network path.
 
 ## Requirements
