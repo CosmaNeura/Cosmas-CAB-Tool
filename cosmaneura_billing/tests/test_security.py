@@ -89,7 +89,10 @@ def _client(tmp_path, *, store=None, limiter=None, **settings_overrides):
     return TestClient(application), store
 
 
-def _server_review_context(client, *, user_id: str = USER_A) -> str:
+def _server_review_context(
+    client, *, user_id: str = USER_A,
+    recommendation_manifest: tuple[tuple[str, str], ...] = (),
+) -> str:
     stored = client.app.state.encounter_store.get("ENC-100237")
     return api._issue_review_context(
         stored,
@@ -99,6 +102,7 @@ def _server_review_context(client, *, user_id: str = USER_A) -> str:
             practice_id="practice-test",
             roles=frozenset({"Coder"}),
         ),
+        recommendation_manifest=recommendation_manifest,
     )
 
 
@@ -536,8 +540,6 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
             "review_context": _server_review_context(client),
             "encounter_id": "ENC-100237",
             "encounter_version": 1,
-            "engine_em": "99214",
-            "final_em": "99214",
             "decisions": [],
         },
         headers=provider,
@@ -620,8 +622,6 @@ def test_review_context_cannot_be_replayed_by_another_actor(tmp_path):
             "review_context": context_for_a,
             "encounter_id": "ENC-100237",
             "encounter_version": 1,
-            "engine_em": "99214",
-            "final_em": "99214",
             "decisions": [],
         },
     )
@@ -742,7 +742,9 @@ def test_access_audit_records_minimal_identity_and_not_request_secrets(tmp_path)
         "/api/feedback",
         json={
             "review_id": "20000000-0000-4000-8000-000000000002",
-            "review_context": _server_review_context(client),
+            "review_context": _server_review_context(
+                client, recommendation_manifest=(("ICD10", "R05.9"),),
+            ),
             "encounter_id": "ENC-100237",
             "encounter_version": 1,
             "overall_note": raw_note,
@@ -800,8 +802,6 @@ def test_access_audit_failure_blocks_mutation_before_route_runs(tmp_path):
             "review_context": _server_review_context(client),
             "encounter_id": "ENC-100237",
             "encounter_version": 1,
-            "engine_em": "99214",
-            "final_em": "99214",
             "decisions": [],
         },
     )
@@ -835,8 +835,6 @@ def test_durable_reservation_avoids_ambiguous_retry_if_completion_fails(tmp_path
             "review_context": _server_review_context(client),
             "encounter_id": "ENC-100237",
             "encounter_version": 1,
-            "engine_em": "99214",
-            "final_em": "99214",
             "decisions": [],
         },
     )
