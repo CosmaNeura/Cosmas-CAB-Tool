@@ -18,6 +18,17 @@ python run_demo.py                  # prints the provider view + biller workshee
 python prove_no_upcode.py           # proves the guardrail cannot upcode
 ```
 
+## Pull request change budget
+
+Pull requests receive a secretless `change-budget` status check from the
+trusted default-branch workflow. It rejects more than 2,000 changed lines
+(additions plus deletions) or 50 changed files and fails closed when GitHub's
+diff metadata is missing, malformed, or negative. There is no label, checkbox,
+or actor waiver; oversized changes must be split into dependency-ordered pull
+requests. The workflow does not change human-approval settings. Repository
+administration must separately require the `change-budget` status context for
+it to prevent a merge.
+
 ## The pilot demo (API + web UI)
 
 Two terminals:

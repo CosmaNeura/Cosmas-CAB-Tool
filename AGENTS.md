@@ -127,7 +127,10 @@ deployed independently.
 - Obey the repository-specific blocking change-budget check once installed.
   Its numeric threshold belongs in a small, separately reviewed policy
   workflow; an oversized PR cannot waive its own limit by label or checkbox.
-  No such tracked check exists today, so automated enforcement remains an
-  adoption gap and reviewers must require decomposition meanwhile.
+  The tracked `change-budget` workflow rejects more than 2,000 changed lines or
+  50 changed files and fails closed on missing, malformed, or negative GitHub
+  diff metadata. Repository administration must separately require its status
+  context for merge blocking; the workflow itself does not alter the current
+  human-approval requirements.
 - Every PR records tier, tests, exact recovery, independent agent review, and
   only controls that actually apply. Docs-only changes must not deploy.
