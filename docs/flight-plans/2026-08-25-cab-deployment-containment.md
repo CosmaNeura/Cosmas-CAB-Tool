@@ -85,16 +85,17 @@ the migration fails, messaging gates change, or the protected API smoke is not
   an image publication, migration, or Azure revision.
 - Runtime recovery remains release-specific. Additive migration structures are
   left dormant rather than dropped as an immediate rollback.
-- Residual architectural gap: build/publish and deployment still occur in one
-  manual workflow run. Promotion does not yet consume a separately retained,
-  previously built and independently attested artifact.
+- Residual architectural gap: a separate secretless workflow can now retain a
+  reviewed image archive, but build/publish and deployment still occur in one
+  manual workflow run. Promotion does not yet consume that retained artifact.
 
 ## Completion
 
 - Required evidence: policy tests, shell/YAML validation, repository CI, and
   independent agent review tied to the final commit.
-- Follow-up: split secretless artifact construction/provenance from founder
-  promotion, add artifact retention/attestation, and record live
-  reconciliation before any credential wiring or deployment.
+- Follow-up: make founder promotion verify and consume the retained image
+  artifact, then record live reconciliation before any credential wiring or
+  deployment. That promotion work is deliberately outside this source-only
+  containment rung.
 - Records to update: the deployment source-of-truth map and the eventual
   post-promotion evidence record. No live-state claim is made by this change.
