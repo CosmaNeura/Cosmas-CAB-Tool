@@ -57,33 +57,85 @@ def _run_block(step: str) -> str:
     )
 
 
-def _image_archive(path: Path, source_sha: str, image_ref: str) -> str:
+def _image_archive(
+    path: Path,
+    source_sha: str,
+    image_ref: str,
+    *,
+    oci_config_path: bool = False,
+    config_path_template: str | None = None,
+    config_link_type: bytes | None = None,
+    duplicate_config: bool = False,
+) -> str:
     config = json.dumps(
         {"config": {"Labels": {"org.opencontainers.image.revision": source_sha}}},
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
     digest = hashlib.sha256(config).hexdigest()
+    config_path = (
+        config_path_template.format(digest=digest)
+        if config_path_template is not None
+        else f"blobs/sha256/{digest}"
+        if oci_config_path
+        else f"{digest}.json"
+    )
     manifest = json.dumps(
-        [{"Config": f"{digest}.json", "Layers": [], "RepoTags": [image_ref]}],
+        [{"Config": config_path, "Layers": [], "RepoTags": [image_ref]}],
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
     with path.open("wb") as destination:
         with gzip.GzipFile(filename="", mode="wb", fileobj=destination, mtime=0) as zipped:
             with tarfile.open(fileobj=zipped, mode="w|") as archive:
-                for name, payload in (("manifest.json", manifest), (f"{digest}.json", config)):
+                for name, payload in (("manifest.json", manifest),):
                     member = tarfile.TarInfo(name)
                     member.mtime, member.size = 0, len(payload)
                     archive.addfile(member, io.BytesIO(payload))
+                if config_link_type is not None:
+                    payload_member = tarfile.TarInfo("payload/config")
+                    payload_member.mtime, payload_member.size = 0, len(config)
+                    archive.addfile(payload_member, io.BytesIO(config))
+                    config_member = tarfile.TarInfo(config_path)
+                    config_member.mtime = 0
+                    config_member.type = config_link_type
+                    config_member.linkname = (
+                        "../../payload/config"
+                        if config_link_type == tarfile.SYMTYPE
+                        else "payload/config"
+                    )
+                    archive.addfile(config_member)
+                else:
+                    for _ in range(2 if duplicate_config else 1):
+                        config_member = tarfile.TarInfo(config_path)
+                        config_member.mtime, config_member.size = 0, len(config)
+                        archive.addfile(config_member, io.BytesIO(config))
     return f"sha256:{digest}"
 
 
-def _build(output: Path, image_migrations: Path, source_sha: str, *, check: bool = True):
+def _build(
+    output: Path,
+    image_migrations: Path,
+    source_sha: str,
+    *,
+    check: bool = True,
+    oci_config_path: bool = False,
+    config_path_template: str | None = None,
+    config_link_type: bytes | None = None,
+    duplicate_config: bool = False,
+):
     output.mkdir()
     image_ref = f"cab-release:{source_sha}"
     archive = output / "image.tar.gz"
-    image_id = _image_archive(archive, source_sha, image_ref)
+    image_id = _image_archive(
+        archive,
+        source_sha,
+        image_ref,
+        oci_config_path=oci_config_path,
+        config_path_template=config_path_template,
+        config_link_type=config_link_type,
+        duplicate_config=duplicate_config,
+    )
     result = _run(
         "python3",
         str(BUILDER),
@@ -141,6 +193,71 @@ def test_sealer_is_deterministic_and_binds_image_migrations(tmp_path: Path) -> N
     rejected, _ = _build(tmp_path / "rejected", drifted, source_sha, check=False)
     assert rejected.returncode != 0
     assert "image migration differs from source commit" in rejected.stderr
+
+
+def test_sealer_accepts_buildkit_oci_config_path(tmp_path: Path) -> None:
+    source_sha = _run("git", "rev-parse", "HEAD").stdout.strip()
+    image_migrations = tmp_path / "image-migrations"
+    shutil.copytree(ROOT / "cosmaneura_billing/migrations", image_migrations)
+
+    result, image_id = _build(
+        tmp_path / "release",
+        image_migrations,
+        source_sha,
+        oci_config_path=True,
+    )
+
+    assert result.returncode == 0
+    metadata = json.loads((tmp_path / "release/release-metadata.json").read_text())
+    assert metadata["image_id"] == image_id
+
+
+def test_sealer_rejects_noncanonical_config_paths(tmp_path: Path) -> None:
+    source_sha = _run("git", "rev-parse", "HEAD").stdout.strip()
+    image_migrations = tmp_path / "image-migrations"
+    shutil.copytree(ROOT / "cosmaneura_billing/migrations", image_migrations)
+
+    for index, template in enumerate(
+        ("../{digest}.json", "nested/blobs/sha256/{digest}")
+    ):
+        result, _ = _build(
+            tmp_path / f"release-{index}",
+            image_migrations,
+            source_sha,
+            check=False,
+            config_path_template=template,
+        )
+        assert result.returncode != 0
+        assert "image config path does not match the image ID" in result.stderr
+
+
+def test_sealer_rejects_config_links_and_duplicates(tmp_path: Path) -> None:
+    source_sha = _run("git", "rev-parse", "HEAD").stdout.strip()
+    image_migrations = tmp_path / "image-migrations"
+    shutil.copytree(ROOT / "cosmaneura_billing/migrations", image_migrations)
+
+    for index, link_type in enumerate((tarfile.SYMTYPE, tarfile.LNKTYPE)):
+        result, _ = _build(
+            tmp_path / f"linked-release-{index}",
+            image_migrations,
+            source_sha,
+            check=False,
+            oci_config_path=True,
+            config_link_type=link_type,
+        )
+        assert result.returncode != 0
+        assert "must be a unique regular file" in result.stderr
+
+    duplicate, _ = _build(
+        tmp_path / "duplicate-release",
+        image_migrations,
+        source_sha,
+        check=False,
+        oci_config_path=True,
+        duplicate_config=True,
+    )
+    assert duplicate.returncode != 0
+    assert "must be a unique regular file" in duplicate.stderr
 
 
 def test_preflight_is_first_and_rejects_wrong_authority_or_evidence(tmp_path: Path) -> None:

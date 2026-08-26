@@ -9,7 +9,7 @@ import json
 import re
 import subprocess
 import tarfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -42,6 +42,16 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_unique_regular_member(archive: tarfile.TarFile, name: str) -> bytes:
+    members = [member for member in archive.getmembers() if member.name == name]
+    if len(members) != 1 or not members[0].isreg():
+        raise ValueError(f"{name} must be a unique regular file")
+    member_file = archive.extractfile(members[0])
+    if member_file is None:
+        raise ValueError(f"{name} is not readable")
+    return member_file.read()
+
+
 def _verify_image_archive(
     image_archive: Path,
     image_id: str,
@@ -50,10 +60,9 @@ def _verify_image_archive(
 ) -> None:
     try:
         with tarfile.open(image_archive, mode="r:gz") as archive:
-            manifest_file = archive.extractfile("manifest.json")
-            if manifest_file is None:
-                raise ValueError("manifest.json is not a file")
-            manifest = json.load(manifest_file)
+            manifest = json.loads(
+                _read_unique_regular_member(archive, "manifest.json")
+            )
             if not isinstance(manifest, list) or len(manifest) != 1:
                 raise ValueError("archive must contain exactly one image manifest")
 
@@ -65,18 +74,26 @@ def _verify_image_archive(
             if repo_tags != [image_ref]:
                 raise ValueError("image archive tag does not match the release reference")
 
-            config_file = archive.extractfile(config_path)
-            if config_file is None:
-                raise ValueError("image config is not a file")
-            config_bytes = config_file.read()
-    except (KeyError, json.JSONDecodeError, tarfile.TarError, ValueError) as error:
+            expected_digest = image_id.removeprefix("sha256:")
+            valid_config_paths = {
+                f"{expected_digest}.json",
+                f"blobs/sha256/{expected_digest}",
+            }
+            if config_path not in valid_config_paths:
+                raise ValueError("image config path does not match the image ID")
+            config_bytes = _read_unique_regular_member(archive, config_path)
+    except (
+        KeyError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        tarfile.TarError,
+        ValueError,
+    ) as error:
         raise SystemExit(f"invalid image archive: {error}") from error
 
     config_digest = _sha256(config_bytes)
     if config_digest != image_id.removeprefix("sha256:"):
         raise SystemExit("image archive config does not match the image ID")
-    if PurePosixPath(config_path).name != f"{config_digest}.json":
-        raise SystemExit("image archive config path does not match the image ID")
 
     try:
         image_config = json.loads(config_bytes)
