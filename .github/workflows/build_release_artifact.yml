@@ -1,0 +1,178 @@
+name: Build CAB Release Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact, independently reviewed commit currently at main
+        required: true
+        type: string
+      agent_review_url:
+        description: PR comment URL containing the independent-agent review record
+        required: true
+        type: string
+      confirmation:
+        description: Type BUILD CAB RELEASE ARTIFACT
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: cab-release-artifact-${{ inputs.release_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build retained image release
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      # This inline step intentionally precedes checkout and is the only step
+      # that runs before the requested repository commit has been verified.
+      - name: Trusted inline founder and current-main preflight
+        env:
+          ACTOR: ${{ github.actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEW_URL: ${{ inputs.agent_review_url }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_NAME" = "workflow_dispatch"
+          test "$REPOSITORY" = "CosmaNeura/Cosmas-CAB-Tool"
+          test "$WORKFLOW_REF" = "refs/heads/main"
+          test "$ACTOR" = "JohnClem"
+          test "$TRIGGERING_ACTOR" = "JohnClem"
+          test "$CONFIRMATION" = "BUILD CAB RELEASE ARTIFACT"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          current_main="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$EXPECTED_WORKFLOW_SHA" = "$RELEASE_SHA"
+          test "$current_main" = "$RELEASE_SHA"
+
+          review_pattern='^https://github\.com/CosmaNeura/Cosmas-CAB-Tool/pull/([0-9]+)#issuecomment-([0-9]+)$'
+          [[ "$REVIEW_URL" =~ $review_pattern ]]
+          pull_number="${BASH_REMATCH[1]}"
+          comment_id="${BASH_REMATCH[2]}"
+
+          pull_record="$(gh api "repos/$REPOSITORY/pulls/$pull_number")"
+          test "$(jq -r '.base.ref' <<<"$pull_record")" = "main"
+          test -n "$(jq -r '.merged_at // empty' <<<"$pull_record")"
+          test "$(jq -r '.merge_commit_sha // empty' <<<"$pull_record")" = "$RELEASE_SHA"
+
+          review_record="$(gh api "repos/$REPOSITORY/issues/comments/$comment_id")"
+          test "$(jq -r '.html_url' <<<"$review_record")" = "$REVIEW_URL"
+          test "$(jq -r '.issue_url' <<<"$review_record")" = \
+            "https://api.github.com/repos/$REPOSITORY/issues/$pull_number"
+          review_body="$(jq -r '.body' <<<"$review_record")"
+          grep -Fqx "Independent agent review: PASS" <<<"$review_body"
+          grep -Fqx "Reviewed commit: $RELEASE_SHA" <<<"$review_body"
+          grep -Eq '^Reviewer agent: [^[:space:]].+$' <<<"$review_body"
+
+      - name: Check out the verified release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+
+      - name: Verify checkout identity
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Build and seal image archive without cloud credentials
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          REVIEW_URL: ${{ inputs.agent_review_url }}
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/cab-release"
+          image_migrations_dir="$RUNNER_TEMP/image-migrations"
+          image="cab-release:$RELEASE_SHA"
+          mkdir -p "$artifact_dir" "$image_migrations_dir"
+
+          docker build \
+            --label "org.opencontainers.image.revision=$RELEASE_SHA" \
+            --tag "$image" \
+            cosmaneura_billing
+          docker save "$image" | gzip -n > "$artifact_dir/image.tar.gz"
+          gzip -t "$artifact_dir/image.tar.gz"
+
+          image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+          test "$(docker image inspect \
+            --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+            "$image")" = "$RELEASE_SHA"
+
+          container_id="$(docker create "$image")"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container_id:/app/migrations/." "$image_migrations_dir"
+          docker rm "$container_id" >/dev/null
+          trap - EXIT
+
+          python3 .github/scripts/build-cab-release-artifact.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --output-dir "$artifact_dir" \
+            --source-sha "$RELEASE_SHA" \
+            --image-archive "$artifact_dir/image.tar.gz" \
+            --image-id "$image_id" \
+            --image-migrations-dir "$image_migrations_dir" \
+            --image-ref "$image" \
+            --review-url "$REVIEW_URL"
+
+      - name: Reverify current main before retention
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$current_main" = "$RELEASE_SHA"
+
+      - name: Retain immutable release files
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cab-release-${{ inputs.release_sha }}
+          path: |
+            ${{ runner.temp }}/cab-release/image.tar.gz
+            ${{ runner.temp }}/cab-release/migrations.sha256
+            ${{ runner.temp }}/cab-release/release-metadata.json
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
+
+      - name: Record artifact identity
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          {
+            echo "### Retained CAB image release"
+            echo
+            echo "- Source commit: \`$RELEASE_SHA\`"
+            echo "- GitHub artifact digest: \`$ARTIFACT_DIGEST\`"
+            echo "- Artifact: $ARTIFACT_URL"
+            echo
+            echo "This workflow does not publish or deploy the release."
+          } >> "$GITHUB_STEP_SUMMARY"

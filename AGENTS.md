@@ -72,8 +72,9 @@ deployed independently.
   for this repository and it has not established commit-to-live traceability.
   Once credentials are separately approved, its source gate is founder-only,
   manual, exact-current-`main`, and bound to an independent-agent review
-  record. It still builds during the promotion run rather than consuming a
-  separately retained reviewed artifact; treat that as an adoption gap.
+  record. A separate secretless manual workflow now retains a reviewed CAB
+  image archive with source and migration provenance, but promotion does not
+  consume it and still rebuilds the image; treat that as an adoption gap.
 - Reconcile live digest, configuration, schema, and deployed-only behavior
   before promotion; choose keep, assimilate, or replace. Never blindly deploy
   `main` over drift.
