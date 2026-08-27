@@ -45,6 +45,29 @@ def _review_context(client, headers: dict[str, str] | None = None) -> str:
     return response.json()["reviewContext"]
 
 
+def _accept_all_recommendations(view: dict) -> list[dict]:
+    rows = ([view["em"]] if view.get("em") else []) + view.get("dx", [])
+    return [{
+        "kind": row["kind"],
+        "engine_code": row["code"],
+        "action": "accept",
+        "final_code": row["code"],
+    } for row in rows]
+
+
+def _accepted_feedback_payload(view: dict, *, review_id: str) -> dict:
+    return {
+        "review_id": review_id,
+        "review_context": view["reviewContext"],
+        "encounter_id": view["encounterId"],
+        "encounter_version": view["encounterVersion"],
+        "submitted_em": view["submittedEm"],
+        "engine_em": view["em"]["code"] if view.get("em") else None,
+        "final_em": view["em"]["code"] if view.get("em") else None,
+        "decisions": _accept_all_recommendations(view),
+    }
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("COSMANEURA_FEEDBACK_PATH", str(tmp_path / "fb.jsonl"))
@@ -231,25 +254,36 @@ def test_coder_view_contract(client):
     assert cv["reviewContext"]
     assert cv["submittedEm"] == "99213"
     assert cv["em"]["code"] == "99214" and cv["em"]["why"]
+    assert cv["em"]["kind"] == "EM"
+    assert cv["em"]["evidenceSpans"]
+    assert {"source", "text", "loc"} <= set(cv["em"]["evidenceSpans"][0])
     assert [d["code"] for d in cv["dx"]] == ["K62.5", "K59.00", "R19.7"]
+    assert all(d["kind"] == "ICD10" and d["evidenceSpans"] for d in cv["dx"])
     statuses = {w["code"]: w["status"] for w in cv["withheld"]}
     assert statuses["Z80.0"] == "rejected"
     assert any(s == "held" for s in statuses.values())
     assert all(w["why"] for w in cv["withheld"])
+    assert all(w["kind"] in {"EM", "ICD10", "PROCEDURE", "MODIFIER"}
+               for w in cv["withheld"])
+    assert {"rulepack", "complete", "results"} <= set(cv["completeness"])
 
 
 def test_feedback_roundtrip_and_summary(client):
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
     payload = {
         "encounter_id": "ENC-100237",
         "review_id": "10000000-0000-4000-8000-000000000001",
-        "review_context": _review_context(client),
+        "review_context": view["reviewContext"],
         "encounter_version": 1,
         "submitted_em": "99213",
         "engine_em": "99214", "final_em": "99214",
         "decisions": [
-            {"kind": "EM", "engine_code": "99214", "action": "accept", "final_code": "99214"},
+            *_accept_all_recommendations(view),
             {"kind": "ICD10", "engine_code": None, "action": "add",
-             "final_code": "Z86.010", "reason_code": "dx_missed_by_engine"},
+             "final_code": "Z86.010", "reason_code": "dx_missed_by_engine",
+             "note": "Rationale: history is documented\nEvidence: synthetic note excerpt"},
         ],
         "time_spent_seconds": 45,
     }
@@ -279,9 +313,137 @@ def test_feedback_roundtrip_and_summary(client):
     assert s["goldRows"] == 1
 
 
+def test_feedback_manifest_rejects_missing_duplicate_and_unissued_rows(client):
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
+    payload = _accepted_feedback_payload(
+        view, review_id="10000000-0000-4000-8000-000000000011",
+    )
+    complete = payload["decisions"]
+    forged = [dict(decision) for decision in complete]
+    forged[-1]["engine_code"] = "Z99.999"
+    forged[-1]["final_code"] = "Z99.999"
+    cases = {
+        "empty": [],
+        "partial": complete[:-1],
+        "duplicate": [*complete, dict(complete[-1])],
+        "unissued": forged,
+    }
+
+    for label, decisions in cases.items():
+        candidate = {**payload, "decisions": decisions}
+        if label == "empty":
+            candidate["engine_em"] = None
+            candidate["final_em"] = None
+        response = client.post(
+            "/api/feedback", json=candidate,
+        )
+        assert response.status_code == 422, label
+        assert response.json()["detail"] == \
+            "review decisions do not match the issued recommendations"
+
+
+@pytest.mark.parametrize("invalid_decision", [
+    {
+        "kind": "EM", "engine_code": "99214", "action": "accept",
+        "final_code": "99215",
+    },
+    {
+        "kind": "EM", "engine_code": "99214", "action": "modify",
+        "final_code": "99214", "reason_code": "other", "note": "Rationale",
+    },
+    {
+        "kind": "ICD10", "engine_code": "K62.5", "action": "modify",
+        "final_code": "K62.6",
+    },
+    {
+        "kind": "ICD10", "engine_code": "K62.5", "action": "reject",
+        "final_code": None,
+    },
+    {
+        "kind": "ICD10", "engine_code": None, "action": "add",
+        "final_code": "Z86.010",
+    },
+    {
+        "kind": "ICD10", "engine_code": None, "action": "add",
+        "final_code": "Z86.010", "reason_code": "dx_missed_by_engine",
+        "note": "Rationale: history is documented but no evidence supplied",
+    },
+    {
+        "kind": "ICD10", "engine_code": None, "action": "add",
+        "final_code": " ", "reason_code": "dx_missed_by_engine",
+        "note": "Rationale: history documented\nEvidence: signed note excerpt",
+    },
+    {
+        "kind": "EM", "engine_code": "99214", "action": "modify",
+        "final_code": " ", "reason_code": "other", "note": "Rationale",
+    },
+])
+def test_feedback_rejects_invalid_human_decision_semantics(client, invalid_decision):
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
+    payload = _accepted_feedback_payload(
+        view, review_id="10000000-0000-4000-8000-000000000012",
+    )
+    if invalid_decision["engine_code"] is None:
+        payload["decisions"] = [*payload["decisions"], invalid_decision]
+    else:
+        payload["decisions"] = [
+            invalid_decision
+            if decision["kind"] == invalid_decision["kind"]
+            and decision["engine_code"] == invalid_decision["engine_code"]
+            else decision
+            for decision in payload["decisions"]
+        ]
+        if invalid_decision["kind"] == "EM":
+            payload["final_em"] = invalid_decision["final_code"]
+
+    assert client.post("/api/feedback", json=payload).status_code == 422
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("submitted_em", "99299"),
+    ("engine_em", "99215"),
+    ("final_em", "99215"),
+])
+def test_feedback_rejects_poisoned_em_summary_fields(client, field, value):
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
+    payload = _accepted_feedback_payload(
+        view, review_id="10000000-0000-4000-8000-000000000013",
+    )
+    payload[field] = value
+
+    assert client.post("/api/feedback", json=payload).status_code == 422
+
+
+def test_feedback_derives_em_summary_fields_when_client_omits_them(client):
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
+    payload = _accepted_feedback_payload(
+        view, review_id="10000000-0000-4000-8000-000000000014",
+    )
+    payload.pop("submitted_em")
+    payload.pop("engine_em")
+
+    response = client.post("/api/feedback", json=payload)
+
+    assert response.status_code == 200
+    stored = client.app.state.feedback_store.load()[0]
+    assert stored.submitted_em == "99213"
+    assert stored.engine_em == "99214"
+    assert stored.final_em == "99214"
+
+
 def test_feedback_rejects_a_stale_encounter_version(client):
     stored = client.app.state.encounter_store.get("ENC-100237")
-    review_context = _review_context(client)
+    view = client.post(
+        "/api/encounters/coder-view", json={"encounterId": "ENC-100237"},
+    ).json()
     unchanged = client.app.state.encounter_store.upsert(stored.bundle)
     assert unchanged.version == stored.version
     client.app.state.encounter_store.upsert(replace(
@@ -291,12 +453,12 @@ def test_feedback_rejects_a_stale_encounter_version(client):
 
     response = client.post("/api/feedback", json={
         "review_id": "10000000-0000-4000-8000-000000000099",
-        "review_context": review_context,
+        "review_context": view["reviewContext"],
         "encounter_id": "ENC-100237",
         "encounter_version": stored.version,
         "engine_em": "99214",
         "final_em": "99214",
-        "decisions": [],
+        "decisions": _accept_all_recommendations(view),
     })
 
     assert response.status_code == 409
@@ -329,11 +491,10 @@ def test_feedback_keeps_the_engine_version_that_issued_the_review(client):
         "review_id": "10000000-0000-4000-8000-000000000097",
         "review_context": api._issue_review_context(
             stored, principal, engine_version=issuing_version,
+            recommendation_manifest=(),
         ),
         "encounter_id": "ENC-100237",
         "encounter_version": stored.version,
-        "engine_em": "99214",
-        "final_em": "99214",
         "decisions": [],
     }
 
@@ -390,16 +551,25 @@ def test_reviewer_rejections_influence_future_runs_for_that_reviewer(tmp_path):
     ))
     smith = _principal_header(SMITH_ID, "Coder")
     jones = _principal_header(JONES_ID, "Coder")
-    smith_review_context = _review_context(client, smith)
+    smith_view = client.post(
+        "/api/encounters/coder-view",
+        json={"encounterId": "ENC-100237"}, headers=smith,
+    ).json()
+    smith_review_context = smith_view["reviewContext"]
     reject = {"kind": "ICD10", "engine_code": "K59.00", "action": "reject",
-              "final_code": None, "reason_code": "dx_not_supported_by_doc"}
+              "final_code": None, "reason_code": "dx_not_supported_by_doc",
+              "note": "Rationale: coder found insufficient support"}
+    completed_decisions = [
+        reject if decision["engine_code"] == "K59.00" else decision
+        for decision in _accept_all_recommendations(smith_view)
+    ]
     for i in range(3):
         response = client.post("/api/feedback", headers=smith, json={
             "review_id": f"10000000-0000-4000-8000-{i:012d}",
             "review_context": smith_review_context,
             "encounter_id": "ENC-100237", "encounter_version": 1,
             "engine_em": "99214",
-            "final_em": "99214", "decisions": [reject]})
+            "final_em": "99214", "decisions": completed_decisions})
         assert response.status_code == 200
 
     j = client.post(

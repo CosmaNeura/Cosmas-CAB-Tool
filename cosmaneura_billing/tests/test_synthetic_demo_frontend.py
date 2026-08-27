@@ -10,6 +10,7 @@ BILLING = (FRONTEND / "BillingReview.jsx").read_text(encoding="utf-8")
 QUEUE = (FRONTEND / "ProviderQueue.jsx").read_text(encoding="utf-8")
 PROVIDER = (FRONTEND / "providerBilling.js").read_text(encoding="utf-8")
 CODER = (FRONTEND / "CoderReview.jsx").read_text(encoding="utf-8")
+CODER_LOGIC = (FRONTEND / "coderReview.js").read_text(encoding="utf-8")
 CHASE = (FRONTEND / "CardChase.jsx").read_text(encoding="utf-8")
 SEED = (FRONTEND / "syntheticDemoSeed.js").read_text(encoding="utf-8")
 
@@ -29,7 +30,7 @@ def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
     assert 'const [selected, setSelected] = useState(null);' in APP
     assert "ENC-100237" not in APP
     assert "!encountersLoaded" in APP
-    assert "!selected" in APP
+    assert "encounterId={selected}" in APP
     assert "No synthetic demo encounter is loaded" in APP
     assert "No mock claim or expected code has been substituted." in APP
     assert "billing service offline · no mock claim loaded" in APP
@@ -66,9 +67,7 @@ def test_billing_and_coder_skip_requests_without_an_encounter_id():
     )
     assert billing_guard < billing_request
 
-    coder_guard = CODER.index(
-        "if (!encounterId) { reviewId.current = null; return; }"
-    )
+    coder_guard = CODER.index("if (!encounterId) return cancelRequests;")
     coder_request = CODER.index(
         'api("/api/encounters/coder-view"',
         coder_guard,
@@ -79,6 +78,72 @@ def test_billing_and_coder_skip_requests_without_an_encounter_id():
 def test_frontend_never_places_an_encounter_identifier_in_a_request_target():
     assert "encodeURIComponent" not in BILLING + QUEUE + CODER
     assert "`/api/encounters/${" not in BILLING + QUEUE + CODER
+
+
+def test_coder_review_is_explicit_evidence_bound_and_never_falls_back_to_a_mock():
+    assert "FALLBACK_ENGINE" not in CODER
+    assert "No browser fallback or canned result was loaded" in CODER
+    assert "UNREVIEWED" in CODER + CODER_LOGIC
+    assert "Each row starts unreviewed" in CODER
+    assert "Accept" in CODER and "Edit" in CODER and "Reject" in CODER
+    assert "Supporting documentation evidence" in CODER
+    assert "contractViolations > 0" in CODER
+    assert "suppressedExclusions" in CODER + CODER_LOGIC
+    assert "not shown because no cited documentation evidence was returned" in CODER
+    assert "validateCoderDraft" in CODER
+    assert "reviewableCoderView" in CODER
+    assert 'aria-pressed={active}' in CODER
+    assert 'role="group"' in CODER
+
+
+def test_coder_review_rejects_stale_or_untrusted_responses_and_freezes_exact_retry():
+    assert "new AbortController()" in CODER
+    assert "requestId !== loadRequest.current" in CODER
+    assert "response.encounterId !== encounterId" in CODER
+    assert "!isSyntheticDemoEncounter(response)" in CODER
+    assert "response.dataClass !== listed.dataClass" in CODER
+    assert "engine.encounterId !== encounterId" in CODER
+    assert "engine?.encounterId === encounterId" in CODER
+    assert "pendingPayload.current = buildFeedbackPayload" in CODER
+    assert "const payload = pendingPayload.current" in CODER
+    assert "requestId !== saveRequest.current" in CODER
+    assert "response.reviewId !== payload.review_id" in CODER
+    assert "setFrozen(true)" in CODER
+    assert "savingRef.current" in CODER
+    assert "onNavigationLockChange(true)" in CODER
+    assert "selectionDisabled={frozen && !receipt}" in CODER
+    assert 'addEventListener("beforeunload"' in CODER
+    assert "Reload after confirmed conflict" in CODER
+    assert "Sign in again in a new tab" in CODER
+    assert "[403, 404, 409].includes(saveErrorStatus)" in CODER
+    assert "The server outcome is unknown" in CODER
+    assert "Discard frozen draft" not in CODER
+    assert "coderReviewLocked && view === \"coder\"" in APP
+    assert APP.count("onNavigationLockChange={setCoderReviewLocked}") == 1
+    coder_call = APP.split("<CoderReview", 1)[1]
+    assert "onNavigationLockChange={setCoderReviewLocked}" in coder_call
+
+
+def test_coder_copy_describes_feedback_and_prepared_preview_without_transmission_claims():
+    forbidden = ("Suggested claim", "Submit &amp; next", "Bill it", "Claim-ready")
+    assert not any(term in CODER for term in forbidden)
+    assert "Prepared draft — not transmitted" in CODER
+    assert "Save review and prepare preview" in CODER
+    assert "This action writes coder feedback only" in CODER
+    assert "No claim, EHR update, Athena write" in CODER
+    assert "server-owned versioned packet is a separate future slice" in CODER
+    assert "JSON.stringify" not in CODER
+    assert "reviewContext}</" not in CODER
+    assert "prior review receipt remains confirmed" in CODER_LOGIC
+
+
+def test_coder_validation_is_labelled_without_reactive_focus_stealing():
+    assert 'aria-invalid={invalid || undefined}' in CODER
+    assert "aria-describedby={describedBy}" in CODER
+    assert "<RowIssues id={errorId}" in CODER
+    assert "requestAnimationFrame(() => validationRef.current?.focus())" in CODER
+    assert "[showValidation, validation.issues.length]" not in CODER
+    assert 'view === "coder" && encounters.length > 0' not in APP
 
 
 def test_provider_queue_and_persistent_safety_boundary_are_explicit():
@@ -208,9 +273,9 @@ def test_degraded_results_suppress_claim_cards_and_feedback_actions():
     assert "No code recommendations, copy actions, or prepared block are shown" in billing_banner
     assert "CandidateGroup" not in billing_banner
 
-    coder_degraded = CODER.index("if (engine.degraded)")
-    coder_normal = CODER.index("const set =", coder_degraded)
+    coder_degraded = CODER.index(") : engine.degraded ? (")
+    coder_normal = CODER.index(") : (", coder_degraded)
     coder_banner = CODER[coder_degraded:coder_normal]
     assert "No codes proposed for this encounter" in coder_banner
-    assert "No claim suggestions or feedback actions are shown" in coder_banner
+    assert "No code recommendations, prepared draft, or feedback actions are shown" in coder_banner
     assert "Submit &amp; next" not in coder_banner
