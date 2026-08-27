@@ -732,6 +732,7 @@ def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
     stored = _get_stored_encounter(request, req.encounterId)
     b = stored.bundle
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
+            "encounterVersion": stored.version,
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,
             "transcript": b.transcript, "signedNote": b.signed_note,
             "placeOfService": b.place_of_service,
@@ -816,6 +817,7 @@ def billing_tab(request: Request, req: BillingTabRequest) -> dict[str, Any]:
             bundle, result, engine_version=_ENGINE_VERSION,
             generated_at=req.generatedAt,
         ),
+        "encounterVersion": stored.version,
         **_encounter_data_policy(stored),
     }
 

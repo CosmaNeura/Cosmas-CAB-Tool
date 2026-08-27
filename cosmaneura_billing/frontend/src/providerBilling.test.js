@@ -4,15 +4,27 @@ import test from "node:test";
 import {
   completenessLabel,
   evidenceSupportedEm,
+  isCurrentEncounterResult,
+  isLocatedEvidenceSpan,
   isSyntheticDemoEncounter,
+  isValidEncounterVersion,
   preparedBillingBlock,
   sourceLabel,
   suggestedCandidates,
   visitTypeLabel,
 } from "./providerBilling.js";
 
-const evidence = [{ source: "signed_note", text: "Assessment: acute cough.", loc: { start: 12, end: 36 } }];
+const signedNote = "Assessment: acute cough.";
+const evidence = [{ source: "signed_note", text: signedNote, loc: { start: 0, end: signedNote.length } }];
+const encounter = {
+  encounterId: "SYN-RC-0003",
+  encounterVersion: 4,
+  signedNote,
+  transcript: "",
+  intake: "",
+};
 const result = {
+  encounterVersion: 4,
   dataClass: "synthetic_demo_release_candidate",
   engine_version: "rules-v1",
   inferenceMode: "mock",
@@ -60,33 +72,68 @@ test("completeness distinguishes blockers, completed checks, and uncovered visit
   }), "Cleared with 1 reasoned override");
 });
 
-test("copy selection includes only evidence-backed suggested candidates", () => {
-  assert.deepEqual(suggestedCandidates(result).map((candidate) => candidate.code), ["99214", "R05.1"]);
-  assert.deepEqual(suggestedCandidates({ ...result, degraded: { reason: "offline" } }), []);
-  assert.equal(evidenceSupportedEm(result)?.code, "99214");
+test("copy selection includes only exactly located evidence-backed suggestions", () => {
+  assert.deepEqual(suggestedCandidates(result, encounter).map((candidate) => candidate.code), ["99214", "R05.1"]);
+  assert.deepEqual(suggestedCandidates({ ...result, degraded: { reason: "offline" } }, encounter), []);
+  assert.equal(evidenceSupportedEm(result, encounter)?.code, "99214");
   assert.equal(evidenceSupportedEm({
     ...result,
     em: { ...result.em, status: "held", evidence_spans: [] },
-  }), null);
+  }, encounter), null);
   assert.deepEqual(suggestedCandidates({
     ...result,
     cpt_candidates: [{ code: "99214", status: "suggested", evidence_spans: [{ text: "   " }] }],
     icd_candidates: [],
-  }), []);
+  }, encounter), []);
+});
+
+test("evidence must be an exact bounded slice of a known loaded source", () => {
+  assert.equal(isLocatedEvidenceSpan(evidence[0], encounter), true);
+  assert.equal(isLocatedEvidenceSpan({ ...evidence[0], text: "acute cough" }, encounter), false);
+  assert.equal(isLocatedEvidenceSpan({ ...evidence[0], loc: null }, encounter), false);
+  assert.equal(isLocatedEvidenceSpan({ ...evidence[0], loc: { start: 0, end: 200 } }, encounter), false);
+  assert.equal(isLocatedEvidenceSpan({ ...evidence[0], source: "unknown" }, encounter), false);
+  assert.equal(isLocatedEvidenceSpan(
+    { source: "transcript", text: "cough", loc: { start: 2, end: 7 } },
+    { ...encounter, transcript: "🙂 cough" },
+  ), true);
+  const tampered = {
+    ...result,
+    cpt_candidates: [{ code: "99214", status: "suggested", evidence_spans: [
+      { ...evidence[0], loc: { start: 1, end: signedNote.length } },
+    ] }],
+    icd_candidates: [],
+  };
+  assert.deepEqual(suggestedCandidates(tampered, encounter), []);
+});
+
+test("billing results must match the exact positive encounter version", () => {
+  assert.equal(isValidEncounterVersion(4), true);
+  assert.equal(isValidEncounterVersion(0), false);
+  assert.equal(isValidEncounterVersion("4"), false);
+  assert.equal(isCurrentEncounterResult(result, encounter), true);
+  assert.equal(isCurrentEncounterResult({ ...result, encounterVersion: 5 }, encounter), false);
+  assert.equal(isCurrentEncounterResult(result, { ...encounter, encounterVersion: null }), false);
 });
 
 test("prepared block is human-controlled, evidence-filtered, and explicitly not transmitted", () => {
-  const text = preparedBillingBlock(result, { encounterId: "SYN-RC-0003" });
+  const text = preparedBillingBlock(result, encounter);
   assert.match(text, /STATUS: PREPARED FOR HUMAN REVIEW — NOT TRANSMITTED/);
   assert.match(text, /CPT \/ E\/M suggestions: 99214/);
   assert.match(text, /ICD-10-CM suggestions: R05\.1/);
+  assert.match(text, /Encounter version: 4/);
   assert.doesNotMatch(text, /99215|J18\.9/);
   assert.match(text, /Clinical note modified by CAB: No/);
   assert.match(text, /Nothing was sent to Athena, an EHR, a clearinghouse, or a payer/);
 });
 
 test("no prepared block is produced for a degraded result", () => {
-  assert.equal(preparedBillingBlock({ ...result, degraded: { reason: "offline" } }, { encounterId: "X" }), "");
+  assert.equal(preparedBillingBlock({ ...result, degraded: { reason: "offline" } }, encounter), "");
+});
+
+test("no prepared block is produced across an encounter version mismatch", () => {
+  assert.equal(preparedBillingBlock({ ...result, encounterVersion: 5 }, encounter), "");
+  assert.equal(preparedBillingBlock(result, { ...encounter, encounterVersion: null }), "");
 });
 
 test("prepared block never labels a held evidence-free E/M as supported", () => {
@@ -96,7 +143,7 @@ test("prepared block never labels a held evidence-free E/M as supported", () => 
     cpt_candidates: [],
   };
   assert.match(
-    preparedBillingBlock(held, { encounterId: "SYN-RC-0003" }),
+    preparedBillingBlock(held, encounter),
     /Evidence-supported E\/M: None suggested/,
   );
 });
