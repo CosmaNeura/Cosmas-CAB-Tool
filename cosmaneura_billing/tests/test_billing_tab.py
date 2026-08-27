@@ -3,7 +3,7 @@
 The acceptance criteria are taken verbatim from the requirements synthesis §3 F1:
 
   * guardrail fuzz test green (see test_guardrail_fuzz.py)
-  * no candidate renders without >= 1 evidence span
+  * no code renders without >= 1 exactly located evidence span
   * held/removed always carry a reason
   * dedupe verified (a multi-mapped finding renders once)
   * golden test on the demo encounter: 99214 surfaced with evidence over the
@@ -19,6 +19,7 @@ from cosmaneura_billing.api import app
 from cosmaneura_billing.billing_tab import build_billing_tab_view
 from cosmaneura_billing.corpus.demo import SAMPLE_VISIT
 from cosmaneura_billing.orchestrator import BillingOrchestrator
+from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 
 ENGINE_VERSION = "test-engine"
 
@@ -37,26 +38,128 @@ def _all_candidates(view):
 # --------------------------------------------------------------------------- #
 # Acceptance criteria
 # --------------------------------------------------------------------------- #
-def test_no_actionable_candidate_renders_without_an_evidence_span():
-    """Suggested and held codes are things a reviewer can act on, so each must
-    show the words behind it."""
+def test_no_candidate_renders_without_exactly_located_evidence():
+    """Every visible code must point to the exact source text behind it."""
     view = _view()
     assert _all_candidates(view), "the demo encounter must produce candidates"
-    actionable = [c for c in _all_candidates(view) if c["status"] != "removed"]
-    assert actionable
-    for cand in actionable:
+    sources = {
+        "signed_note": SAMPLE_VISIT.signed_note,
+        "transcript": SAMPLE_VISIT.transcript,
+        "intake_text": SAMPLE_VISIT.intake_text,
+    }
+    for cand in _all_candidates(view):
         assert cand["evidence_spans"], f"{cand['code']} rendered with no evidence"
-        assert all(s["text"].strip() for s in cand["evidence_spans"])
+        for span in cand["evidence_spans"]:
+            assert span["text"].strip()
+            assert set(span["loc"]) == {"start", "end"}
+            assert sources[span["source"]][
+                span["loc"]["start"]:span["loc"]["end"]
+            ] == span["text"]
 
 
-def test_removed_codes_are_shown_on_their_reason_not_their_evidence():
-    """A code rejected as contradicted has no supporting span by construction.
-    Requiring one would delete the most useful line in the view — 'we considered
-    this and here is why not' — so removed codes are admitted on their reason."""
-    removed = [c for c in _all_candidates(_view()) if c["status"] == "removed"]
-    assert removed, "the demo encounter rejects the family-history code"
-    for cand in removed:
-        assert cand["status_reason"], f"{cand['code']} removed with no reason"
+def test_rejected_code_renders_only_with_exact_decision_evidence():
+    """The rejected Z80.0 is shown with the exact denial behind the decision."""
+    view = _view()
+    candidate = next(
+        row for row in _all_candidates(view) if row["code"] == "Z80.0"
+    )
+    quote = "I do not have a family history of colon cancer"
+    start = SAMPLE_VISIT.intake_text.index(quote)
+    assert candidate["status"] == "removed"
+    assert "explicitly denied" in candidate["status_reason"]
+    assert candidate["evidence_spans"] == [{
+        "source": "intake_text",
+        "text": quote,
+        "loc": {"start": start, "end": start + len(quote)},
+    }]
+    assert view["withheld_without_evidence"] == 0
+    assert view["withheld_without_reason"] == 0
+
+
+def test_rejected_code_without_evidence_is_suppressed_not_rendered_from_reason():
+    result = BillingOrchestrator().process(SAMPLE_VISIT)
+    result.provider_card.declined_codes.append(CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="Z99.89",
+        label="Synthetic evidence-free rejection",
+        disposition=Disposition.REJECTED,
+        rationale="Synthetic rejection reason.",
+    ))
+
+    view = build_billing_tab_view(
+        SAMPLE_VISIT, result, engine_version=ENGINE_VERSION,
+        generated_at="2026-08-17T00:00:00Z",
+    )
+
+    assert "Z99.89" not in {candidate["code"] for candidate in _all_candidates(view)}
+    assert view["withheld_without_evidence"] == 1
+    assert view["withheld_without_reason"] == 0
+
+
+def test_evidence_backed_rejection_without_reason_has_a_distinct_withheld_count():
+    result = BillingOrchestrator().process(SAMPLE_VISIT)
+    result.provider_card.declined_codes.append(CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="Z99.89",
+        label="Synthetic unexplained rejection",
+        disposition=Disposition.REJECTED,
+        evidence=[Evidence(
+            "signed_note", "intermittent hematochezia", "synthetic test evidence",
+        )],
+    ))
+
+    view = build_billing_tab_view(
+        SAMPLE_VISIT, result, engine_version=ENGINE_VERSION,
+        generated_at="2026-08-17T00:00:00Z",
+    )
+
+    assert "Z99.89" not in {candidate["code"] for candidate in _all_candidates(view)}
+    assert view["withheld_without_evidence"] == 0
+    assert view["withheld_without_reason"] == 1
+
+
+def test_verified_but_unlocatable_evidence_is_not_a_rendering_anchor():
+    """Normalized verification alone cannot produce a browser highlight."""
+    from cosmaneura_billing.evidence import verify_suggestion_evidence
+
+    result = BillingOrchestrator().process(SAMPLE_VISIT)
+    suggestion = CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="Z99.89",
+        label="Synthetic unlocatable evidence",
+        disposition=Disposition.REJECTED,
+        evidence=[Evidence(
+            "signed_note", "INTERMITTENT HEMATOCHEZIA", "synthetic test evidence",
+        )],
+        rationale="Synthetic rejected candidate.",
+    )
+    assert verify_suggestion_evidence(SAMPLE_VISIT, [suggestion]) == []
+    assert suggestion.has_evidence, "the normalized verifier should accept the quote"
+    result.provider_card.declined_codes.append(suggestion)
+
+    view = build_billing_tab_view(
+        SAMPLE_VISIT, result, engine_version=ENGINE_VERSION,
+        generated_at="2026-08-17T00:00:00Z",
+    )
+
+    assert "Z99.89" not in {candidate["code"] for candidate in _all_candidates(view)}
+
+
+def test_em_code_without_an_exact_anchor_is_suppressed():
+    result = BillingOrchestrator().process(SAMPLE_VISIT)
+    em = next(
+        suggestion for suggestion in result.provider_card.captured_codes
+        if suggestion.kind == CodeKind.EM
+    )
+    em.evidence = []
+
+    view = build_billing_tab_view(
+        SAMPLE_VISIT, result, engine_version=ENGINE_VERSION,
+        generated_at="2026-08-17T00:00:00Z",
+    )
+
+    assert view["em"] is None
+    assert "99214" not in {candidate["code"] for candidate in _all_candidates(view)}
 
 
 def test_held_and_removed_always_carry_a_reason():
@@ -80,9 +183,14 @@ def test_golden_demo_encounter():
 
     by_code = {c["code"]: c for c in view["icd_candidates"]}
 
-    # patient explicitly denied the family history -> removed
-    assert by_code["Z80.0"]["status"] == "removed"
-    assert "denied" in by_code["Z80.0"]["status_reason"].lower()
+    # Patient explicitly denied the family history. The tempting code is
+    # visibly removed, with that exact denial anchored as decision evidence.
+    family_history = by_code["Z80.0"]
+    assert family_history["status"] == "removed"
+    assert "denied" in family_history["status_reason"].lower()
+    assert family_history["evidence_spans"][0]["text"] == (
+        "I do not have a family history of colon cancer"
+    )
 
     # documented in vitals but not addressed in the plan -> held
     obesity = next(c for c in view["icd_candidates"] if c["code"].startswith("E66"))
@@ -187,6 +295,35 @@ def test_mdm_element_evidence_is_not_borrowed_from_another_element():
     assert facts["data"]["evidence_span"] is None
 
 
+def test_filtered_evidence_does_not_shift_mdm_element_attribution():
+    """Dropping one unlocatable quote must not re-label the next valid span."""
+    from cosmaneura_billing.billing_tab import _element_span
+
+    suggestion = CodeSuggestion(
+        kind=CodeKind.EM,
+        code="99214",
+        label="Established patient office visit",
+        disposition=Disposition.CAPTURED,
+        evidence=[
+            Evidence(
+                "signed_note", "INTERMITTENT HEMATOCHEZIA",
+                "supports the risk element",
+            ),
+            Evidence(
+                "signed_note", "intermittent hematochezia",
+                "supports the problem element",
+            ),
+        ],
+    )
+
+    assert _element_span(suggestion, SAMPLE_VISIT, "risk") is None
+    problem = _element_span(suggestion, SAMPLE_VISIT, "problems")
+    assert problem is not None
+    assert problem["text"] == "intermittent hematochezia"
+    loc = problem["loc"]
+    assert SAMPLE_VISIT.signed_note[loc["start"]:loc["end"]] == problem["text"]
+
+
 def test_guardrail_actions_are_surfaced_for_the_em_code():
     actions = _view()["em"]["guardrail_actions"]
     assert actions and any("99214" in a for a in actions)
@@ -265,6 +402,7 @@ def test_billing_tab_endpoint():
     assert body["generated_at"] == "2026-08-17T00:00:00Z"
     assert body["em"]["suggested_level"] == "99214"
     assert body["inferenceMode"] == "mock"
+    assert body["encounterVersion"] == 1
     assert body["clinical_note_modified"] is False
 
 

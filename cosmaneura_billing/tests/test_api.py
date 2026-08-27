@@ -115,6 +115,29 @@ def test_list_and_get_encounter(client):
     ).json()
     assert one["submittedEm"] == "99213"
     assert "hematochezia" in one["signedNote"].lower()
+    assert one["encounterVersion"] == 1
+
+
+def test_provider_detail_and_billing_tab_propagate_server_encounter_version(client):
+    store = client.app.state.encounter_store
+    original = store.get("ENC-100237")
+    current = store.upsert(replace(
+        original.bundle,
+        patient_age=original.bundle.patient_age + 1,
+    ))
+    assert current.version == 2
+
+    detail = client.post(
+        "/api/encounters/detail", json={"encounterId": "ENC-100237"},
+    )
+    billing_tab = client.post(
+        "/api/encounters/billing-tab", json={"encounterId": "ENC-100237"},
+    )
+
+    assert detail.status_code == 200
+    assert billing_tab.status_code == 200
+    assert detail.json()["encounterVersion"] == current.version
+    assert billing_tab.json()["encounterVersion"] == current.version
 
 
 def test_read_only_data_class_comes_only_from_persisted_source(client):
