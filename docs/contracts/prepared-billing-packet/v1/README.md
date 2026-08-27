@@ -68,14 +68,17 @@ Array order is semantic:
 - recommendations use contiguous snapshot ordinal;
 - snapshot evidence uses first-reference order while walking recommendations,
   then completeness results; evidence references follow that catalog order;
-- completeness results use lexical `ruleId` order and rule IDs are unique;
+- completeness results use lexical `ruleId` order, rule IDs are unique, and
+  each ID uses lowercase dot-separated segments compatible with runtime rule
+  packs (for example, `telehealth.modality`);
 - evidence segments use ascending byte position and adjacent segments merge;
 - decisions and excluded codes use snapshot recommendation order;
 - manual additions use lexical client UUID order, and additional evidence uses
   the corresponding manual-addition order;
 - final codes use snapshot recommendation order followed by manual additions;
   and
-- guardrail actions retain deterministic pipeline order.
+- every recommendation carries at least one guardrail action, and those actions
+  retain deterministic pipeline order.
 
 Duplicates and alternative orderings fail closed.
 
