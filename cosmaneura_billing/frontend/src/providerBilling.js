@@ -11,6 +11,12 @@ const SYNTHETIC_SOURCES = new Set([
   "athena_preview_synthetic",
 ]);
 
+const EVIDENCE_SOURCES = Object.freeze({
+  signed_note: "signedNote",
+  transcript: "transcript",
+  intake_text: "intake",
+});
+
 export function isSyntheticDemoEncounter(encounter) {
   return encounter?.readOnly === true && SYNTHETIC_SOURCES.has(encounter.dataClass);
 }
@@ -45,27 +51,60 @@ export function completenessLabel(report) {
   return unresolved === 1 ? "1 blocker" : `${unresolved} blockers`;
 }
 
-export function suggestedCandidates(result) {
+export function isValidEncounterVersion(value) {
+  return Number.isInteger(value) && value >= 1;
+}
+
+export function isCurrentEncounterResult(result, encounter) {
+  return (
+    isValidEncounterVersion(encounter?.encounterVersion)
+    && isValidEncounterVersion(result?.encounterVersion)
+    && result.encounterVersion === encounter.encounterVersion
+  );
+}
+
+export function isLocatedEvidenceSpan(span, encounter) {
+  if (!span || !encounter) return false;
+  const encounterField = EVIDENCE_SOURCES[span.source];
+  const sourceText = encounterField ? encounter[encounterField] : null;
+  const start = span.loc?.start;
+  const end = span.loc?.end;
+  const sourceCharacters = typeof sourceText === "string" ? Array.from(sourceText) : [];
+  return (
+    typeof sourceText === "string"
+    && typeof span.text === "string"
+    && span.text.trim().length > 0
+    && Number.isInteger(start)
+    && Number.isInteger(end)
+    && start >= 0
+    && end > start
+    && end <= sourceCharacters.length
+    && sourceCharacters.slice(start, end).join("") === span.text
+  );
+}
+
+export function suggestedCandidates(result, encounter) {
   if (!result || result.degraded) return [];
   return [...(result.cpt_candidates || []), ...(result.icd_candidates || [])]
     .filter((candidate) => (
       candidate.status === "suggested"
       && Array.isArray(candidate.evidence_spans)
       && candidate.evidence_spans.some(
-        (span) => typeof span?.text === "string" && span.text.trim().length > 0,
+        (span) => isLocatedEvidenceSpan(span, encounter),
       )
     ));
 }
 
-export function evidenceSupportedEm(result) {
+export function evidenceSupportedEm(result, encounter) {
   if (!result?.em || result.em.status !== "suggested") return null;
   const code = result.em.suggested_level;
-  return suggestedCandidates(result).find((candidate) => candidate.code === code) || null;
+  return suggestedCandidates(result, encounter).find((candidate) => candidate.code === code) || null;
 }
 
 export function preparedBillingBlock(result, encounter) {
   if (!result || result.degraded || !encounter) return "";
-  const suggested = suggestedCandidates(result);
+  if (!isCurrentEncounterResult(result, encounter)) return "";
+  const suggested = suggestedCandidates(result, encounter);
   const cpt = suggested
     .filter((candidate) => (result.cpt_candidates || []).includes(candidate))
     .map((candidate) => candidate.code);
@@ -73,12 +112,13 @@ export function preparedBillingBlock(result, encounter) {
     .filter((candidate) => (result.icd_candidates || []).includes(candidate))
     .map((candidate) => candidate.code);
   const completeness = completenessLabel(result.completeness);
-  const supportedEm = evidenceSupportedEm(result);
+  const supportedEm = evidenceSupportedEm(result, encounter);
 
   return [
     "COSMAS CAB — PREPARED BILLING REFERENCE",
     "STATUS: PREPARED FOR HUMAN REVIEW — NOT TRANSMITTED",
     `Encounter: ${encounter.encounterId}`,
+    `Encounter version: ${encounter.encounterVersion}`,
     `Source: ${sourceLabel(result.dataClass || encounter.dataClass)}`,
     `Submitted E/M: ${result.em?.provider_selected_level || "None recorded"}`,
     `Evidence-supported E/M: ${supportedEm?.code || "None suggested"}`,
