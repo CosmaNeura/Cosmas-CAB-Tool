@@ -1,6 +1,7 @@
 """Documentation-integrity agent: contradictions are rejected, unaddressed
 findings are held with a gap, evidence-less codes need review."""
 from cosmaneura_billing.agents import DocumentationIntegrityAgent
+from cosmaneura_billing.corpus.demo import SAMPLE_VISIT
 from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 
 
@@ -12,6 +13,50 @@ def test_contradicted_family_history_is_rejected():
     result, _ = DocumentationIntegrityAgent().run(facts, [s])
     assert result[0].disposition == Disposition.REJECTED
     assert "denied" in result[0].rationale
+    assert result[0].evidence == []
+
+
+def test_contradicted_family_history_gets_exact_decision_evidence():
+    quote = "I do not have a family history of colon cancer"
+    facts = {
+        "family_history_colon_cancer": False,
+        "family_history_quote": quote,
+    }
+    suggestion = CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="Z80.0",
+        label="Family history of malignant neoplasm of digestive organs",
+    )
+
+    result, _ = DocumentationIntegrityAgent().run(
+        facts, [suggestion], bundle=SAMPLE_VISIT,
+    )
+
+    assert result[0].disposition == Disposition.REJECTED
+    assert len(result[0].evidence) == 1
+    assert result[0].evidence[0].source == "intake_text"
+    assert result[0].evidence[0].quote == quote
+    assert "supporting removal" in result[0].evidence[0].rationale
+
+
+def test_contradiction_quote_must_be_an_exact_source_slice():
+    facts = {
+        "family_history_colon_cancer": False,
+        # Semantically similar, but not a character-for-character source slice.
+        "family_history_quote": "patient denies a family history of colon cancer",
+    }
+    suggestion = CodeSuggestion(
+        kind=CodeKind.ICD10,
+        code="Z80.0",
+        label="Family history of malignant neoplasm of digestive organs",
+    )
+
+    result, _ = DocumentationIntegrityAgent().run(
+        facts, [suggestion], bundle=SAMPLE_VISIT,
+    )
+
+    assert result[0].disposition == Disposition.REJECTED
+    assert result[0].evidence == []
 
 
 def test_documented_but_unaddressed_finding_is_held_with_gap():

@@ -8,6 +8,7 @@ import { api } from "./api.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import {
   completenessLabel, evidenceSupportedEm, isSyntheticDemoEncounter,
+  isCurrentEncounterResult, isLocatedEvidenceSpan, isValidEncounterVersion,
   preparedBillingBlock, sourceLabel,
   suggestedCandidates, visitTypeLabel,
 } from "./providerBilling.js";
@@ -29,14 +30,13 @@ function ErrorNotice({ children }) {
   return <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">{children}</div>;
 }
 
-function Evidence({ span }) {
-  const location = span.loc && Number.isInteger(span.loc.start)
-    ? `characters ${span.loc.start}–${span.loc.end}` : "verified excerpt";
+function Evidence({ span, label = "Evidence" }) {
+  const location = `characters ${span.loc.start}–${span.loc.end}`;
   return (
     <details className="group rounded-lg border border-slate-200 bg-slate-50">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
         <ChevronDown size={14} className="transition group-open:rotate-180" aria-hidden="true" />
-        Evidence from {String(span.source || "documentation").replaceAll("_", " ")} · {location}
+        {label} from {String(span.source || "documentation").replaceAll("_", " ")} · {location}
       </summary>
       <blockquote className="border-t border-slate-200 px-3 py-2 text-sm italic leading-relaxed text-slate-700">“{span.text}”</blockquote>
     </details>
@@ -57,11 +57,12 @@ function DocumentDisclosure({ title, text }) {
   );
 }
 
-function EmReview({ em, supportedEm }) {
+function EmReview({ em, supportedEm, encounter }) {
   if (!em) return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-semibold">E/M review</h2><p className="mt-2 text-sm text-slate-600">No evidence-supported E/M level was produced.</p></section>;
-  const hasVerifiedEvidence = (em.evidence_spans || []).some(
-    (span) => typeof span?.text === "string" && span.text.trim().length > 0,
+  const verifiedEvidence = (em.evidence_spans || []).filter(
+    (span) => isLocatedEvidenceSpan(span, encounter),
   );
+  const hasVerifiedEvidence = verifiedEvidence.length > 0;
   const reviewedLabel = supportedEm
     ? "Evidence-supported"
     : hasVerifiedEvidence ? "Held for review" : "Withheld — no verified evidence";
@@ -85,14 +86,14 @@ function EmReview({ em, supportedEm }) {
           <div key={fact.element} className="rounded-xl border border-slate-200 p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{fact.element}</p>
             <p className="mt-1 text-sm font-semibold capitalize text-slate-900">{fact.finding || "Not established"}</p>
-            <div className="mt-2">{fact.evidence_span ? <Evidence span={fact.evidence_span} /> : <p className="text-xs text-slate-500">No element-specific evidence span was reported.</p>}</div>
+            <div className="mt-2">{isLocatedEvidenceSpan(fact.evidence_span, encounter) ? <Evidence span={fact.evidence_span} /> : <p className="text-xs text-slate-500">No exactly located element-specific evidence was reported.</p>}</div>
           </div>
         ))}
       </div>
-      {(em.evidence_spans || []).length > 0 && (
+      {verifiedEvidence.length > 0 && (
         <details className="group mt-4 rounded-xl border border-slate-200 bg-slate-50">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />All E/M evidence ({em.evidence_spans.length})</summary>
-          <div className="space-y-2 border-t border-slate-200 p-3">{em.evidence_spans.filter((span) => span?.text?.trim()).map((span, index) => <Evidence key={`${span.source}-${span.loc?.start ?? index}-${index}`} span={span} />)}</div>
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />All E/M evidence ({verifiedEvidence.length})</summary>
+          <div className="space-y-2 border-t border-slate-200 p-3">{verifiedEvidence.map((span, index) => <Evidence key={`${span.source}-${span.loc.start}-${index}`} span={span} />)}</div>
         </details>
       )}
       {(em.guardrail_actions || []).length > 0 && (
@@ -140,7 +141,7 @@ function CodeCandidate({ candidate, primary, onCopy }) {
           <ul className="list-disc space-y-1 border-t border-slate-200 px-7 py-2 text-sm text-slate-700">{candidate.linked_plan_items.map((item) => <li key={item}>{item}</li>)}</ul>
         </details>
       )}
-      {evidence.length > 0 ? <div className="mt-3 space-y-2">{evidence.map((span, index) => <Evidence key={`${span.source}-${span.loc?.start ?? index}-${index}`} span={span} />)}</div> : candidate.status === "removed" ? <p className="mt-3 text-xs text-slate-500">Shown only for its server-supplied contradiction/removal reason; this code is not copyable.</p> : null}
+      {evidence.length > 0 && <div className="mt-3 space-y-2">{evidence.map((span, index) => <Evidence key={`${span.source}-${span.loc.start}-${index}`} span={span} label={candidate.status === "suggested" ? "Evidence" : "Decision evidence"} />)}</div>}
     </article>
   );
 }
@@ -196,16 +197,12 @@ function CompletenessReview({ report, loading, error }) {
   );
 }
 
-function safeCandidates(candidates = []) {
+function safeCandidates(candidates = [], encounter) {
   return candidates.flatMap((candidate) => {
     const evidence = Array.isArray(candidate.evidence_spans)
       ? candidate.evidence_spans.filter(
-        (span) => typeof span?.text === "string" && span.text.trim().length > 0,
+        (span) => isLocatedEvidenceSpan(span, encounter),
       ) : [];
-    if (candidate.status === "removed") {
-      return candidate.status_reason || candidate.why
-        ? [{ ...candidate, evidence_spans: evidence }] : [];
-    }
     return evidence.length > 0 ? [{ ...candidate, evidence_spans: evidence }] : [];
   });
 }
@@ -214,6 +211,7 @@ function billingErrorMessage(error) {
   if (error?.status === 401) return "Your session expired. Sign in again before reviewing this encounter.";
   if (error?.status === 403) return "Your assigned role cannot review this encounter.";
   if (error?.status === 404) return "This encounter is no longer available. Refresh the queue.";
+  if (error?.message === "encounter-version-response") return "The encounter changed after it was loaded. Refresh and review the current documentation before generating billing guidance.";
   return "The billing review could not be generated. No browser fallback or canned result was substituted.";
 }
 
@@ -275,7 +273,8 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
           return;
         }
         const listed = encounters.find((item) => item.id === selectedId);
-        if (!isSyntheticDemoEncounter(detail) || detail.dataClass !== listed?.dataClass) {
+        if (!isSyntheticDemoEncounter(detail) || detail.dataClass !== listed?.dataClass
+            || !isValidEncounterVersion(detail.encounterVersion)) {
           setLoadError("The server did not confirm this as an approved read-only synthetic encounter. Nothing was loaded.");
           onStatusChange(selectedId, { processingStatus: "Synthetic check failed" });
           activeDetailEncounter.current = null;
@@ -286,7 +285,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
           placeOfService: detail.placeOfService, submittedEm: detail.submittedEm || null,
           intake: detail.intake || "", transcript: detail.transcript || "",
           signedNote: detail.signedNote || "", dataClass: detail.dataClass,
-          readOnly: detail.readOnly === true,
+          readOnly: detail.readOnly === true, encounterVersion: detail.encounterVersion,
         };
         setCompletenessLoading(true);
         try {
@@ -338,6 +337,9 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
       if (!isSyntheticDemoEncounter(review) || review.dataClass !== encounter.dataClass) {
         throw new Error("synthetic-boundary-response");
       }
+      if (!isCurrentEncounterResult(review, encounter)) {
+        throw new Error("encounter-version-response");
+      }
       if (review.clinical_note_modified !== false) throw new Error("note-integrity-response");
       setResult(review);
       if (review.completeness) {
@@ -376,15 +378,15 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
     }
   };
 
-  const icdCandidates = safeCandidates(result?.icd_candidates);
-  const cptCandidates = safeCandidates(result?.cpt_candidates);
+  const icdCandidates = safeCandidates(result?.icd_candidates, encounter);
+  const cptCandidates = safeCandidates(result?.cpt_candidates, encounter);
   const primaryDiagnosis = icdCandidates.find((candidate) => candidate.primary === true)?.code || null;
-  const supportedEm = evidenceSupportedEm(result);
+  const supportedEm = evidenceSupportedEm(result, encounter);
   const preparedBlock = useMemo(
     () => preparedBillingBlock(result ? { ...result, completeness } : result, encounter),
     [result, completeness, encounter],
   );
-  const suggested = suggestedCandidates(result);
+  const suggested = suggestedCandidates(result, encounter);
   const derivedCopyAll = suggested.map((candidate) => candidate.code).join(" ");
   const safeCopyAll = result?.copy_all === derivedCopyAll ? result.copy_all : derivedCopyAll;
   const completenessReady = completeness?.complete === true;
@@ -414,6 +416,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
             <div className="mt-4 flex flex-wrap gap-2">
               <Pill tone="bg-violet-50 text-violet-800 ring-violet-200"><Database size={12} className="mr-1" aria-hidden="true" />{sourceLabel(encounter.dataClass)}</Pill>
               {encounter.readOnly && <Pill><ShieldCheck size={12} className="mr-1" aria-hidden="true" />Read-only documentation</Pill>}
+              <Pill>Documentation version {encounter.encounterVersion}</Pill>
               <Pill>Submitted E/M: {encounter.submittedEm || "none"}</Pill>
             </div>
             <div className="mt-4 grid gap-2 md:grid-cols-3"><DocumentDisclosure title="Intake" text={encounter.intake} /><DocumentDisclosure title="Visit transcript" text={encounter.transcript} /><DocumentDisclosure title="Signed note" text={encounter.signedNote} /></div>
@@ -437,9 +440,10 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
           ) : result ? (
             <>
               <div className={`rounded-xl border p-4 ${completenessBlocked ? "border-rose-200 bg-rose-50 text-rose-900" : completenessOverridden ? "border-violet-200 bg-violet-50 text-violet-950" : completenessReady ? "border-sky-200 bg-sky-50 text-sky-950" : "border-amber-200 bg-amber-50 text-amber-950"}`}><div className="flex gap-3">{completenessBlocked ? <Ban size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : completenessReady ? <ShieldCheck size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />}<div><p className="font-semibold">{completenessBlocked ? "Prepared review has unresolved completeness blockers" : completenessOverridden ? "Prepared for human review after reasoned completeness override — not transmitted" : completenessReady ? "Prepared for human review — not transmitted" : "Completeness is not verified — manual review required"}</p><p className="mt-1 text-sm">Decision support only. A provider and coder remain responsible for the final billing decision.</p></div></div></div>
-              <EmReview em={result.em} supportedEm={supportedEm} />
+              <EmReview em={result.em} supportedEm={supportedEm} encounter={encounter} />
               <div className="grid gap-5 lg:grid-cols-2"><CandidateGroup title="ICD-10-CM candidates" candidates={icdCandidates} primaryCode={primaryDiagnosis} onCopy={copyText} /><CandidateGroup title="CPT and E/M candidates" candidates={cptCandidates} onCopy={copyText} /></div>
               {result.withheld_without_evidence > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result.withheld_without_evidence} candidate{result.withheld_without_evidence === 1 ? " was" : "s were"} withheld because verified evidence was unavailable.</div>}
+              {result.withheld_without_reason > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result.withheld_without_reason} held or removed candidate{result.withheld_without_reason === 1 ? " was" : "s were"} withheld because a required review reason was unavailable.</div>}
               <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="copy-heading">
                 <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="copy-heading" className="text-base font-semibold text-slate-950">Human-controlled handoff</h2><p className="mt-1 text-sm text-slate-600">Copying places text on this device’s clipboard. It does not send anything.</p></div><Pill>{suggested.length} evidence-backed suggestion{suggested.length === 1 ? "" : "s"}</Pill></div>
                 <div className="mt-4 flex flex-wrap gap-2">
