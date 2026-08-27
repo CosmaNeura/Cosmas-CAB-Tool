@@ -149,10 +149,11 @@ The snapshot contains:
   `multiEngineDecisioningApplied=false`, without preference revision, shadow
   output, endpoint, or secret;
 - server UUID recommendation/evidence IDs, kind, code, generic label,
-  disposition, rationale, guardrail actions, primary flag, verified source,
-  one or more exact ordered UTF-8 byte segments, bounded source slices, and
-  per-segment digests;
-- deterministic completeness rulepack/version and results; and
+  disposition, rationale, at least one terminal guardrail action, primary flag,
+  verified source, one or more exact ordered UTF-8 byte segments, bounded source
+  slices, and per-segment digests;
+- deterministic completeness rulepack/version and results, using lowercase
+  dot-segmented rule IDs compatible with the current runtime rule packs; and
 - `clinicalNoteModified=false`, degraded state, issue time, schema version, and
   canonical snapshot digest.
 

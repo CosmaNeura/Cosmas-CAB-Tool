@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from cosmaneura_billing.completeness import RULE_PACKS
 from cosmaneura_billing.seed_demo_release_candidate import (
     EXPECTED_CASE_DIGESTS,
     EXPECTED_EXTENSION_CASE_DIGESTS,
@@ -321,6 +322,55 @@ def test_all_positive_examples_match_their_contracts() -> None:
         value = _load(EXAMPLES / filename)
         _validate(value, _definition(schema, definition), schema)
         _validate(value, schema, schema)
+
+
+def test_contract_accepts_every_current_runtime_completeness_rule_id() -> None:
+    schema = _load(SCHEMA_PATH)
+    for rules in RULE_PACKS.values():
+        for rule in rules:
+            _validate(
+                {
+                    "ruleId": rule.rule_id,
+                    "status": "missing",
+                    "evidenceIds": [],
+                },
+                _definition(schema, "completenessResult"),
+                schema,
+            )
+
+
+@pytest.mark.parametrize(
+    "rule_id",
+    [
+        "Telehealth.modality",
+        "telehealth..modality",
+        "telehealth.",
+        ".telehealth",
+        "telehealth-modality",
+    ],
+)
+def test_contract_rejects_malformed_completeness_rule_ids(rule_id: str) -> None:
+    schema = _load(SCHEMA_PATH)
+    with pytest.raises(ContractValidationError):
+        _validate(
+            {"ruleId": rule_id, "status": "missing", "evidenceIds": []},
+            _definition(schema, "completenessResult"),
+            schema,
+        )
+
+
+def test_recommendation_requires_a_terminal_guardrail_trace() -> None:
+    schema = _load(SCHEMA_PATH)
+    snapshot = _load(EXAMPLES / "review-snapshot.golden.json")
+    recommendation = deepcopy(snapshot["recommendations"][0])
+    recommendation["guardrailActions"] = []
+
+    with pytest.raises(ContractValidationError):
+        _validate(
+            recommendation,
+            _definition(schema, "recommendation"),
+            schema,
+        )
 
 
 def test_schema_rejects_missing_extra_wrong_type_and_wrong_enum() -> None:
