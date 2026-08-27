@@ -53,7 +53,7 @@ async function acceptEveryEngineSuggestion(page) {
   }
 }
 
-test("provider demo renders evidence, exclusions, completeness, and safe copy actions", async ({ page, context }) => {
+test("provider demo renders located evidence, withheld exclusions, completeness, and safe copy actions", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: origins.admin,
   });
@@ -76,15 +76,22 @@ test("provider demo renders evidence, exclusions, completeness, and safe copy ac
   const held = page.locator("article").filter({
     has: page.locator("code", { hasText: "E66.8" }),
   });
+  await expect(held).toContainText("Held:");
+  await expect(held).toContainText("not addressed");
   const removed = page.locator("article").filter({
     has: page.locator("code", { hasText: "Z80.0" }),
   });
-  await expect(held).toContainText("Held:");
-  await expect(held).toContainText("not addressed");
   await expect(removed).toContainText("Removed:");
-  await expect(removed).toContainText("denied");
+  await expect(removed).toContainText("explicitly denied");
+  const removalEvidence = removed.locator("summary").filter({ hasText: "Decision evidence from" });
+  await expect(removalEvidence).toContainText("intake text");
+  await expect(removalEvidence).toContainText(/characters \d+–\d+/);
+  await removalEvidence.click();
+  await expect(removed.locator("blockquote")).toContainText("I do not have a family history of colon cancer");
+  await expect(page.getByText(/candidate.*withheld because verified evidence was unavailable/)).toHaveCount(0);
 
-  const evidenceSummary = held.locator("summary").filter({ hasText: "Evidence from" });
+  const evidenceSummary = held.locator("summary").filter({ hasText: "Decision evidence from" });
+  await expect(evidenceSummary).toContainText(/characters \d+–\d+/);
   await evidenceSummary.click();
   await expect(held.locator("blockquote")).toContainText("weigh 255 pounds");
 
@@ -359,6 +366,32 @@ test("API outage shows an honest failure with no browser fallback", async ({ pag
     hasText: "No browser fallback or canned result was substituted.",
   })).toContainText(
     "No browser fallback or canned result was substituted.",
+  );
+  await expect(page.getByRole("heading", { name: "Human-controlled handoff" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy suggested codes" })).toHaveCount(0);
+});
+
+test("provider rejects a billing review for a different encounter version", async ({ page }) => {
+  await openWorkspace(page, origins.provider);
+  await selectEncounter(page, "ENC-100237");
+  await expect(page.getByRole("heading", { name: "Documentation completeness" }).locator(".."))
+    .toContainText("All completeness requirements were found");
+  await page.route("**/api/encounters/billing-tab", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...body,
+        encounterVersion: body.encounterVersion + 1,
+      }),
+    });
+  });
+  await page.getByRole("button", { name: "Run billing review" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "The encounter changed" })).toContainText(
+    "The encounter changed after it was loaded.",
   );
   await expect(page.getByRole("heading", { name: "Human-controlled handoff" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy suggested codes" })).toHaveCount(0);
