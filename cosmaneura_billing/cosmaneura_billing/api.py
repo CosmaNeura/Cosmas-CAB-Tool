@@ -56,6 +56,7 @@ from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
 from .orchestrator import BillingOrchestrator
 from .persistence import (
+    DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES,
     MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
     PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
     READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES, UnknownEncounter, postgres_services,
@@ -315,6 +316,24 @@ def _permitted_views(principal: AuthPrincipal) -> list[str]:
     if principal.has_any_role(("BillingStaff",)):
         return ["chase"]
     return []
+
+
+def _persona_label(principal: AuthPrincipal) -> str:
+    """Return a display label derived only from the authorized principal.
+
+    Capabilities, not this label, remain the authorization boundary. The
+    priority mirrors ``_permitted_views`` so accidental additional role claims
+    cannot make a restrictive Provider login look like billing staff.
+    """
+    if principal.has_any_role(("Admin",)):
+        return "Administrator"
+    if principal.has_any_role(("Coder",)):
+        return "Medical coder"
+    if principal.has_any_role(("Provider",)):
+        return "Provider"
+    if principal.has_any_role(("BillingStaff",)):
+        return "Billing staff"
+    return "Authorized user"
 
 
 def _require_view(request: Request, view: str) -> AuthPrincipal:
@@ -749,6 +768,7 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         # role. Keep this defensive branch fail-closed if that contract drifts.
         raise HTTPException(status_code=403, detail="access is not permitted")
     capabilities: dict[str, Any] = {
+        "persona": _persona_label(principal),
         "views": views,
         "defaultView": views[0],
         "capabilities": {
@@ -861,7 +881,7 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
         return
     if (
         stored is None
-        or stored.source not in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+        or stored.source not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES
     ):
         raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
 
@@ -1113,7 +1133,7 @@ def get_chase_context() -> dict[str, Any]:
     return _build_chase_context(get_settings())
 
 
-def _build_chase_context(settings: Settings) -> dict[str, Any]:
+def _build_chase_context(settings: Settings, *, store=None) -> dict[str, Any]:
     from .chase import (
         ApprovalMode, ChasePolicy, SequenceRunner, chase_store_from_settings,
     )
@@ -1127,7 +1147,7 @@ def _build_chase_context(settings: Settings) -> dict[str, Any]:
     context = {
         # This object is safe to cache: PostgresChaseStore carries only immutable
         # connection configuration. Chase rows themselves live in PostgreSQL.
-        "store": chase_store_from_settings(settings),
+        "store": store if store is not None else chase_store_from_settings(settings),
         "policy": policy,
         # The default transport records without contacting anyone; real messaging
         # is gated on the deployment layer and the BAA.
@@ -1162,7 +1182,10 @@ def _build_chase_context(settings: Settings) -> dict[str, Any]:
 def _request_chase_context(request: Request) -> dict[str, Any]:
     context = getattr(request.app.state, "chase_context", None)
     if context is None:
-        context = _build_chase_context(_request_settings(request))
+        context = _build_chase_context(
+            _request_settings(request),
+            store=getattr(request.app.state, "chase_store_override", None),
+        )
         request.app.state.chase_context = context
     return context
 
@@ -1999,7 +2022,9 @@ async def _lifespan(application: FastAPI):
         settings = application.state.settings
         # Build the durable worklist boundary at startup as well. In production
         # this is where a missing Postgres configuration fails closed.
-        application.state.chase_context = _build_chase_context(settings)
+        application.state.chase_context = _build_chase_context(
+            settings, store=application.state.chase_store_override,
+        )
         # Force one database round trip so readiness also proves the durable
         # chase schema exists; a configured-but-unreachable store is not ready.
         application.state.chase_context["store"].healthcheck()
@@ -2061,6 +2086,7 @@ def create_app(
     access_audit_store: AccessAuditStore | None = None,
     feedback_store=None,
     encounter_store=None,
+    chase_store=None,
     membership_store=None,
     rate_limiter: FixedWindowLimiter | None = None,
     auth_failure_limiter: FixedWindowLimiter | None = None,
@@ -2070,7 +2096,8 @@ def create_app(
     http_logger = configure_json_logging(config.log_level)
     if config.environment in {"staging", "production"} and any(
         override is not None for override in (
-            access_audit_store, feedback_store, encounter_store, membership_store,
+            access_audit_store, feedback_store, encounter_store, chase_store,
+            membership_store,
         )
     ):
         raise ValueError(
@@ -2106,6 +2133,7 @@ def create_app(
     application.state.startup_error = None
     application.state.orchestrator = None
     application.state.chase_context = None
+    application.state.chase_store_override = chase_store
     application.state.access_audit_store = audit_store
     application.state.encounter_store = selected_encounters
     application.state.feedback_store = selected_feedback

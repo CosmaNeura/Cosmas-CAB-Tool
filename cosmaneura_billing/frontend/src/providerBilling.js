@@ -1,10 +1,12 @@
 const SOURCE_LABELS = Object.freeze({
+  local_synthetic_demo: "Local-only synthetic demo fixture",
   synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture",
   athena_preview_synthetic: "Athena Preview synthetic fixture",
   operational: "Operational source",
 });
 
 const SYNTHETIC_SOURCES = new Set([
+  "local_synthetic_demo",
   "synthetic_demo_release_candidate",
   "athena_preview_synthetic",
 ]);

@@ -15,6 +15,7 @@ from cosmaneura_billing.orchestrator import (
 )
 from cosmaneura_billing.persistence import (
     ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    LOCAL_SYNTHETIC_DEMO_SOURCE,
     MemoryEncounterStore,
     SYNTHETIC_DEMO_SOURCE,
 )
@@ -54,6 +55,11 @@ def test_orchestrator_gate_requires_a_server_owned_synthetic_provenance():
         orchestrator.process(SAMPLE_VISIT, input_provenance="explicit_import")
 
     assert llm.calls == 0
+    with pytest.raises(InferenceInputPolicyError, match="stored synthetic"):
+        orchestrator.process(
+            SAMPLE_VISIT,
+            input_provenance=LOCAL_SYNTHETIC_DEMO_SOURCE,
+        )
     for provenance in (
         SYNTHETIC_DEMO_SOURCE,
         ATHENA_PREVIEW_SYNTHETIC_SOURCE,

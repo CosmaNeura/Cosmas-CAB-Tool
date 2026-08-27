@@ -49,6 +49,7 @@ const result = {
 };
 
 test("formats server-owned provenance and visit types without inferring from IDs", () => {
+  assert.equal(sourceLabel("local_synthetic_demo"), "Local-only synthetic demo fixture");
   assert.equal(sourceLabel("synthetic_demo_release_candidate"), "Validated synthetic release-candidate fixture");
   assert.equal(sourceLabel("unrecognized"), "Server-verified source");
   assert.equal(visitTypeLabel("telehealth_established"), "Telehealth Established");
@@ -56,6 +57,14 @@ test("formats server-owned provenance and visit types without inferring from IDs
     id: "not-a-special-prefix", readOnly: true,
     dataClass: "synthetic_demo_release_candidate",
   }), true);
+  assert.equal(isSyntheticDemoEncounter({
+    id: "ENC-100237", readOnly: true,
+    dataClass: "local_synthetic_demo",
+  }), true);
+  assert.equal(isSyntheticDemoEncounter({
+    id: "ENC-100237", readOnly: false,
+    dataClass: "local_synthetic_demo",
+  }), false);
   assert.equal(isSyntheticDemoEncounter({
     id: "SYN-RC-0003", readOnly: false, dataClass: "operational",
   }), false);

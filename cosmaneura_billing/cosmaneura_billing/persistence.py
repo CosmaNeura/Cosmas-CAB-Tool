@@ -42,9 +42,22 @@ class ReviewerNotAuthorized(PermissionError):
 
 SYNTHETIC_DEMO_SOURCE = "synthetic_demo_release_candidate"
 ATHENA_PREVIEW_SYNTHETIC_SOURCE = "athena_preview_synthetic"
+LOCAL_SYNTHETIC_DEMO_SOURCE = "local_synthetic_demo"
 READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES = frozenset({
     SYNTHETIC_DEMO_SOURCE,
     ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    LOCAL_SYNTHETIC_DEMO_SOURCE,
+})
+# The local-only derivative is read-only for presentation and persistence but
+# is not an authorization token for a deployed model-input latch. Only sources
+# established through deployment-owned seed/import controls belong here.
+DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES = frozenset({
+    SYNTHETIC_DEMO_SOURCE,
+    ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+})
+_MEMORY_SEEDABLE_SYNTHETIC_SOURCES = frozenset({
+    SYNTHETIC_DEMO_SOURCE,
+    LOCAL_SYNTHETIC_DEMO_SOURCE,
 })
 
 
@@ -82,7 +95,7 @@ class MemoryEncounterStore:
     ) -> StoredEncounter:
         if (
             source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
-            and source != SYNTHETIC_DEMO_SOURCE
+            and source not in _MEMORY_SEEDABLE_SYNTHETIC_SOURCES
         ):
             raise PersistenceUnavailable(
                 "reserved import provenance requires the source import store"
@@ -90,10 +103,10 @@ class MemoryEncounterStore:
         prior = self._items.get(bundle.encounter_id)
         if (
             prior is not None
-            and prior.source == SYNTHETIC_DEMO_SOURCE
+            and prior.source in _MEMORY_SEEDABLE_SYNTHETIC_SOURCES
             and (
                 prior.bundle != bundle
-                or source not in {None, SYNTHETIC_DEMO_SOURCE}
+                or source not in {None, prior.source}
             )
         ):
             raise PersistenceUnavailable(
@@ -731,6 +744,8 @@ def postgres_services(settings: Settings) -> PostgresServices:
 
 __all__ = [
     "ATHENA_PREVIEW_SYNTHETIC_SOURCE", "MemoryEncounterStore",
+    "DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES",
+    "LOCAL_SYNTHETIC_DEMO_SOURCE",
     "PersistenceUnavailable", "PostgresAccessAuditStore",
     "PostgresContext", "PostgresEncounterStore", "PostgresFeedbackStore",
     "PostgresMembershipStore", "PostgresServices",

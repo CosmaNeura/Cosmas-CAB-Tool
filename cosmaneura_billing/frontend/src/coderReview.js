@@ -29,7 +29,7 @@ export function reviewableCoderView(engine) {
     && Array.isArray(engine.completeness.results),
   );
   const permittedSuppression = (row) => (
-    row?.status === "rejected"
+    (row?.status === "rejected" || (engine.degraded && row?.status === "held"))
     && validKindAndCode(row)
     && clean(row.why)
     && !hasReviewEvidence(row)
