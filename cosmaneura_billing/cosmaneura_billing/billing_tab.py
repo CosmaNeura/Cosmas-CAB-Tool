@@ -15,20 +15,18 @@ That is what makes the promise made to customers true.
 
 Two rules are enforced here rather than assumed:
 
-* **A billable candidate never renders without at least one evidence span.** A
-  suggested or held code whose quotes were stripped by the evidence verifier is
-  dropped from the view, not shown bare: if a reviewer can act on a code, they
-  can read the words behind it.
+* **A code never renders without at least one exactly anchored evidence span.**
+  The pipeline's verifier intentionally tolerates harmless case and whitespace
+  differences, but the provider surface also needs a concrete character range
+  to highlight. A code whose verified quote cannot be located exactly in its
+  declared source is therefore dropped from this view, not shown bare.
 * **Anything not suggested carries a reason.**
 
-  Those two rules meet on removed codes, and the resolution is deliberate. A
-  code *rejected as contradicted* has no supporting evidence by definition —
-  the demo encounter's family-history code is rejected precisely because the
-  patient denied the history. Requiring a supporting span there would delete
-  the single most useful line in the view ("we considered this and here is why
-  not"), which is what makes the surface auditable at all. So removed codes are
-  admitted on their **reason** instead, and a removed code with neither evidence
-  nor a reason is still dropped.
+  Removed codes still need both their reason and an anchored documentation span.
+  A rejection rationale alone is not source evidence. For example, a rejected
+  family-history code is visible only when the patient's denial is attached as
+  exact decision evidence; otherwise the surface suppresses the code rather
+  than rendering an unlocatable assertion.
 
 On confidence: the contract sketch in the requirements synthesis includes a
 numeric ``confidence``. This engine is rule-based and produces no calibrated
@@ -42,7 +40,9 @@ import re
 from typing import Any, Optional
 
 from .completeness import applicable_rulepack, check_note
-from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
+from .schemas import (
+    BillingResult, CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle,
+)
 
 # Ordering key for coverage-aware ranking. Lead with what is documented and
 # likely to be paid; never lead with a code the payer is likely to reject.
@@ -66,23 +66,39 @@ _STOPWORDS = frozenset({
 })
 
 
-def _spans(s: CodeSuggestion, bundle: VisitBundle) -> list[dict[str, Any]]:
-    """Evidence spans with a character offset, for highlighting in the note."""
+def _anchored_evidence(
+    s: CodeSuggestion, bundle: VisitBundle,
+) -> list[tuple[Evidence, dict[str, Any]]]:
+    """Pair each retained evidence object with its exact source location.
+
+    Upstream verification can accept normalized case, whitespace, punctuation,
+    or ellipsis differences. Those are useful for the coding guardrail, but do
+    not provide a safe offset for a provider UI. Exact source slices are the
+    stricter rendering boundary. Keeping the evidence object paired with its
+    span also prevents a filtered item from shifting MDM rationale attribution.
+    """
     sources = {
         "signed_note": bundle.signed_note,
         "transcript": bundle.transcript,
         "intake_text": bundle.intake_text,
     }
-    out = []
+    out: list[tuple[Evidence, dict[str, Any]]] = []
     for ev in s.evidence:
         text = sources.get(ev.source, "")
         idx = text.find(ev.quote) if text and ev.quote else -1
-        out.append({
+        if idx < 0:
+            continue
+        out.append((ev, {
             "source": ev.source,
             "text": ev.quote,
-            "loc": {"start": idx, "end": idx + len(ev.quote)} if idx >= 0 else None,
-        })
+            "loc": {"start": idx, "end": idx + len(ev.quote)},
+        }))
     return out
+
+
+def _spans(s: CodeSuggestion, bundle: VisitBundle) -> list[dict[str, Any]]:
+    """Return only evidence spans with exact, highlightable locations."""
+    return [span for _, span in _anchored_evidence(s, bundle)]
 
 
 def _note_term(label: str) -> set[str]:
@@ -116,16 +132,17 @@ def _link_plan_items(s: CodeSuggestion, items: list[str]) -> list[str]:
     return [item for item in items if terms & _note_term(item)]
 
 
-def _renderable(s: CodeSuggestion) -> bool:
+def _renderable(s: CodeSuggestion, bundle: VisitBundle) -> bool:
     """May this code be shown?
 
-    Suggested and held codes are actionable, so they need a supporting span.
-    Removed codes are shown for transparency and are admitted on their reason —
-    a contradicted code has no supporting evidence by construction.
+    Every visible code needs an exact source anchor. Held and removed codes also
+    need an explanation so the surface never presents an unexplained decision.
     """
-    if s.disposition == Disposition.REJECTED:
-        return bool(s.rationale or s.has_evidence)
-    return s.has_evidence
+    if not _spans(s, bundle):
+        return False
+    if s.disposition != Disposition.CAPTURED:
+        return bool(s.rationale)
+    return True
 
 
 def _candidate(
@@ -223,8 +240,16 @@ def build_billing_tab_view(
 
     # Every code the pipeline considered, filtered by what may be shown.
     considered = list(card.captured_codes) + list(card.declined_codes)
-    renderable = [s for s in considered if _renderable(s)]
-    dropped = [s for s in considered if not _renderable(s)]
+    renderable = [s for s in considered if _renderable(s, bundle)]
+    withheld_without_evidence = sum(
+        1 for suggestion in considered if not _spans(suggestion, bundle)
+    )
+    withheld_without_reason = sum(
+        1 for suggestion in considered
+        if _spans(suggestion, bundle)
+        and suggestion.disposition != Disposition.CAPTURED
+        and not suggestion.rationale
+    )
 
     def bucket(
         kind_set: set[CodeKind], *, preferred_code: Optional[str] = None,
@@ -258,7 +283,10 @@ def build_billing_tab_view(
         # Codes the pipeline considered but that cannot be rendered because their
         # evidence did not verify. Surfaced as a count so the view is honest
         # about what it is not showing, without showing unsupported codes.
-        "withheld_without_evidence": len(dropped),
+        "withheld_without_evidence": withheld_without_evidence,
+        # Evidence-backed held/removed codes still require an auditable reason.
+        # Keep this distinct so the UI never misstates why a row was suppressed.
+        "withheld_without_reason": withheld_without_reason,
         "copy_all": " ".join(
             c["copy_text"] for c in cpt + icd if c["status"] == "suggested"),
         **result.inference,
@@ -269,9 +297,10 @@ def build_billing_tab_view(
 
 
 def _em_block(card, ws, bundle: VisitBundle) -> Optional[dict[str, Any]]:
-    em = next((s for s in card.captured_codes if s.kind == CodeKind.EM), None)
-    held = next((s for s in card.declined_codes if s.kind == CodeKind.EM), None)
-    s = em or held
+    considered = list(card.captured_codes) + list(card.declined_codes)
+    s = next((candidate for candidate in considered
+              if candidate.kind == CodeKind.EM
+              and _renderable(candidate, bundle)), None)
     if s is None:
         return None
 
@@ -316,8 +345,7 @@ def _element_span(
     wanted = {"risk": "risk", "problems": "problem"}.get(element)
     if not wanted:
         return None
-    spans = _spans(s, bundle)
-    for ev, span in zip(s.evidence, spans):
+    for ev, span in _anchored_evidence(s, bundle):
         if wanted in (ev.rationale or "").lower():
             return span
     return None

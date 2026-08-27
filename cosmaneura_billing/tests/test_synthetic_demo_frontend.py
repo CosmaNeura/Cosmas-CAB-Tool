@@ -171,7 +171,16 @@ def test_provider_review_uses_rich_contract_and_rejects_stale_cross_encounter_re
     assert "clinical_note_modified !== false" in BILLING
     assert "!isSyntheticDemoEncounter(review)" in BILLING
     assert "review.dataClass !== encounter.dataClass" in BILLING
+    assert "isValidEncounterVersion(detail.encounterVersion)" in BILLING
+    assert "isCurrentEncounterResult(review, encounter)" in BILLING
+    assert "encounter-version-response" in BILLING
     assert "No browser fallback or canned result was substituted." in BILLING
+
+
+def test_provider_review_requires_exact_spans_and_labels_non_suggestions():
+    assert "isLocatedEvidenceSpan(span, encounter)" in BILLING
+    assert 'label={candidate.status === "suggested" ? "Evidence" : "Decision evidence"}' in BILLING
+    assert "candidate.status === \"removed\"" not in BILLING[BILLING.index("function safeCandidates"):BILLING.index("function billingErrorMessage")]
 
 
 def test_provider_copy_and_completeness_wording_never_imply_transmission_or_saved_overrides():

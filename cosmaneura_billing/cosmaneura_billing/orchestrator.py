@@ -200,7 +200,9 @@ class BillingOrchestrator:
         # BEFORE any agent may rely on it; a code whose quotes don't verify
         # loses them and cannot pass the guardrail's evidence gate.
         ver_audit = verify_suggestion_evidence(bundle, suggestions)
-        suggestions, gaps = self.integrity.run(facts, suggestions)
+        suggestions, gaps = self.integrity.run(
+            facts, suggestions, bundle=bundle,
+        )
         # Learned reviewer preferences (per user + practice-wide): may hold a
         # code for review or refine it within its ICD-10 family — never add,
         # promote, or re-level. Runs before the guardrail, which enforces that.

@@ -11,11 +11,44 @@ Three jobs:
 """
 from __future__ import annotations
 
-from ..schemas import CodeSuggestion, Disposition
+from ..schemas import CodeSuggestion, Disposition, Evidence, VisitBundle
+
+
+def _exact_decision_evidence(
+    bundle: VisitBundle | None, quote: object,
+) -> Evidence | None:
+    """Return an exact chart anchor for a removal decision, when one exists.
+
+    Extracted fact quotes are model output, so a rationale alone cannot make
+    one evidence. A provider-visible contradiction may be attached only when
+    the quote is a non-empty, character-for-character substring of an allowed
+    encounter source. This is deliberately stricter than the tolerant coding
+    evidence verifier because the UI must highlight the exact source text.
+    """
+    if bundle is None or not isinstance(quote, str) or not quote.strip():
+        return None
+    for source, text in (
+        ("signed_note", bundle.signed_note),
+        ("transcript", bundle.transcript),
+        ("intake_text", bundle.intake_text),
+    ):
+        if quote in (text or ""):
+            return Evidence(
+                source=source,
+                quote=quote,
+                rationale="documents the contradiction supporting removal",
+            )
+    return None
 
 
 class DocumentationIntegrityAgent:
-    def run(self, facts: dict, suggestions: list[CodeSuggestion]) -> tuple[list[CodeSuggestion], list[str]]:
+    def run(
+        self,
+        facts: dict,
+        suggestions: list[CodeSuggestion],
+        *,
+        bundle: VisitBundle | None = None,
+    ) -> tuple[list[CodeSuggestion], list[str]]:
         gaps: list[str] = []
 
         fam_hx_present = facts.get("family_history_colon_cancer", None)
@@ -29,6 +62,15 @@ class DocumentationIntegrityAgent:
                 s.rationale = ("Patient explicitly denied this family history "
                                f"(\"{facts.get('family_history_quote', '')}\"). "
                                "Coding it would be unsupported.")
+                decision_evidence = _exact_decision_evidence(
+                    bundle, facts.get("family_history_quote"),
+                )
+                if decision_evidence is not None and not any(
+                    ev.source == decision_evidence.source
+                    and ev.quote == decision_evidence.quote
+                    for ev in s.evidence
+                ):
+                    s.evidence.append(decision_evidence)
                 continue
 
             # (3) documented-but-unaddressed finding (obesity from BMI in vitals)
