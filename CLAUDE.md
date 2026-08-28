@@ -84,6 +84,11 @@ pass and the customer asked for it.
     payer-facing standard transaction or EHR write requires a new approved architecture
     decision and just-in-time identifier collection where applicable. See
     `cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+    Provider credential/licensure status is unverified informational metadata only;
+    it never grants or blocks signup, trial, billing, continued use, entitlement,
+    CAB capability, or real-PHI access. Practices authorize workforce membership
+    and roles, while Core enforces the independent identity, legal, subscription,
+    tenant, consent, and rollout controls.
 12. **CPT descriptors are licensed.** Reference codes by number with short
     generic labels. Official descriptors load only from the practice's own AMA
     license (`AMA_*` env vars or `CPT_DATA_DIR`). Never commit descriptor files,
