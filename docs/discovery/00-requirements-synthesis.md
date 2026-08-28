@@ -26,6 +26,15 @@ form.
 > agreement/BAA is verified to cover that service and US data zone and the
 > deployment, logging, retention, and access-control acceptance checks pass.
 
+> **Product-scope amendment (Aug 27):** this document preserves what users
+> requested; it does not place every request on the current roadmap. CAB remains
+> advisory billing intelligence. 837P/claim submission, clearinghouse
+> enrollment, and Athena/EHR writeback are not on the roadmap. Public onboarding
+> is NPI-free. F7 is retired, and F9c ends in a human-reviewed manual handoff
+> unless a future architecture decision separately approves an EHR write. The
+> default-off Card Chase outreach workflow remains governed by its existing
+> consent, direct-contract, authorization, and operational-activation gates.
+
 ## Preflight reality check (Aug 17)
 
 §0 below asserts three things. Verified state:
@@ -234,8 +243,8 @@ sequence.
 
 **Demand:** Christa (8/6) pastes note into HPI then hand-cuts ROS/assessment/plan
 into sections. Maura (7/24): copy-paste into chief complaint/subjective,
-assessments added separately. Full auto-populate is gated on Athena sandbox (F7);
-this interim kills most of the manual chopping today.
+assessments added separately. Athena auto-populate was later dropped from the
+CAB roadmap (F7); this manual copy/export path is the supported boundary.
 
 **Behavioral spec:** deterministic splitter over the generated note → labeled
 blocks matching Athena's paste targets (Chief Complaint, HPI/Subjective, ROS,
@@ -268,10 +277,12 @@ review worry; mechanics still deferred as of 8/13; (3) surface
 and structured reason codes — the timer is the instrument for the
 net-coder-minutes metric.
 
-### F7. Athena Note Auto-Populate — *gated: sandbox → Marketplace*
+### F7. Athena Note Auto-Populate — *retired from the CAB roadmap*
 
-**Gate:** encounter-section write API is unverified. No build beyond F4 until
-sandbox access exists. All protocol code in `athena_client.py`.
+**Owner decision (Aug 27):** do not build or enable encounter-section, note,
+insurance, or claim writes. F4 manual copy/export remains. Any future EHR-write
+proposal requires a separately approved architecture decision; sandbox access
+alone does not reopen this scope.
 
 ### F8. Longitudinal Lab Tracker — *step-0, gated (PHI + Athena read)*
 
@@ -285,9 +296,11 @@ the applicable BAAs/service approvals + deployment layer + Athena read scope.
 **Demand:** Grace (8/6): *"I would be ecstatic about the cards… It's my
 mantra."* **The bottleneck is patient submission, not OCR performance.**
 300–500 claims held monthly. F9a missing-insurance detector; F9b staff-approved
-outreach sequence (never contains card data); F9c completion loop closing on
-verified write. Aug 13 added: card images must land in the right Athena
-*encounter*; team estimates automation removes 80–90% of procurement tasks.
+outreach sequence (never contains card data); F9c completion loop closes on a
+human-reviewed manual handoff and recorded disposition, not an Athena write.
+Aug 13 requested that card images land in the right Athena *encounter*, but the
+Aug 27 owner decision removes that write from the current roadmap; team
+estimated automation could remove 80–90% of procurement tasks.
 **This workstream lives in the CardCapture / athenaNet repo, not the engine
 repo.**
 

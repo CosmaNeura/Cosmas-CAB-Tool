@@ -112,6 +112,16 @@ deployed independently.
 
 ## Architecture and workflow
 
+- CAB is advisory billing intelligence. It does not emit 837P, submit claims,
+  enroll practices with clearinghouses or payers, or write billing
+  recommendations to an EHR, and it does not require NPI during public signup,
+  onboarding, Checkout, entitlement, or ordinary use. Treat NPI as
+  purpose-bound public registry data, never identity or credential proof. The
+  separately governed, default-off Card Chase workflow retains its messaging
+  gates and is not an EHR/claim-write exception. A future payer-facing
+  transaction or EHR write requires a new approved architecture decision and
+  just-in-time identifier collection where applicable. See
+  `cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
 - LLMs extract facts; deterministic Python adjudicates. New checks land on the
   deterministic side with tests. `prove_no_upcode.py` and
   `tests/test_guardrail_fuzz.py` remain green.

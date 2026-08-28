@@ -1,5 +1,10 @@
 # State-Level Health Data Sources for the NH Billing Engine (July 2026)
 
+> Scope note (2026-08-27): references to NPI-bearing public datasets below are
+> for benchmarks and research. They do not authorize NPI-gated onboarding,
+> provider authentication/credentialing by NPI, 837P generation, or claim
+> submission. See `NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+
 Ranked by value × downloadability today. Item 1 (PSPS carrier slice) is already
 integrated in the engine (data/psps_denial_rates_nh_2024.csv.gz).
 
@@ -51,8 +56,10 @@ Filtering PSPS 2024 to carrier 14312 yields NH-specific per-code denial rates
   https://download.cms.gov/nppes/NPI_Files.html
 - PECOS: enrollment type, specialty, reassignments, monthly, CSV+API. NPPES:
   all NPIs, taxonomy, monthly full + weekly increments.
-- **Plug-in:** provider master + pre-claim enrollment validation; PECOS is
-  enrollment truth, NPPES addresses are stale.
+- **Future plug-in, not current onboarding:** public provider-master research
+  and, only after a separately approved payer integration, pre-transaction
+  enrollment validation. PECOS is enrollment evidence; NPPES is not
+  credential proof and its addresses may be stale.
 
 ### 6. CMS Market Saturation & Utilization (State-County)
 - https://data.cms.gov/summary-statistics-on-use-and-payments/program-integrity-market-saturation-by-type-of-service/market-saturation-utilization-state-county
@@ -68,9 +75,10 @@ Filtering PSPS 2024 to carrier 14312 yields NH-specific per-code denial rates
 
 ### 8. Medicare Physician & Other Practitioners — by Provider and Service (NPI × HCPCS)
 - https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider-and-service
-- Per-clinician utilization/allowed/paid per code, API-filterable to NH or the
-  pilot's NPIs. **Plug-in:** per-physician E/M mix outlier scoring (we already
-  use the geography cut; this is the per-provider cut).
+- Per-clinician utilization/allowed/paid per code, API-filterable to NH or an
+  optionally selected public provider record after benchmark opt-in. Public
+  signup remains NPI-free. **Plug-in:** per-physician E/M mix outlier scoring
+  (we already use the geography cut; this is the per-provider cut).
 
 ## Tier 2 — Low-friction request (days), NH-specific
 
@@ -104,7 +112,9 @@ Filtering PSPS 2024 to carrier 14312 yields NH-specific per-code denial rates
   Serif Health, Turquoise ($).
 - Negotiated in-network rates for every CPT for every NH provider NPI, per
   plan, monthly. Multi-TB — realistic path is targeted extraction of the
-  pilot's NPIs for their top ~200 codes, or paying an aggregator.
+  records an authorized user optionally selects during benchmark setup for
+  their top ~200 codes, or paying an aggregator. Do not collect NPI during
+  signup or use it to authorize the account.
 - **Plug-in:** payer-specific expected allowed per CPT per contract — the core
   of underpayment detection. Engineering cost is the real price.
 

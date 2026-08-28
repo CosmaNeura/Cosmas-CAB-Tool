@@ -73,11 +73,22 @@ pass and the customer asked for it.
 10. **Direct-contract hard gate.** Any pathway that could charge or dun a patient
     checks the direct-contract flag first and hard-stops on match. Unknown or
     missing list fails closed.
-11. **CPT descriptors are licensed.** Reference codes by number with short
+11. **Provider identity and transaction boundary.** CAB is advisory billing
+    intelligence, not a claim submitter. It does not emit 837P, enroll with a
+    clearinghouse or payer, or write billing recommendations back to an EHR,
+    and it does not require NPI during signup, onboarding, Checkout,
+    entitlement, or ordinary tool use. NPI is public registry data—not
+    authentication, licensure, credential proof, or tenant authority. The
+    separately governed, default-off Card Chase outreach workflow is not an
+    EHR/claim-write exception and retains all existing messaging gates. A future
+    payer-facing standard transaction or EHR write requires a new approved architecture
+    decision and just-in-time identifier collection where applicable. See
+    `cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+12. **CPT descriptors are licensed.** Reference codes by number with short
     generic labels. Official descriptors load only from the practice's own AMA
     license (`AMA_*` env vars or `CPT_DATA_DIR`). Never commit descriptor files,
     the downloaded ZIP, or AMA credentials.
-12. **Never commit secrets.** `.env` stays in `.gitignore`.
+13. **Never commit secrets.** `.env` stays in `.gitignore`.
 
 ## Definition of done
 
