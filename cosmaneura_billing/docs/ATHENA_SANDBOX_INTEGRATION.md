@@ -1,5 +1,11 @@
 # Athena sandbox integration plan
 
+> **Scope amendment, 2026-08-27:** CAB's Athena boundary is read/import only.
+> EHR, insurance, note-section, and claim writes are not on the roadmap. The
+> historical deferred-write design is withdrawn; any future write capability
+> requires a new approved architecture decision. See
+> `NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+
 Status: the mock adapter now imports its four synthetic encounters through a
 durable, source-agnostic receipt/checkpoint boundary. The dedicated import
 database role and dormant job wiring are implemented but default off. No Athena
@@ -186,22 +192,14 @@ record identifiers.
 5. The first live acceptance uses only Athena-provided synthetic records and
    proves exact role, network, cursor, idempotency, RLS, and log boundaries.
 
-## Write path (deferred)
+## Write path (not on the roadmap)
 
-Do not begin with chart, insurance, note-section, or claim writes.  A future
-write flow requires a separately approved design:
-
-```text
-human-reviewed command
-  -> durable outbox + idempotency key
-  -> Athena adapter write
-  -> vendor read-back verification + retained vendor write ID
-  -> local state transition
-```
-
-No local state may claim success before read-back verification.  Encounter-note
-section writes remain unverified, and the CardCapture/insurance-image flow stays
-in its separate athenaNet workstream.
+Do not build or enable chart, insurance, note-section, or claim writes. The
+earlier deferred-write design is withdrawn. Existing adapter seams and vendor
+scope do not authorize a write, and no local state may imply that CAB updated
+Athena. Any future proposal requires a new approved architecture decision,
+including human authorization, outbox/idempotency, vendor read-back,
+reconciliation, audit, failure, and rollback controls.
 
 ## Parallel demo-data lane
 

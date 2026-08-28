@@ -255,8 +255,10 @@ and a log scanner in CI. Add per-request token/latency accounting to
 
 - **athenaNet adapter** behind `chase.models.CoverageSnapshot` — blocked on sandbox
   access, not on Azure. All protocol knowledge belongs in `athena_client.py`.
-- **CardCapture verify-and-write** — `close_verified(athena_write_id=...)` is the seam;
-  the pipeline lives in the other workstream.
+- **CardCapture verify-and-write — dropped from the roadmap.** The historical
+  `close_verified(athena_write_id=...)` seam does not authorize an Athena write.
+  CAB remains read/import plus human-reviewed advisory output; any EHR write
+  requires a new approved architecture decision.
 - **Real messaging and real PHI** — blocked on the BAA and the deployment layer, which is
   why the default transport is inert.
 
@@ -338,8 +340,16 @@ is a **batch multiplier** — it removes twenty copy-paste cycles, not a wall.
 **837P is dropped from the backlog** (decision, 2026-08-17). Emitting 837P means becoming
 a claim *submitter*: clearinghouse enrollment, payer enrollment, EDI testing, and
 submission liability. MCD already runs Athena → clearinghouse → payer. Building 837P
-bypasses a submission path that works in order to take on risk nobody asked for. Revisit
-only if MCD leaves Athena's submission path.
+bypasses a submission path that works in order to take on risk nobody asked for. If MCD
+later leaves Athena's submission path, that may justify a new proposal but does not reopen
+the roadmap by itself; implementation requires a separately approved architecture decision.
+
+**Public-onboarding consequence (owner decision, 2026-08-27):** CAB does not require or
+collect an NPI during signup, practice onboarding, Checkout, trial activation,
+entitlement, or ordinary advisory use. An NPI is not authentication or credential proof.
+Public NPI-bearing datasets may still support benchmarks, but customer NPI collection is
+deferred to a future approved payer-facing transaction or integration that demonstrably
+requires it. See `cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
 
 **Build CSV.** Roughly a day. It earns its place as three things: the batch path, the
 fallback when an integration is down, and an audit artifact. Source it from
@@ -399,15 +409,13 @@ Two requesters (Christa Aug 6, Maura Jul 24), and it kills most of the manual ch
 *today* without waiting on the Athena sandbox. The one open detail is the exact paste-
 target names (§5 Q6) — build against the labels above and make them configurable.
 
-### 7.5 F7 Athena auto-populate — build the harness, not the integration
+### 7.5 F7 Athena auto-populate — dropped; retain manual copy/export
 
-**Waiting on:** Athena sandbox access. The encounter-section **write** API is unverified;
-repo knowledge covers the insurance write only. Do not promise behaviour against
-unvalidated payload shapes.
-
-**Buildable now:** extend the mock athenaNet harness and put all protocol knowledge in
-`athena_client.py`, so that when the sandbox lands it is credentials plus payload
-validation rather than new architecture.
+**Owner decision, 2026-08-27:** CAB does not write to an EHR. Do not build or
+market encounter-section, insurance, note, or claim writes. Preserve the
+human-reviewed manual copy/export workflow. A future write proposal is new
+scope and requires a separately approved architecture decision; an existing
+adapter seam or sandbox credential is not approval.
 
 ### 7.6 F8 longitudinal lab tracker — contract and fixtures now, real labs gated
 
@@ -433,7 +441,7 @@ list that covers calls. Removing it would remove that.
 If this is ever revisited: `chase.models.STAFF_TASK` / `SYSTEM_SENDS` are the switch and
 the state machine does not change. Counsel review and a recorded-consent source first.
 
-### 7.8 Athena integration — read first, write later
+### 7.8 Athena integration — read/import only; write dropped
 
 **Waiting on:** sandbox access. Start the application now (§0 step 0); it is the only
 long-lead item and it blocks nothing while pending.
@@ -447,10 +455,10 @@ Pull slips, claims and denial outcomes and you get three things:
 3. **The only thing that would populate the `denial_coverage` trigger** in
    `chase/detector.py`. That trigger is built and nothing feeds it today.
 
-**Write is the harder ask, and two facts argue against dating the pilot on it:** the
-encounter-section write API is unverified (repo knowledge covers the insurance write
-only), and Grace reported Athena is *worse than Tebra* at claim modification — if the API
-inherits that limitation you may read fine and not usefully write. Prove read first.
+**Write is not on the roadmap** (owner decision, 2026-08-27). The
+encounter-section, insurance, note, and claim write paths remain disabled and
+must not be inferred from the read adapter. Any future write proposal requires
+a new approved architecture decision.
 
 All protocol knowledge goes in `athena_client.py`, mock-first, per `/CLAUDE.md`. The
 adapter target for coverage state is `chase.models.CoverageSnapshot`.

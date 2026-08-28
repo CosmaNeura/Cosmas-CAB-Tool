@@ -7,6 +7,13 @@
 > [current synthetic-only evidence record](docs/deployment/2026-08-19-demo-release-candidate-evidence.md).
 > The pilot remains private with inference, scheduling, and messaging disabled;
 > real-PHI readiness has not been established.
+>
+> **Current product boundary (2026-08-27):** the maintained CAB application is
+> advisory billing intelligence. It does not generate or transmit 837P, submit
+> claims, enroll with a clearinghouse or payer, or write to an EHR. Public
+> signup and onboarding do not request or require NPI. The separately governed,
+> default-off Card Chase outreach workflow retains its existing gates. See
+> [`NPI_AND_CLAIM_SUBMISSION_SCOPE.md`](cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md).
 
 Increasing doctor capacity and patient care quality. We enrich physician practices and enhance patient telehealth experience. Fluency Med is creating a healthier, more efficient future in healthcare.
 

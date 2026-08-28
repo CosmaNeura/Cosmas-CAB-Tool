@@ -1,5 +1,11 @@
 # Handoff — platform stabilization (for Codex)
 
+> **Historical snapshot.** This handoff is superseded by
+> `HANDOFF_CODEX_2026-08-17.md` and the 2026-08-27 product boundary in
+> `cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md`. CAB remains
+> advisory: 837P generation, claim submission, and clearinghouse enrollment are
+> not on the roadmap, and public signup/onboarding does not require NPI.
+
 **Repo:** `CosmaNeura/Cosmas-CAB-Tool`
 **Working folder:** `/home/user/Cosmas-CAB-Tool` → the tool lives in **`cosmaneura_billing/`**
 (the repo root still holds the June 2023 FluencyMed prototype; see §7)

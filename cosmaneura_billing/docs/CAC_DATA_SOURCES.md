@@ -1,5 +1,10 @@
 # Public Data Sources & Open-Source Tooling for the CosmaNeura CAC/Billing Engine
 
+> Scope note (2026-08-27): datasets and X12 tooling below support research,
+> validation, and read/import analysis only. They do not authorize 837P
+> generation, claim submission, clearinghouse enrollment, EHR writeback, or
+> NPI-gated onboarding. See `NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+
 Web survey, July 2026. Items ranked by practical value to a rule-based outpatient
 E/M + ICD-10-CM + edits engine for a small physician group. Module tags:
 **KB** (knowledge base), **CA** (coding agent/NLP), **VAL** (validation/benchmarks),
@@ -183,10 +188,10 @@ TEST — validating transcript-noise robustness of evidence extraction.
 Synthetic Medicare claims (2008–2010): beneficiary, carrier (Part B professional
 claims with HCPCS/ICD-9), inpatient/outpatient. Free public download without
 ordinary beneficiary-privacy restrictions, but old (ICD-9 era) and statistically
-distorted. **Plugs in:** TEST — volume/load
-testing of the claims-side plumbing (837 generation, edit throughput), not
-clinical realism, modern coding truth, or clinical-label training. Follow the
-CMS public-use disclaimer linked by the source page.
+distorted. **Plugs in:** TEST — volume/load testing of claims-data import and
+deterministic edit throughput, not 837 generation, claim submission, clinical
+realism, modern coding truth, or clinical-label training. Follow the CMS
+public-use disclaimer linked by the source page.
 
 ## Tier 5 — Claims plumbing & denial intelligence
 

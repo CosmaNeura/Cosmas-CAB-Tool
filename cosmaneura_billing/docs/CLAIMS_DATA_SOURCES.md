@@ -1,5 +1,10 @@
 # CPT-Bearing Claims Datasets & Tooling — Research Report (July 2026)
 
+> Scope note (2026-08-27): references to NPI-bearing public datasets below are
+> for benchmarks and research. They do not authorize NPI-gated onboarding,
+> provider authentication/credentialing by NPI, 837P generation, or claim
+> submission. See `NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+
 **Bottom line first:** True claim-level adjudicated data with denial outcomes
 (CARC/RARC) is essentially **not publicly available anywhere** — payers treat
 remittance data as proprietary, and APCDs deliberately exclude denied claims.

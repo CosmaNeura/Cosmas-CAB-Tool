@@ -7,6 +7,17 @@ the rest of the platform. It is built on
 top of Homen's **FluencyMed** prototype and consumes that prototype's existing
 outputs directly.
 
+## Product boundary
+
+CAB provides evidence-linked, human-reviewed billing intelligence. It does not
+generate or transmit 837P, submit claims, enroll with a clearinghouse or payer,
+or write to an EHR. Public signup and onboarding do not request or require NPI;
+NPI is not identity, licensure, credential, or tenant proof. The separately
+governed, default-off Card Chase outreach workflow remains subject to its
+existing consent, direct-contract, authorization, and activation gates and does
+not transmit claims. See
+[`NPI_AND_CLAIM_SUBMISSION_SCOPE.md`](docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md).
+
 ## Run it
 
 No API key and no network needed — the demo runs on a deterministic offline
