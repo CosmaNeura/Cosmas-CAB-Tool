@@ -18,6 +18,12 @@ existing consent, direct-contract, authorization, and activation gates and does
 not transmit claims. See
 [`NPI_AND_CLAIM_SUBMISSION_SCOPE.md`](docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md).
 
+Provider credential/licensure status is unverified informational metadata only;
+it never grants or blocks signup, trial, billing, continued use, entitlement,
+CAB capability, or real-PHI access. Practices authorize workforce membership
+and roles. Core independently enforces identity, membership/role, legal,
+subscription, tenant, consent, and rollout controls.
+
 ## Run it
 
 No API key and no network needed — the demo runs on a deterministic offline

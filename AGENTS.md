@@ -122,6 +122,11 @@ deployed independently.
   transaction or EHR write requires a new approved architecture decision and
   just-in-time identifier collection where applicable. See
   `cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md`.
+- Provider credential/licensure status is informational only and must not gate
+  signup, trial, billing, continued use, entitlement, CAB access, or real-PHI
+  access. The practice authorizes workforce membership and roles; Core enforces
+  identity, membership/role, legal, subscription, tenant, consent, and rollout
+  controls. CAB must not claim Cosmaneura verified professional status.
 - LLMs extract facts; deterministic Python adjudicates. New checks land on the
   deterministic side with tests. `prove_no_upcode.py` and
   `tests/test_guardrail_fuzz.py` remain green.

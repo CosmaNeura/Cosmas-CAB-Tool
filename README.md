@@ -14,6 +14,10 @@
 > signup and onboarding do not request or require NPI. The separately governed,
 > default-off Card Chase outreach workflow retains its existing gates. See
 > [`NPI_AND_CLAIM_SUBMISSION_SCOPE.md`](cosmaneura_billing/docs/NPI_AND_CLAIM_SUBMISSION_SCOPE.md).
+> Provider credential/licensure status is informational only and has no effect on
+> signup, trial, billing, continued use, entitlement, CAB capability, or real-PHI
+> access. Practices authorize workforce membership and roles; CosmaNeura does not
+> claim to verify professional status as a condition of use.
 
 Increasing doctor capacity and patient care quality. We enrich physician practices and enhance patient telehealth experience. Fluency Med is creating a healthier, more efficient future in healthcare.
 
