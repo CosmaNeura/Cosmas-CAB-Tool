@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ShieldCheck, Stethoscope, ClipboardCheck, CreditCard, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
+import { isSyntheticDemoEncounter } from "./providerBilling.js";
 
 function Pill({ tone, title, children }) {
   return (
@@ -49,6 +50,30 @@ function BrandedMessage({ children }) {
   );
 }
 
+function SafetyBanner() {
+  return (
+    <section
+      aria-label="Synthetic pilot safety status"
+      className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-violet-950 shadow-sm"
+    >
+      <div className="flex items-start gap-3">
+        <ShieldCheck size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-semibold">Synthetic CAB demo boundary</p>
+          <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs leading-relaxed">
+            <li>Synthetic data</li>
+            <li>Decision support only</li>
+            <li>Human review required</li>
+            <li>No EHR or claim transmission</li>
+            <li>Patient outreach disabled by demo policy</li>
+          </ul>
+          <p className="mt-1 text-xs text-violet-800">Only server-verified, read-only synthetic encounters are listed in this workspace.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
@@ -60,6 +85,14 @@ export default function App() {
   const [encounters, setEncounters] = useState([]);
   const [encountersLoaded, setEncountersLoaded] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [encounterStatuses, setEncounterStatuses] = useState({});
+
+  const updateEncounterStatus = useCallback((encounterId, patch) => {
+    setEncounterStatuses((current) => ({
+      ...current,
+      [encounterId]: { ...(current[encounterId] || {}), ...patch },
+    }));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -76,11 +109,18 @@ export default function App() {
           session.views.includes(current) ? current : session.defaultView
         ));
         if (session.views.includes("provider") || session.views.includes("coder")) {
-          const encs = await api("/api/encounters");
+          const available = await api("/api/encounters");
+          const encs = available.filter(isSyntheticDemoEncounter);
           setEncounters(encs);
           setSelected((current) => (
-            encs.some((e) => e.id === current) ? current : (encs[0]?.id || null)
+            encs.some((e) => e.id === current) ? current : null
           ));
+          setEncounterStatuses(Object.fromEntries(encs.map((encounter) => [encounter.id, {
+            reviewState: "Not reviewed this session",
+            completenessState: "Not checked",
+            coderReview: "Required (demo policy)",
+            processingStatus: "Ready to open",
+          }])));
         }
       } catch (error) {
         if (error?.status === 401 || error?.status === 403) {
@@ -95,8 +135,6 @@ export default function App() {
       }
     })();
   }, []);
-
-  const encounterView = view === "provider" || view === "coder";
 
   // UI SEAM (P2): Container Apps owns the Entra session. Keep this state
   // deliberately minimal so the separate UI work can replace its presentation
@@ -139,40 +177,41 @@ export default function App() {
               <Pill tone="bg-emerald-50 text-emerald-700 ring-emerald-200"
                     title={health.cptStatus}>
                 <Wifi size={12} className="mr-1" />
-                live engine · NCCI {health.ncciLoaded ? "✓" : "–"} · coverage {health.coverageLoaded ? "✓" : "–"} ·
-                CPT {health.cptDescriptors > 0 ? "✓" : "–"}
+                synthetic pilot service connected
               </Pill>
             )}
           </div>
         </header>
 
+        <SafetyBanner />
+
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div
+          <nav
             className="flex items-center gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-slate-200"
-            role="tablist"
             aria-label="Workspace"
           >
             {views.includes("provider") && (
-              <button type="button" role="tab" aria-selected={view === "provider"} className={tab(view === "provider")} onClick={() => setView("provider")}>
+              <button type="button" aria-current={view === "provider" ? "page" : undefined} className={tab(view === "provider")} onClick={() => setView("provider")}>
                 <Stethoscope size={15} />Provider
               </button>
             )}
             {views.includes("coder") && (
-              <button type="button" role="tab" aria-selected={view === "coder"} className={tab(view === "coder")} onClick={() => setView("coder")}>
+              <button type="button" aria-current={view === "coder" ? "page" : undefined} className={tab(view === "coder")} onClick={() => setView("coder")}>
                 <ClipboardCheck size={15} />Coder review
               </button>
             )}
             {views.includes("chase") && (
-              <button type="button" role="tab" aria-selected={view === "chase"} className={tab(view === "chase")} onClick={() => setView("chase")}>
+              <button type="button" aria-current={view === "chase" ? "page" : undefined} className={tab(view === "chase")} onClick={() => setView("chase")}>
                 <CreditCard size={15} />Card chase
               </button>
             )}
-          </div>
-          {encounterView && encounters.length > 0 && (
+          </nav>
+          {view === "coder" && encounters.length > 0 && (
             <label className="flex items-center gap-2 text-sm text-slate-600">
               Encounter
               <select value={selected || ""} onChange={(e) => setSelected(e.target.value)}
                       className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm shadow-sm">
+                <option value="">Choose an encounter</option>
                 {encounters.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.id}{e.submittedEm ? ` · submitted ${e.submittedEm}` : ""}
@@ -197,7 +236,7 @@ export default function App() {
           />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>
-        ) : !selected ? (
+        ) : encounters.length === 0 ? (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-sm">
             <p className="text-sm font-medium">No synthetic demo encounter is loaded</p>
             <p className="mt-1 text-sm text-amber-800">
@@ -206,14 +245,26 @@ export default function App() {
             </p>
           </div>
         ) : view === "provider" ? (
-          <BillingReview encounterId={selected} live={Boolean(health)} />
+          <BillingReview
+            encounters={encounters}
+            selectedId={selected}
+            live={Boolean(health)}
+            statuses={encounterStatuses}
+            onSelect={setSelected}
+            onStatusChange={updateEncounterStatus}
+          />
+        ) : !selected ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center">
+            <p className="font-medium text-slate-900">Choose an encounter for coder review</p>
+            <p className="mt-1 text-sm text-slate-600">No recommendation is accepted until a coder makes an explicit decision.</p>
+          </div>
         ) : (
           <CoderReview encounterId={selected} live={Boolean(health)} />
         )}
 
-        <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-400">
+        <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
           <Info size={12} />
-          Decision support only — a certified coder or the provider approves every claim.
+          Prepared billing guidance only — no EHR, Athena, clearinghouse, payer, or patient transmission occurred.
         </p>
       </div>
     </div>
