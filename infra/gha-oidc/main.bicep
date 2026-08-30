@@ -79,6 +79,10 @@ resource pilotEnvironmentCredential 'Microsoft.ManagedIdentity/userAssignedIdent
     issuer: githubOidcIssuer
     subject: pilotEnvironmentSubject
   }
+  // Azure rejects concurrent federated-credential writes beneath one UAMI.
+  dependsOn: [
+    mainBranchCredential
+  ]
 }
 
 resource registryPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
