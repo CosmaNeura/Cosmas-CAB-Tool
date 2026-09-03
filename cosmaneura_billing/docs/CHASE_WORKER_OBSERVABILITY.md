@@ -131,5 +131,7 @@ available as a second, log-independent signal (rule #7).
 - Confirm the scheduled job cadence and set the heartbeat window accordingly.
 - Wire rules #1–#7 as Azure Monitor alerts against the pilot workspace.
 - Decide `permanent_failures` and `accepted=0`-while-activated thresholds after
-  the first week of measured data (there is no baseline yet — see the baseline
-  capture surface, `cosmaneura_billing/chase/baseline.py`).
+  the first week of measured data (there is no baseline yet — compare measured
+  metrics against the practice's captured numbers via
+  `cosmaneura_billing/chase/metrics.py::baseline_comparison`; a dedicated
+  baseline-capture surface is proposed separately in the B5 work).
