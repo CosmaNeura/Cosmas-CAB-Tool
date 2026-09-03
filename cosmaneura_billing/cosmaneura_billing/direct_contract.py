@@ -138,7 +138,6 @@ class DirectContractList:
         self._load_error: str = ""
         self._source_fingerprint: str = ""
         self._source_label: str = ""
-        self._source_cache_key: tuple | None = None
         self._loaded_signature: tuple[int, int, int, int] | None = None
         self._lock = RLock()
 
@@ -202,13 +201,11 @@ class DirectContractList:
             snapshot = self._source.load()  # type: ignore[union-attr]
         except Exception:
             self._loaded = None
-            self._source_cache_key = None
             self._source_fingerprint = ""
             self._load_error = "source_error"
             return
         if not isinstance(snapshot, DirectContractSnapshot) or snapshot.refs is None:
             self._loaded = None
-            self._source_cache_key = None
             self._source_fingerprint = ""
             self._load_error = (
                 getattr(snapshot, "load_error", "") or "unavailable"
@@ -217,19 +214,14 @@ class DirectContractList:
             if snapshot is not None:
                 self._source_label = self._snapshot_label(snapshot)
             return
-        cache_key = (
-            "source", snapshot.source_name, snapshot.version,
-            snapshot.content_signature,
-        )
-        if (
-            not self._fingerprint_key
-            and self._source_cache_key == cache_key
-            and self._loaded is not None
-        ):
-            return
+        # Always rebuild from the freshly loaded snapshot. We deliberately do
+        # NOT skip on a source-supplied content signature: an external source
+        # could return a stale/empty signature with changed refs, which would
+        # freeze the roster and fail OPEN for a newly-added direct-contract
+        # patient. A source that wants to avoid repeated work caches inside its
+        # own load() (see CallableDirectContractSource).
         self._loaded = {self._normalize(r) for r in snapshot.refs} - {""}
         self._load_error = ""
-        self._source_cache_key = cache_key
         self._source_label = self._snapshot_label(snapshot)
         self._source_fingerprint = self._fingerprint_source({
             "kind": "source",

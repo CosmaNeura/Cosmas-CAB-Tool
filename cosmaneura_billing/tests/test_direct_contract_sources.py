@@ -197,6 +197,22 @@ def test_refs_and_source_are_mutually_exclusive():
         DirectContractList(refs=["PAT-1"], source=InMemoryDirectContractSource(["PAT-1"]))
 
 
+def test_source_refs_change_is_reflected_not_stale_cached():
+    # A source that returns changing refs with the default (empty)
+    # content_signature must NOT be cached stale — freezing the roster would
+    # fail OPEN for a patient newly added to the live direct-contract list.
+    state = {"refs": frozenset({"pat-1"})}
+
+    class _LiveSource:
+        def load(self):
+            return DirectContractSnapshot(refs=state["refs"], source_name="live")
+
+    roster = _roster(_LiveSource())
+    assert check_direct_contract("pat-2", roster=roster, now=FIXED_NOW).is_direct_contract is False
+    state["refs"] = frozenset({"pat-1", "pat-2"})
+    assert check_direct_contract("pat-2", roster=roster, now=FIXED_NOW).is_direct_contract is True
+
+
 def test_snapshot_none_refs_is_fail_closed_signal():
     class _Src:
         def load(self):
