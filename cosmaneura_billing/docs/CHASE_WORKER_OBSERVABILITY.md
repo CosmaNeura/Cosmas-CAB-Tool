@@ -75,15 +75,20 @@ ContainerAppConsoleLogs_CL
 | order by TimeGenerated desc
 ```
 
-Heartbeat alert (no successful run in the window):
+Heartbeat alert (no successful run in the window). Count completed runs so the
+query returns a row (`completed == 0`) when the job never ran, crashed before
+emitting, or only produced error statuses — a `max(TimeGenerated)`/`where` form
+returns zero rows in exactly those cases and the alert would never fire. Set the
+Azure Monitor rule to fire when the result count is greater than 0, evaluated
+over one schedule interval plus a margin:
 
 ```kusto
 ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(<one schedule interval + margin>)
 | where Log_s has "chase_worker_run"
 | extend p = parse_json(Log_s)
-| where p.status == "completed"
-| summarize last_ok = max(TimeGenerated)
-| where last_ok < ago(<one schedule interval + margin>)
+| summarize completed = countif(tostring(p.status) == "completed")
+| where completed == 0
 ```
 
 Halt/uncertainty alert:
