@@ -1,0 +1,15 @@
+{
+  "name": "CosmaNeura CAB",
+  "install": "sudo apt-get update -qq && sudo apt-get install -y python-is-python3 && cd cosmaneura_billing && python -m pip install -e \".[dev]\" && cd frontend && npm ci",
+  "terminals": [
+    {
+      "name": "api",
+      "command": "cd cosmaneura_billing && uvicorn cosmaneura_billing.api:app --host 127.0.0.1 --port 8000"
+    },
+    {
+      "name": "frontend",
+      "command": "cd cosmaneura_billing/frontend && npm run dev -- --host 127.0.0.1 --port 5173"
+    }
+  ],
+  "ports": [8000, 5173]
+}
