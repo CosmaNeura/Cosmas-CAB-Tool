@@ -122,16 +122,17 @@ available as a second, log-independent signal (rule #7).
 
 ## Cross-references
 
-- Activation cascade, go/no-go, rollback: `docs/flight-plans/2026-09-03-cardchase-email-only-beta-activation.md`.
-- Rollback + ambiguous-delivery handling: `docs/PILOT_OPERATIONS_RUNBOOK.md`.
-- Worker/scheduler least-privilege split and logging boundary: `docs/ACCESS_CONTROL.md`.
+- Rollback + ambiguous-delivery handling: `cosmaneura_billing/docs/PILOT_OPERATIONS_RUNBOOK.md`.
+- Worker/scheduler least-privilege split and logging boundary: `cosmaneura_billing/docs/ACCESS_CONTROL.md`.
+- The email-only activation cascade, go/no-go, and rollback are covered by the
+  Card Chase email-only Beta activation flight plan (proposed separately under
+  `docs/flight-plans/`).
 
 ## Open items (owner: deployment/platform)
 
 - Confirm the scheduled job cadence and set the heartbeat window accordingly.
 - Wire rules #1–#7 as Azure Monitor alerts against the pilot workspace.
-- Decide `permanent_failures` and `accepted=0`-while-activated thresholds after
-  the first week of measured data (there is no baseline yet — compare measured
-  metrics against the practice's captured numbers via
-  `cosmaneura_billing/chase/metrics.py::baseline_comparison`; a dedicated
-  baseline-capture surface is proposed separately in the B5 work).
+- Decide `permanent_failures` and `accepted=0`-while-activated thresholds from
+  the observed distribution of the `chase_worker_run` counters after the first
+  week of runs — these are worker operational metrics, distinct from the
+  worklist/card baseline used by `chase/metrics.py::baseline_comparison`.
