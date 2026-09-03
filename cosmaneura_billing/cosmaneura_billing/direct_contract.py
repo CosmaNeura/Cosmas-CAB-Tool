@@ -45,6 +45,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Callable, Iterable, Optional
 
+from .direct_contract_sources import DirectContractSnapshot, DirectContractSource
 from .settings import Settings
 
 # Where the practice drops its list. CSV or JSON; one patient reference per row.
@@ -105,9 +106,20 @@ class DirectContractList:
     def __init__(self, path: str | os.PathLike | None = None,
                  refs: Optional[Iterable[str]] = None,
                  version: str = "", settings: Settings | None = None,
-                 fingerprint_key: str = ""):
+                 fingerprint_key: str = "",
+                 source: DirectContractSource | None = None):
+        # A pluggable source (F3, synthesis §8 Q5) is mutually exclusive with an
+        # explicit in-memory roster; both would define the same content twice.
+        if source is not None and refs is not None:
+            raise ValueError(
+                "direct-contract roster cannot take both refs and a source")
+        self._source = source
         self._explicit = {self._normalize(r) for r in refs} if refs is not None else None
-        if path is not None:
+        if source is not None:
+            # The path is unused when a source is supplied, but kept assigned so
+            # every accessor has a stable attribute to read.
+            resolved_path = DEFAULT_LIST_PATH
+        elif path is not None:
             resolved_path = path
         elif settings is not None:
             resolved_path = settings.direct_contract_list
@@ -125,6 +137,8 @@ class DirectContractList:
         self._loaded: Optional[set[str]] = None
         self._load_error: str = ""
         self._source_fingerprint: str = ""
+        self._source_label: str = ""
+        self._source_cache_key: tuple | None = None
         self._loaded_signature: tuple[int, int, int, int] | None = None
         self._lock = RLock()
 
@@ -145,6 +159,10 @@ class DirectContractList:
             return self._source_value()
 
     def _source_value(self) -> str:
+        if self._source is not None:
+            if self._loaded is None:
+                return f"{LIST_VERSION_UNKNOWN}:{self._load_error or 'unavailable'}"
+            return self._source_label or "source:v1"
         if self._explicit is not None:
             return f"in_memory:{self._version or 'test'}"
         if self._loaded is None:
@@ -168,7 +186,66 @@ class DirectContractList:
             self._source_fingerprint = hashlib.sha256(marker.encode("utf-8")).hexdigest()
         return self._source_fingerprint
 
+    def _snapshot_label(self, snapshot: object) -> str:
+        name = getattr(snapshot, "source_name", "") or "source"
+        version = getattr(snapshot, "version", "") or "v1"
+        return f"{name}:{version}"
+
+    def _ensure_from_source(self) -> None:
+        """Load through an injected source, fail-closed on anything uncertain.
+
+        Reuses the same ``_fingerprint_source`` marker scheme as the file path,
+        so a keyed roster fingerprint still binds a human release to the exact
+        roster answer for external sources.
+        """
+        try:
+            snapshot = self._source.load()  # type: ignore[union-attr]
+        except Exception:
+            self._loaded = None
+            self._source_cache_key = None
+            self._source_fingerprint = ""
+            self._load_error = "source_error"
+            return
+        if not isinstance(snapshot, DirectContractSnapshot) or snapshot.refs is None:
+            self._loaded = None
+            self._source_cache_key = None
+            self._source_fingerprint = ""
+            self._load_error = (
+                getattr(snapshot, "load_error", "") or "unavailable"
+                if snapshot is not None else "source_error"
+            )
+            if snapshot is not None:
+                self._source_label = self._snapshot_label(snapshot)
+            return
+        cache_key = (
+            "source", snapshot.source_name, snapshot.version,
+            snapshot.content_signature,
+        )
+        if (
+            not self._fingerprint_key
+            and self._source_cache_key == cache_key
+            and self._loaded is not None
+        ):
+            return
+        self._loaded = {self._normalize(r) for r in snapshot.refs} - {""}
+        self._load_error = ""
+        self._source_cache_key = cache_key
+        self._source_label = self._snapshot_label(snapshot)
+        self._source_fingerprint = self._fingerprint_source({
+            "kind": "source",
+            "name": snapshot.source_name or "source",
+            "version": snapshot.version or "v1",
+            # Mirrors how the file path folds size+mtime into its marker: the
+            # content signature makes the roster fingerprint content-sensitive
+            # even without a key, so a human release cannot carry across a
+            # roster content change.
+            "content_signature": snapshot.content_signature,
+        }, refs=self._loaded)
+
     def _ensure(self) -> None:
+        if self._source is not None:
+            self._ensure_from_source()
+            return
         if self._explicit is not None:
             self._loaded = self._explicit
             self._source_fingerprint = self._fingerprint_source({
