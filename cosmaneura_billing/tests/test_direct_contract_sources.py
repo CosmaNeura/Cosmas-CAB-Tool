@@ -106,6 +106,25 @@ def test_callable_source_malformed_fails_closed():
     assert check.known is False and check.blocked is True
 
 
+def test_callable_source_bare_string_fails_closed():
+    # A loader that returns one ref as a bare string (not a list) must NOT be
+    # split into characters and treated as an available roster — that would
+    # fail OPEN for a real direct-contract patient.
+    roster = _roster(
+        CallableDirectContractSource(lambda: "PAT-1", source_name="oops")
+    )
+    assert roster.available is False
+    check = check_direct_contract("pat-1", roster=roster, now=FIXED_NOW)
+    assert check.known is False and check.blocked is True
+    with pytest.raises(DirectContractBlocked):
+        guard_patient_charge("pat-1", roster=roster, now=FIXED_NOW)
+
+
+def test_in_memory_source_rejects_bare_string():
+    with pytest.raises(TypeError):
+        InMemoryDirectContractSource("PAT-1")
+
+
 def test_callable_source_known_empty_roster_is_available():
     roster = _roster(CallableDirectContractSource(lambda: [], source_name="empty"))
     assert roster.available is True

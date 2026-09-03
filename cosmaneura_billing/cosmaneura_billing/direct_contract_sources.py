@@ -68,12 +68,17 @@ def _content_signature(refs: frozenset[str], version: str) -> str:
 
 
 def _normalize_refs(raw: Iterable[str]) -> Optional[frozenset[str]]:
-    """Return a normalized frozenset, or ``None`` if any entry is not a string.
+    """Return a normalized frozenset, or ``None`` if the roster is malformed.
 
     A malformed roster fails closed rather than silently dropping bad rows: a
     partially-parsed allow-list is exactly the kind of quiet wrong answer the
-    gate refuses to produce.
+    gate refuses to produce. A bare ``str``/``bytes`` is rejected outright: a
+    loader that returns one patient reference instead of a list would otherwise
+    be split into single characters and mistaken for an available roster, which
+    fails *open* for that patient — the one direction this gate must never fail.
     """
+    if isinstance(raw, (str, bytes)):
+        return None
     collected: set[str] = set()
     for entry in raw:
         if not isinstance(entry, str):
