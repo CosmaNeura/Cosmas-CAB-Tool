@@ -88,7 +88,10 @@ outreach, deployment, or real-PHI use.
   messaging, clearinghouse, or Sovereign module. A future Cosmas provider
   widget is a separate receiver-first internal contract; core Cosmas owns its
   placement and encounter authorization, while Sovereign owns provider labs.
-- Athena boundary: `Cosmaneura CAB Pilot` is the Billing Import application.
+- Athena boundary: the Billing Import application identity is unresolved and
+  must not be inferred from a display name such as `Cosmaneura CAB Pilot`;
+  ownership is confirmed only by verifying its client ID, scopes, and
+  separation from Sovereign (see the repo's Athena boundary docs).
   Billing Import and Sovereign Provider Labs keep distinct OAuth clients,
   secrets, token caches, identities, vault grants, and scopes. Background CAB
   billing reads require a separate architecture decision before activation;
