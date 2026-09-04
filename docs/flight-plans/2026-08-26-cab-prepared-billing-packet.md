@@ -282,8 +282,9 @@ orphan accepted history.
   duplicated, or combined with a non-PostgreSQL packet store. The setting is
   non-secret but remains a release-controlled allowlist; the feature flag
   cannot bypass it.
-- Flag off means new routes return a fixed unavailable response, the frontend
-  retains the reviewed prepared-preview behavior, and packet tables are not an
+- Flag off means new routes return a fixed unavailable response, the provider
+  billing review tab retains its reviewed prepared-preview behavior, and packet
+  tables are not an
   ordinary readiness dependency. It never falls back from a failed packet call
   to a browser-generated success.
 - Initial activation is an exact-image, exact-seed-digest synthetic-only cohort
@@ -301,7 +302,7 @@ orphan accepted history.
 | Add immutable review-snapshot and packet tables, nullable legacy-feedback link, indexes, constraints, forced RLS, grants, and guards | Expand | One Tier 2 migration PR, number allocated after rebase | Existing binary ignores the structures; no route writes them | Leave dormant; never use destructive down migration as normal rollback |
 | Add shared seeder/packet fixture-manifest API, no-preference packet orchestrator, canonical domain/store, digest-pinned gate, and atomic methods behind false flag | Dual-path, not dual-write | One Tier 2 code PR | Legacy feedback unchanged; packet inference never loads practice feedback; only exact bundled PostgreSQL rows enter the new path | Flag off and prior exact image; preserve rows |
 | Expose versioned APIs/capability behind false flag | Dark read/write path | One Tier 2 API PR | Client identity and engine result never authoritative; denials/audit failures fail closed | Flag off; legacy routes remain compatible |
-| Adopt server packet in coder UI/browser tests | Cohort cut | One Tier 1 UI PR | No browser packet success/fallback; prepared state comes from server receipt | Flag off restores prior preview |
+| Adopt server packet in the provider billing review tab and browser tests | Cohort cut | One Tier 1 UI PR | No browser packet success/fallback; prepared state comes from server receipt | Flag off restores the provider tab's prior prepared-preview behavior |
 | Enable exact digest for fixed synthetic identities | Synthetic activation | Separately authorized release | Zero PHI/outbound effects and exact persona/evidence/replay acceptance | Disable flag, close ingress if needed, retain additive data |
 
 The expand migration adds:
