@@ -6,9 +6,10 @@ outreach, deployment, or real-PHI use.
 
 ## Outcome and boundaries
 
-- Problem and measurable outcome: the coder UI can record feedback and display
-  a browser-assembled preview, but it cannot yet return a server-owned,
-  immutable billing artifact. The target is a versioned JSON packet whose
+- Problem and measurable outcome: the provider billing review tab builds a
+  browser-assembled prepared preview (`preparedBillingBlock`) and the coder UI
+  records feedback, but neither returns a server-owned, immutable billing
+  artifact. The target is a versioned JSON packet whose
   source snapshot, human decisions, evidence references, completeness result,
   provenance, digest, and `prepared_not_transmitted` status are generated and
   durably bound by the server. Exact retries return the same packet; changed
@@ -242,7 +243,9 @@ orphan accepted history.
 ## Current deployed state
 
 - Read-only verification on 2026-08-26 found GitHub `main` at `0861c9b`, with
-  CI and CodeQL green and eight required status contexts. The local demo stack
+  CI and CodeQL green and seven required status contexts (the `change-budget`
+  check is a separate workflow, additionally required by repository
+  administration). The local demo stack
   ending at `3426937` is not pushed or merged.
 - Azure is still running revision `cosmaneura-pilot-api-i4akwqry--0000021` on
   immutable digest `sha256:95a8d1b5a3b0f3743e1e03ec5edbdef46390aa33fece0e3bd0179c2e8192f640`.
@@ -351,7 +354,8 @@ Dependency-ordered PRs, each below 2,000 changed lines and 50 files:
 Hold each PR independently. Schema precedes writer, server contract precedes
 browser sender, and CAB endpoint precedes any core-dashboard consumer. Every
 code-changing PR receives independent non-implementer review after its final
-substantive push; all eight protected checks must pass.
+substantive push; all seven required protected checks (plus the separate
+`change-budget` check) must pass.
 
 Synthetic canary acceptance requires:
 
@@ -414,7 +418,8 @@ failures keep the capability dark; no mock fallback is allowed.
 
 - Required evidence: approved plan; exact contract/golden vectors; migration
   and privilege rehearsal; full Python/frontend/browser/anti-upcode/log-scanner
-  suite; independent reviews; eight protected checks; exact-main retained
+  suite; independent reviews; seven required protected checks plus the separate
+  `change-budget` check; exact-main retained
   artifact whose bundled fixture manifest matches the configured allowlist;
   live reconciliation; exact-digest synthetic persona/source/replay/stale/RLS/
   log acceptance; and signed go/no-go with the capability synthetic-only.
