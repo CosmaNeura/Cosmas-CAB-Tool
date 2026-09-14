@@ -1,0 +1,174 @@
+{
+  "schemaVersion": "cosmas.cab.prepared-billing-packet.v1",
+  "packetId": "55555555-5555-4555-8555-555555555555",
+  "packetVersion": 1,
+  "status": "prepared_not_transmitted",
+  "preparedAt": "2026-08-26T14:31:00.000Z",
+  "reviewSnapshot": {
+    "schemaVersion": "cosmas.cab.review-snapshot.v1",
+    "snapshotId": "11111111-1111-4111-8111-111111111111",
+    "reviewId": "22222222-2222-4222-8222-222222222222",
+    "issuedAt": "2026-08-26T14:30:00.000Z",
+    "practiceRef": "prc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "encounterRef": "enc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "encounterVersion": 1,
+    "sourceProvenance": {
+      "source": "synthetic_demo_release_candidate",
+      "sourceSnapshotDigest": "62d6f483c15fce91f95e6863f82701442b3e369b9ae4ca1161c0d930b0488ebc",
+      "fixtureManifestVersion": "cosmas.cab.synthetic-fixture-manifest.v1",
+      "fixturePackId": "cosmaneura-demo-rc-v1",
+      "fixtureCaseDigest": "c847409a34bc382634eea22a0de7c611d99effc73079c31b29fc6e9c5b970879",
+      "fixtureCombinedSeedDigest": "3ef6297b7a1987477b491c27393772caea3e4c41eeb3fbca39b14de3e77cc304"
+    },
+    "engineProvenance": {
+      "engineVersion": "contract-vector-v1",
+      "rulesets": [
+        {"name": "denial", "version": "2026Q2"},
+        {"name": "guardrail", "version": "v1"},
+        {"name": "icd10", "version": "FY2026"}
+      ],
+      "configurationDigest": "0c8fc2bfb47ee8bc8bef88a9607e94d97361bc6efb3f8da8b71a90b03a1b79f9",
+      "inferenceMode": "mock",
+      "inferenceModel": "contract-fixture-v1",
+      "adaptivePreferencesApplied": false,
+      "multiEngineDecisioningApplied": false
+    },
+    "evidence": [
+      {
+        "evidenceId": "33333333-3333-4333-8333-333333333331",
+        "purpose": "supporting",
+        "source": "signed_note",
+        "verificationMode": "exact",
+        "segments": [
+          {
+            "startByte": 90,
+            "endByte": 162,
+            "text": "Assessment: Essential hypertension [I10], controlled on current therapy.",
+            "textDigest": "db99cd2734f2feb6eee942046e25b5aaddb6abc35209abe46112be95d162af58"
+          }
+        ]
+      },
+      {
+        "evidenceId": "33333333-3333-4333-8333-333333333332",
+        "purpose": "contradicting",
+        "source": "signed_note",
+        "verificationMode": "exact",
+        "segments": [
+          {
+            "startByte": 42,
+            "endByte": 60,
+            "text": "Denies chest pain.",
+            "textDigest": "25f9040e847ce5546fbb88f2e84bbad2977d213b8bb7618c076046ae4630fdfd"
+          }
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "recommendationId": "44444444-4444-4444-8444-444444444441",
+        "ordinal": 0,
+        "kind": "ICD10",
+        "code": "I10",
+        "label": "Essential hypertension",
+        "disposition": "captured",
+        "rationale": "The signed assessment explicitly documents essential hypertension.",
+        "primary": true,
+        "evidenceIds": ["33333333-3333-4333-8333-333333333331"],
+        "guardrailActions": [
+          {
+            "action": "CAPTURE",
+            "reasonCode": "documented_supported",
+            "detail": "The diagnosis is explicit and supported by signed-note evidence.",
+            "fromCode": "I10",
+            "toCode": "I10"
+          }
+        ]
+      },
+      {
+        "recommendationId": "44444444-4444-4444-8444-444444444442",
+        "ordinal": 1,
+        "kind": "ICD10",
+        "code": "R07.9",
+        "label": "Chest pain",
+        "disposition": "rejected",
+        "rationale": "The signed note explicitly denies chest pain.",
+        "primary": false,
+        "evidenceIds": ["33333333-3333-4333-8333-333333333332"],
+        "guardrailActions": [
+          {
+            "action": "REJECT",
+            "reasonCode": "contradicted_by_signed_note",
+            "detail": "Contradicting signed-note evidence prevents capture.",
+            "fromCode": "R07.9",
+            "toCode": null
+          }
+        ]
+      }
+    ],
+    "suppressedWithoutEvidenceCount": 0,
+    "completeness": {
+      "status": "not_applicable",
+      "rulepackVersion": null,
+      "providerAttestationApplied": false,
+      "results": []
+    },
+    "degraded": null,
+    "clinicalNoteModified": false,
+    "snapshotDigest": "af05fb4858dc0c451908f787d571f98e0fc56cc4f2692ad346b52cf98274f019"
+  },
+  "reviewerRef": "usr_cccccccccccccccccccccccccccccccc",
+  "reviewedAt": "2026-08-26T14:31:00.000Z",
+  "elapsedMilliseconds": 42000,
+  "decisions": [
+    {
+      "recommendationId": "44444444-4444-4444-8444-444444444441",
+      "action": "accept",
+      "originalCode": "I10",
+      "finalCode": "I10",
+      "reasonCode": null,
+      "rationale": null,
+      "evidenceIds": ["33333333-3333-4333-8333-333333333331"]
+    },
+    {
+      "recommendationId": "44444444-4444-4444-8444-444444444442",
+      "action": "reject",
+      "originalCode": "R07.9",
+      "finalCode": null,
+      "reasonCode": "dx_contradicted_by_doc",
+      "rationale": "The signed note explicitly denies the suggested symptom code.",
+      "evidenceIds": ["33333333-3333-4333-8333-333333333332"]
+    }
+  ],
+  "manualAdditions": [],
+  "additionalEvidence": [],
+  "finalCodes": [
+    {
+      "kind": "ICD10",
+      "code": "I10",
+      "origin": "engine",
+      "primary": true,
+      "recommendationId": "44444444-4444-4444-8444-444444444441",
+      "clientAdditionId": null,
+      "evidenceIds": ["33333333-3333-4333-8333-333333333331"]
+    }
+  ],
+  "excludedCodes": [
+    {
+      "kind": "ICD10",
+      "code": "R07.9",
+      "origin": "engine",
+      "outcome": "reviewer_rejected",
+      "recommendationId": "44444444-4444-4444-8444-444444444442",
+      "reasonCode": "dx_contradicted_by_doc",
+      "rationale": "The signed note explicitly denies the suggested symptom code.",
+      "evidenceIds": ["33333333-3333-4333-8333-333333333332"]
+    }
+  ],
+  "priorPacketId": null,
+  "clinicalNoteModified": false,
+  "transmission": {
+    "performed": false,
+    "destination": null
+  },
+  "packetDigest": "9e6a5a13c17684573a9e301d1573512cd32ec7f04112e6bbf49a18dbd6d23a16"
+}
