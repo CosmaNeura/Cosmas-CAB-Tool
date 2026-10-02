@@ -56,6 +56,7 @@ from .corpus.acibench import load_acibench
 from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
 from .orchestrator import BillingOrchestrator
+from .primary_diagnosis import result_primary
 from .persistence import (
     MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
     PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
@@ -350,7 +351,8 @@ def _level(code: str | None) -> int:
     return int(code[-1]) if code and code[-1:].isdigit() else 0
 
 
-def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None) -> dict[str, Any]:
+def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None,
+               primary: CodeSuggestion | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "kind": _KIND.get(s.kind, str(s.kind)),
         "code": s.code,
@@ -359,7 +361,7 @@ def _code_json(s: CodeSuggestion, *, submitted_em: str | None = None) -> dict[st
         "denialRisk": s.denial_risk,
         "evidence": [{"source": e.source, "quote": e.quote} for e in s.evidence],
     }
-    if "primary_candidate" in s.notes:
+    if s is primary and s.disposition == Disposition.CAPTURED:
         out["primary"] = True
     if s.disposition != Disposition.CAPTURED and s.rationale:
         out["reason"] = s.rationale
@@ -395,15 +397,17 @@ def _audit_json(lines: list[str]) -> list[dict[str, str]]:
 
 def _billing_json(bundle: VisitBundle, result: BillingResult) -> dict[str, Any]:
     ws, card = result.biller_worksheet, result.provider_card
+    sequencing = result_primary(result)
+    primary = sequencing.primary
     sub = bundle.submitted_em_code
     return {
         "encounterId": bundle.encounter_id,
         "summary": card.summary,
-        "captured": [_code_json(s, submitted_em=sub) for s in card.captured_codes],
+        "captured": [_code_json(s, submitted_em=sub, primary=primary) for s in card.captured_codes],
         "declined": [_code_json(s) for s in card.declined_codes],
         "em": ({"code": ws.em_code.code, "label": ws.em_code.label} if ws.em_code else None),
-        "primary": ({"code": ws.primary_diagnosis.code, "label": ws.primary_diagnosis.label}
-                    if ws.primary_diagnosis else None),
+        "primary": ({"code": primary.code, "label": primary.label} if primary else None),
+        "diagnosisSequencing": sequencing.public,
         "diagnoses": [{"code": d.code, "label": d.label, "denialRisk": d.denial_risk}
                       for d in ws.diagnoses],
         "denialFlags": ws.denial_flags,
@@ -427,6 +431,7 @@ def _coder_view_json(
     bundle: VisitBundle, result: BillingResult, coder_id: str,
 ) -> dict[str, Any]:
     card = result.provider_card
+    sequencing = result_primary(result)
 
     sources = {
         "signed_note": bundle.signed_note,
@@ -451,7 +456,7 @@ def _coder_view_json(
             "id": re.sub(r"[^a-z0-9]", "", s.code.lower()) or "x",
             "kind": _KIND.get(s.kind, str(s.kind)),
             "code": s.code, "label": s.label,
-            "primary": "primary_candidate" in s.notes or None,
+            "primary": (s is sequencing.primary and s.disposition == Disposition.CAPTURED) or None,
             "why": s.rationale,
             "evidence": s.evidence[0].quote if s.evidence else "",
             "evidenceSpans": spans,
@@ -479,6 +484,7 @@ def _coder_view_json(
         "engineVersion": _ENGINE_VERSION,
         "submittedEm": bundle.submitted_em_code,
         "coderId": coder_id,
+        "diagnosisSequencing": sequencing.public,
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,

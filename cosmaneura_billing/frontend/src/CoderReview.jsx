@@ -12,6 +12,8 @@ import {
 } from "./coderReview.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
+import { primaryBadge } from "./diagnosisSequencing.js";
 import { headerProposals, headerReviewRequest, missingHeaderBaseline, readBillingHeader } from "./billingHeader.js";
 import {
   completenessLabel, isSyntheticDemoEncounter, sourceLabel,
@@ -113,7 +115,7 @@ function RowIssues({ id, issues }) {
   return <ul id={id} className="mt-2 list-disc space-y-1 pl-5 text-xs text-rose-800">{issues.map((message) => <li key={message}>{message}</li>)}</ul>;
 }
 
-function CodeRow({ item, decision, disabled, issues, onChange }) {
+function CodeRow({ item, decision, disabled, issues, onChange, primaryLabel }) {
   const { key, kind, row } = item;
   const prefix = `coder-${key.replaceAll(":", "-")}`;
   const errorId = `${prefix}-errors`;
@@ -125,7 +127,7 @@ function CodeRow({ item, decision, disabled, issues, onChange }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <code className="font-mono text-sm font-semibold text-slate-950">{row.code}</code>
-            {row.primary && <Pill tone="bg-sky-50 text-sky-800 ring-sky-200">primary</Pill>}
+            {row.primary && primaryLabel && <Pill tone="bg-sky-50 text-sky-800 ring-sky-200">{primaryLabel}</Pill>}
             <Pill tone={decision.action === UNREVIEWED ? "bg-amber-50 text-amber-800 ring-amber-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>{decision.action}</Pill>
           </div>
           <p className="mt-1 text-sm text-slate-700">{row.label}</p>
@@ -514,6 +516,7 @@ export default function CoderReview({
             {engine.suppressedExclusions > 0 && <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><ShieldCheck size={15} className="mr-1 inline" aria-hidden="true" />{engine.suppressedExclusions} engine candidate{engine.suppressedExclusions === 1 ? " is" : "s are"} not shown because no cited documentation evidence was returned. It cannot enter the prepared preview.</p>}
           </section>
 
+          <DiagnosisSequencingNotice value={engine.diagnosisSequencing} />
           {headerEnabled && <>
             <BillingHeader encounter={headerEncounter} onStateChange={onHeaderState}
               disabled={frozen && !receipt || saving} refreshKey={headerRefresh} />
@@ -555,7 +558,7 @@ export default function CoderReview({
             </section>
           </>}
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="captured-heading"><h2 id="captured-heading" className="font-semibold text-slate-950">Engine suggestions</h2><p className="mt-1 text-sm text-slate-600">Each row starts unreviewed. Accept, edit, or reject it affirmatively.</p>{captured.length ? captured.map((item) => <CodeRow key={item.key} item={item} decision={decisions[item.key]} disabled={frozen} issues={showValidation ? issuesFor(item.key) : []} onChange={(value) => updateDecision(item.key, value)} />) : <p className="mt-3 text-sm text-slate-600">No evidence-supported engine suggestions are available.</p>}</section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="captured-heading"><h2 id="captured-heading" className="font-semibold text-slate-950">Engine suggestions</h2><p className="mt-1 text-sm text-slate-600">Each row starts unreviewed. Accept, edit, or reject it affirmatively.</p>{captured.length ? captured.map((item) => <CodeRow key={item.key} item={item} decision={decisions[item.key]} disabled={frozen} issues={showValidation ? issuesFor(item.key) : []} primaryLabel={primaryBadge(engine.diagnosisSequencing)} onChange={(value) => updateDecision(item.key, value)} />) : <p className="mt-3 text-sm text-slate-600">No evidence-supported engine suggestions are available.</p>}</section>
 
           {excluded.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="excluded-heading"><h2 id="excluded-heading" className="font-semibold text-slate-950">Engine-held and removed candidates</h2><p className="mt-1 text-sm text-slate-600">These exclusions are read-only because the feedback contract has no “hold” action. A coder may start a separate manual addition, which still requires rationale and evidence.</p>{excluded.map((item) => <ExcludedRow key={item.key} item={item} disabled={frozen} added={additions.some((addition) => addition.sourceKey === item.key)} onStartManualAddition={() => startManualAddition(item)} />)}</section>}
 

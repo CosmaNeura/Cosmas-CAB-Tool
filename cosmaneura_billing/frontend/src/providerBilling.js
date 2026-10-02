@@ -1,3 +1,5 @@
+import { sequencingMessage } from "./diagnosisSequencing.js";
+
 const SOURCE_LABELS = Object.freeze({
   synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture",
   athena_preview_synthetic: "Athena Preview synthetic fixture",
@@ -122,6 +124,7 @@ export function preparedBillingBlock(result, encounter) {
     `Evidence-supported E/M: ${supportedEm?.code || "None suggested"}`,
     `CPT / E/M suggestions: ${cpt.join(", ") || "None"}`,
     `ICD-10-CM suggestions: ${icd.join(", ") || "None"}`,
+    `Primary diagnosis sequencing: ${sequencingMessage(result.diagnosis_sequencing)}`,
     `Documentation completeness: ${completeness}`,
     `Engine / ruleset bundle: ${result.engine_version || "Not reported"}`,
     `Inference: ${result.inferenceMode || "Not reported"}${result.inferenceModel ? ` · ${result.inferenceModel}` : ""}`,

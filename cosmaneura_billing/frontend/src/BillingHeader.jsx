@@ -148,7 +148,8 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         {!currentDraft.codes.length && <p className="mt-2">No codes proposed in this revision.</p>}
         {currentDraft.note && <p className="mt-2 whitespace-pre-wrap">Reviewer note: {currentDraft.note}</p>}
       </div>}
-      {h.flags.length > 0 && <ul className="mt-4 list-disc space-y-1 rounded-lg bg-amber-50 py-3 pl-7 pr-3 text-xs text-amber-900">{h.flags.map((f) => <li key={f.id}>{f.message}</li>)}</ul>}
+      {h.flags.length > 0 && <ul className="mt-4 list-disc space-y-1 rounded-lg bg-amber-50 py-3 pl-7 pr-3 text-xs text-amber-900">{h.flags.map((f) => <li key={f.id}>{f.message}
+        {f.evidenceIds?.length > 0 && <Evidence ids={f.evidenceIds} header={h} />}</li>)}</ul>}
       <p className="mt-3 text-xs text-slate-500">{h.policy.message}</p>
     </>}
     {draft && <form className="mt-5 border-t border-slate-200 pt-4" onSubmit={(event) => {event.preventDefault(); if (!disabled && reason.trim()) command("/save", {

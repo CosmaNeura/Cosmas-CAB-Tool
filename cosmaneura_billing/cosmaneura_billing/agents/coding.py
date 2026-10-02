@@ -4,6 +4,8 @@ from __future__ import annotations
 from ..evidence import verify_quote
 from ..knowledge import em_ruleset
 from ..knowledge.icd10_ccsr import ICD10CCSR
+from ..knowledge.diagnosis_terms import VERSION, anchor_context
+from ..primary_diagnosis import intent_notes
 from ..llm import LLMClient
 from ..schemas import CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle
 
@@ -52,7 +54,8 @@ DIAGNOSES_SCHEMA = {
         "diagnoses": {"type": "array", "items": {
             "type": "object", "required": ["concept"],
             "properties": {"concept": {"type": "string"},
-                           "primary": {"type": "boolean"},
+                           "primary": {"type": "boolean", "description":
+                               "True only for the best-supported encounter primary diagnosis intent. Preserve intent even when coding specificity is unresolved; do not choose solely by list order."},
                            "quote": {"type": "string"}}}},
     },
 }
@@ -178,29 +181,48 @@ class CodingAgent:
         # --- diagnoses (LLM concepts -> authoritative ICD-10 lookup) -------- #
         dx = self.llm.complete_json(
             system="You map documented clinical concepts to diagnosis intent. "
-                   "List the underlying clinical concept and the exact supporting quote, "
-                   "copied verbatim from the documentation — never paraphrased.",
+                   "List one concise clinical diagnosis per item, preserving documented "
+                   "type, cause, laterality, complications, negation and encounter phase. "
+                   "Do not supply ICD codes. Do not infer a subtype or complication from "
+                   "labs, medications, symptoms or risk factors. Unknown/not established "
+                   "is not absent. Do not report differentials or family findings as "
+                   "current patient diagnoses. The exact supporting quote must name the "
+                   "diagnosis and its defining attributes, copied verbatim with its "
+                   "assertion context intact — never paraphrased. Leave management "
+                   "commentary out of the concept.",
             user=f"TASK: propose_diagnoses\n\n{combined}",
             schema=DIAGNOSES_SCHEMA,
         )
+        sources = {"signed_note": bundle.signed_note, "transcript": bundle.transcript,
+                   "intake_text": bundle.intake_text}
         for d in dx.get("diagnoses", []):
-            matches = self.icd10.find_by_description(d["concept"], limit=1)
-            if not matches:
+            primary_notes = intent_notes(d)
+            quote = d.get("quote", "")
+            anchor = None
+            for name, text in sources.items():
+                if quote.strip() and quote in text:
+                    context = anchor_context(quote, text)
+                    if context is not None:
+                        anchor = (name, context)
+                    # Ambiguity in the signed note must not be bypassed by
+                    # choosing a more convenient transcript/intake occurrence.
+                    break
+            code, reason = self.icd10.resolve(d["concept"], quote=anchor[1] if anchor else "")
+            ev = [Evidence(anchor[0], quote, "documented diagnosis/finding")] if anchor else []
+            if code is None:
                 suggestions.append(CodeSuggestion(
                     kind=CodeKind.ICD10, code="(unresolved)", label=d["concept"],
-                    disposition=Disposition.REVIEW,
-                    rationale=f"No ICD-10 match in active code set for '{d['concept']}'.",
+                    disposition=Disposition.REVIEW, evidence=ev,
+                    rationale=reason,
+                    notes=[f"terminology:{VERSION}"] + primary_notes,
                 ))
                 continue
-            code = matches[0]
-            ev = [Evidence("intake_text", d.get("quote", ""), "documented symptom/finding")] \
-                if d.get("quote") and "(none" not in d.get("quote", "") else []
             suggestions.append(CodeSuggestion(
                 kind=CodeKind.ICD10, code=code.code, label=code.description,
                 disposition=Disposition.REVIEW, evidence=ev,
-                rationale=f"CCSR: {code.ccsr_category} {code.ccsr_description}. "
-                          f"{'Marked primary by coder.' if d.get('primary') else ''}",
-                notes=["primary_candidate"] if d.get("primary") else [],
+                rationale=f"{reason} CCSR: {code.ccsr_category} {code.ccsr_description}. "
+                          f"{'Extracted primary candidate; confirm in review.' if d.get('primary') is True else ''}",
+                notes=[f"terminology:{VERSION}"] + primary_notes,
             ))
 
         return facts, suggestions

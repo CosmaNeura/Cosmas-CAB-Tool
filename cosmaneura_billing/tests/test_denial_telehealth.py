@@ -43,8 +43,10 @@ def test_stale_icd10_code_flagged_high_risk():
     kb = ICD10CCSR()
     suggestions = [_captured(CodeKind.ICD10, "X99.99", "Made-up retired code")]
     out, flags = DenialRiskAgent().run(suggestions, icd10=kb)
+    assert out[0].disposition == Disposition.REVIEW
+    assert out[0].necessity_supported is False
     assert out[0].denial_risk == "high"
-    assert any("not a billable code in the current" in f for f in flags)
+    assert any("Not a billable code in the current" in f for f in flags)
 
 
 def test_active_icd10_code_not_flagged():

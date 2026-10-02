@@ -271,9 +271,9 @@ def apply_preferences(suggestions: list[CodeSuggestion], prefs: Preferences,
 
     Structural guarantees: iterates only existing suggestions (never adds);
     touches only ICD-10 codes for hold/refine (E/M gets notes at most);
-    refinement stays inside the same 3-character ICD-10 family and must
-    resolve to a code that is billable in the current FY set when that
-    knowledge is available.
+    learned refinements are review hints, not automatic code replacements.
+    Sharing a three-character family does not prove the same diagnosis or
+    complication. A reviewer must apply a correction for this encounter.
     """
     audit: list[str] = []
     if prefs.empty:
@@ -290,17 +290,10 @@ def apply_preferences(suggestions: list[CodeSuggestion], prefs: Preferences,
         key = _norm(s.code)
         ref = prefs.refine.get(key)
         if ref and _family(ref.to_code) == _family(s.code):
-            target = icd10.get(ref.to_code) if icd10 is not None else None
-            active = icd10.is_active(ref.to_code) if icd10 is not None else None
-            if active is not False:  # unknown (no FY data) or billable
-                old_code, old_label = s.code, s.label
-                s.code = target.code if target else ref.to_code
-                s.label = target.description if target else s.label
-                s.rationale = (s.rationale + " " if s.rationale else "") + \
-                    f"Refined from {old_code} ({old_label}): {ref.hint()}."
-                s.notes.append("preference_refined")
-                audit.append(f"REFINE  {old_code} -> {s.code}: {ref.hint()}.")
-                key = _norm(s.code)
+            s.notes.append("preference_hold: Prior reviewer corrections require "
+                           "a fresh diagnosis review for this encounter.")
+            audit.append(f"HOLD    {s.code}: learned refinement requires current "
+                         "encounter review; original code and evidence retained.")
 
         sup = prefs.suppress.get(key)
         if sup:

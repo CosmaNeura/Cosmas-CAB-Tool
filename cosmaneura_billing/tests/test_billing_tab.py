@@ -58,14 +58,15 @@ def test_no_candidate_renders_without_exactly_located_evidence():
 
 
 def test_rejected_code_renders_only_with_exact_decision_evidence():
-    """The rejected Z80.0 is shown with the exact denial behind the decision."""
+    """The denied concept retains exact decision evidence without a made-up code."""
     view = _view()
     candidate = next(
-        row for row in _all_candidates(view) if row["code"] == "Z80.0"
+        row for row in _all_candidates(view) if row["description"].startswith("Family history")
     )
     quote = "I do not have a family history of colon cancer"
     start = SAMPLE_VISIT.intake_text.index(quote)
     assert candidate["status"] == "removed"
+    assert candidate["code"] == "(unresolved)"
     assert "explicitly denied" in candidate["status_reason"]
     assert candidate["evidence_spans"] == [{
         "source": "intake_text",
@@ -181,11 +182,9 @@ def test_golden_demo_encounter():
     assert em["evidence_spans"]
     assert em["pathway"] == "mdm_2of3"
 
-    by_code = {c["code"]: c for c in view["icd_candidates"]}
-
     # Patient explicitly denied the family history. The tempting code is
     # visibly removed, with that exact denial anchored as decision evidence.
-    family_history = by_code["Z80.0"]
+    family_history = next(c for c in view["icd_candidates"] if c["description"].startswith("Family history"))
     assert family_history["status"] == "removed"
     assert "denied" in family_history["status_reason"].lower()
     assert family_history["evidence_spans"][0]["text"] == (
@@ -193,8 +192,9 @@ def test_golden_demo_encounter():
     )
 
     # documented in vitals but not addressed in the plan -> held
-    obesity = next(c for c in view["icd_candidates"] if c["code"].startswith("E66"))
+    obesity = next(c for c in view["icd_candidates"] if c["description"] == "Obesity")
     assert obesity["status"] == "held"
+    assert obesity["code"] == "(unresolved)"
     assert "not addressed" in obesity["status_reason"].lower()
 
     # the primary diagnosis leads
@@ -366,9 +366,9 @@ def test_copy_all_contains_only_suggested_codes():
     assert "Z80.0" not in copy_all, "a removed code must never reach the clipboard"
 
 
-def test_every_candidate_has_copy_text():
+def test_only_suggested_candidates_have_copy_text():
     for cand in _all_candidates(_view()):
-        assert cand["copy_text"] == cand["code"]
+        assert cand["copy_text"] == (cand["code"] if cand["status"] == "suggested" else None)
 
 
 # --------------------------------------------------------------------------- #

@@ -209,4 +209,7 @@ def test_held_engine_code_is_not_an_editable_generated_proposal(client, monkeypa
     header = generate(client)["header"]
     assert not any(row["kind"] == "EM" for row in header["suggestions"])
     assert not any(row["kind"] == "EM" for row in create_draft(header)["codes"])
-    assert any(row["message"] == "Synthetic held output requires review." for row in header["flags"])
+    held_flag = next(row for row in header["flags"] if "Synthetic held output requires review." in row["message"])
+    assert held_flag["message"].endswith(": Synthetic held output requires review.")
+    assert held_flag["evidenceIds"]
+    assert all(ref in {item["id"] for item in header["evidence"]} for ref in held_flag["evidenceIds"])

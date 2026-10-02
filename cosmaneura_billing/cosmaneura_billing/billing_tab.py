@@ -40,6 +40,7 @@ import re
 from typing import Any, Optional
 
 from .completeness import applicable_rulepack, check_note
+from .primary_diagnosis import result_primary
 from .schemas import (
     BillingResult, CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle,
 )
@@ -165,7 +166,7 @@ def _candidate(
         "denial_risk": s.denial_risk,
         "alternates": [],            # filled by _dedupe
         "linked_plan_items": _link_plan_items(s, plan_items),
-        "copy_text": s.code,
+        "copy_text": s.code if status == "suggested" else None,
     }
 
 
@@ -179,11 +180,14 @@ def _dedupe(
     cite the same documentation span — that is what "the same finding" means
     here, and it avoids guessing at clinical equivalence.
     """
-    by_finding: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
+    by_finding: dict[tuple, dict[str, Any]] = {}
+    order: list[tuple] = []
     for cand in candidates:
         spans = cand["evidence_spans"]
-        key = spans[0]["text"].strip().lower() if spans else f"__{cand['code']}"
+        # A held/removed diagnosis must retain its own reason and status. A
+        # bare alternate on a suggested row would silently promote it.
+        finding = spans[0]["text"].strip().lower() if spans else f"__{cand['code']}"
+        key = (cand["status"], finding, len(order) if cand["status"] != "suggested" else None)
         if key not in by_finding:
             by_finding[key] = cand
             order.append(key)
@@ -258,7 +262,8 @@ def build_billing_tab_view(
                  for s in renderable if s.kind in kind_set]
         return _dedupe(cands, preferred_code=preferred_code)
 
-    primary = ws.primary_diagnosis.code if ws.primary_diagnosis else None
+    sequencing = result_primary(result)
+    primary = sequencing.primary.code if sequencing.primary else None
     icd = _order(bucket({CodeKind.ICD10}, preferred_code=primary), primary)
     for candidate in icd:
         candidate["primary"] = bool(primary and candidate["code"] == primary)
@@ -278,6 +283,7 @@ def build_billing_tab_view(
         "engine_version": engine_version,
         "em": _em_block(card, ws, bundle),
         "icd_candidates": icd,
+        "diagnosis_sequencing": sequencing.public,
         "cpt_candidates": cpt,
         "completeness": completeness,
         # Codes the pipeline considered but that cannot be rendered because their

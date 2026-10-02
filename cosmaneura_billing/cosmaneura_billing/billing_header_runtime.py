@@ -7,6 +7,7 @@ from uuid import uuid4
 from .billing_header import BillingHeaderError, source_documents
 from .billing_tab import build_billing_tab_view
 from .completeness import RULE_PACKS, applicable_rulepack, check_note
+from .primary_diagnosis import result_primary
 
 
 _FACT_LABELS = {
@@ -130,6 +131,32 @@ def generated_header(stored, result, *, engine_version: str) -> dict:
         flags.append({"id": "completeness_not_covered",
                       "message": "No completeness rule pack covers this visit type; manual review is required."})
 
+    if view["withheld_without_evidence"]:
+        flags.append({"id": "withheld_without_evidence", "message":
+            f"{view['withheld_without_evidence']} pipeline item(s) lack an exact source citation. "
+            "They are withheld; review the source documentation before coding."})
+    if view["withheld_without_reason"]:
+        flags.append({"id": "withheld_without_reason", "message":
+            f"{view['withheld_without_reason']} pipeline review item(s) lack a decision reason. "
+            "They are withheld; manual coding review is required."})
+
+    sequencing = result_primary(result)
+    if sequencing.public["requires_review"]:
+        refs = []
+        # A bounded notice survives even when the candidate has no valid quote.
+        # Never invent evidence or borrow a secondary's span for primary intent.
+        for candidate in sequencing.intents:
+            for item in candidate.evidence:
+                kind = _SOURCE_KIND.get(item.source)
+                document = sources.get(kind, {}).get("text", "")
+                start = document.find(item.quote) if item.quote else -1
+                if len(refs) < 3:
+                    ref = add_span(kind, start, start + len(item.quote), item.quote)
+                    if ref and ref not in refs:
+                        refs.append(ref)
+        flags.append({"id": "primary_diagnosis_sequencing", "message": sequencing.public["message"],
+                      **({"evidenceIds": refs} if refs else {})})
+
     suggestions = []
     candidates = [("ICD10", row) for row in view["icd_candidates"]]
     if view.get("em"):
@@ -137,16 +164,22 @@ def generated_header(stored, result, *, engine_version: str) -> dict:
         candidates.insert(0, ("EM", {**em, "code": em["suggested_level"],
                                      "description": "Office/outpatient E/M"}))
     for kind, row in candidates:
-        if row["status"] != "suggested":
-            flags.append({"id": f"withheld-{len(flags)}",
-                          "message": row.get("status_reason") or "A code requires manual review."})
-            continue
         refs = []
         for span in row.get("evidence_spans", []):
             ref = add_span(_SOURCE_KIND.get(span["source"]), span["loc"]["start"],
                            span["loc"]["end"], span["text"])
             if ref and ref not in refs:
                 refs.append(ref)
+        if row["status"] != "suggested":
+            # Keep the unresolved clinical concept and its exact decision
+            # evidence, without making a code proposal or copyable code.
+            reason = row.get("status_reason") or "Manual coding review is required."
+            flag = {"id": f"withheld-{len(flags)}", "message":
+                    f"{row['description'][:150]} — {row['status']} from suggestions: {reason}"[:700]}
+            if refs:
+                flag["evidenceIds"] = refs
+            flags.append(flag)
+            continue
         if not refs:
             continue
         if (kind, row["code"]) in {(s["kind"], s["code"]) for s in suggestions}:

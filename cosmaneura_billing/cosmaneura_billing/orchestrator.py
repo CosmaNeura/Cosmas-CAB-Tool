@@ -16,6 +16,7 @@ from .knowledge.ncci import NCCIEdits
 from .knowledge.pos import PlaceOfService
 from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
+from .primary_diagnosis import resolve_primary
 from .llm import LLMClient, describe_client, get_default_client
 from .persistence import READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
 from .schemas import (
@@ -210,11 +211,17 @@ class BillingOrchestrator:
             suggestions, self.preferences.for_user(user_id), icd10=self.icd10)
         suggestions, audit = self.guardrail.run(facts, suggestions, new_patient=new_patient)
         audit = consensus_audit + proc_audit + ver_audit + pref_audit + audit
+        before_denial = {id(s) for s in suggestions if s.disposition == Disposition.CAPTURED}
         suggestions, denial_flags = self.denial.run(
             suggestions, ncci=self.ncci, coverage=self.coverage,
             icd10=self.icd10, pos=self.pos, denial_priors=self.denial_priors,
             place_of_service=bundle.place_of_service,
             encounter_type=bundle.encounter_type,
+        )
+        audit.extend(
+            f"HOLD    {s.code} ({s.label}): final denial gate — {s.rationale}"
+            for s in suggestions
+            if id(s) in before_denial and s.disposition == Disposition.REVIEW
         )
         # Official CPT descriptors, when the practice's licensed data is loaded.
         relabeled = self.cpt.relabel([s for s in suggestions
@@ -230,7 +237,8 @@ class BillingOrchestrator:
 
         # ---- biller worksheet (claim-ready) ------------------------------- #
         dx = [s for s in captured if s.kind == CodeKind.ICD10]
-        primary = next((s for s in dx if "primary_candidate" in s.notes), dx[0] if dx else None)
+        sequencing = resolve_primary(suggestions)
+        primary = sequencing.primary
         ordered_dx = ([primary] + [d for d in dx if d is not primary]) if primary else dx
         em = next((s for s in captured if s.kind == CodeKind.EM), None)
 
@@ -242,8 +250,9 @@ class BillingOrchestrator:
             procedures=[s for s in captured if s.kind == CodeKind.PROCEDURE],
             modifiers=[s for s in captured if s.kind == CodeKind.MODIFIER],
             denial_flags=denial_flags,
-            requires_provider_signoff=bool(review),
+            requires_provider_signoff=bool(review) or sequencing.public["requires_review"],
             audit_trail=audit,
+            diagnosis_sequencing=sequencing.public,
         )
 
         # ---- provider card (post-visit, clinical framing) ----------------- #

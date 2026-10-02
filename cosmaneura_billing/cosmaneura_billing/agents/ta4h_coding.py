@@ -20,6 +20,7 @@ DOES NOT level E/M. TA4H has no notion of MDM, so this agent never returns an
 from __future__ import annotations
 
 from ..knowledge.icd10_ccsr import ICD10CCSR
+from ..knowledge.diagnosis_terms import anchor_context
 from ..schemas import CodeKind, CodeSuggestion, Disposition, Evidence, VisitBundle
 from ..ta4h import (
     DATA_CATEGORIES, DIAGNOSIS_CATEGORIES, HealthEntity, TA4HClient,
@@ -89,6 +90,14 @@ class TA4HCodingAgent:
                     source_engine="ta4h",
                     notes=[f"ta4h_assertion:{reason}"],
                 ))
+                continue
+
+            # A UMLS link is a candidate, not a semantic evidence bypass.
+            # Preserve the negative-assertion path above; affirmed candidates
+            # must agree with the same source-context boundary as the primary
+            # extractor, including a negation omitted from an entity span.
+            context = anchor_context(quote, docs.get(ent.source, ""))
+            if context is None or not self.icd10.supports(code.code, context):
                 continue
 
             if _norm(code.code) in seen:
@@ -177,9 +186,9 @@ class TA4HCodingAgent:
         linked = ent.icd10
         if linked:
             hit = self.icd10.get(linked)
-            if hit is not None and self.icd10.is_active(hit.code) is not False:
+            if hit is not None and self.icd10.is_active(hit.code) is True:
                 return hit, "umls_link"
         for candidate in self.icd10.find_by_description(ent.name or ent.text, limit=1):
-            if self.icd10.is_active(candidate.code) is not False:
+            if self.icd10.is_active(candidate.code) is True:
                 return candidate, "descriptor_match"
         return None, ""

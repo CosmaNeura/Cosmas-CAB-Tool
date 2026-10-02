@@ -83,7 +83,12 @@ def verify_suggestion_evidence(
     for s in suggestions:
         kept = []
         for ev in s.evidence:
-            verified, found_in = verify_quote(ev.quote, sources)
+            # Preserve an exact declared-source anchor. Identical copied text
+            # in intake must not relabel a qualified clinician attestation.
+            if ev.quote and ev.quote in sources.get(ev.source, ""):
+                verified, found_in = True, ev.source
+            else:
+                verified, found_in = verify_quote(ev.quote, sources)
             if not verified:
                 audit.append(
                     f"EVIDENCE-REMOVED {s.code}: quote not found in documentation "

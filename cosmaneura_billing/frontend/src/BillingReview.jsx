@@ -7,6 +7,8 @@ import {
 import { api } from "./api.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
+import { primaryBadge } from "./diagnosisSequencing.js";
 import {
   completenessLabel, evidenceSupportedEm, isSyntheticDemoEncounter,
   isCurrentEncounterResult, isLocatedEvidenceSpan, isValidEncounterVersion,
@@ -116,7 +118,7 @@ function CodeCandidate({ candidate, primary, onCopy }) {
           <div className="flex flex-wrap items-center gap-2">
             <code className="font-mono text-base font-semibold text-slate-950">{candidate.code}</code>
             <Pill tone={TONES[candidate.status]}>{candidate.status}</Pill>
-            {primary && <Pill tone="bg-sky-50 text-sky-800 ring-sky-200">primary diagnosis</Pill>}
+            {primary && <Pill tone="bg-sky-50 text-sky-800 ring-sky-200">{primary}</Pill>}
           </div>
           <p className="mt-1 text-sm text-slate-700">{candidate.description}</p>
         </div>
@@ -147,14 +149,14 @@ function CodeCandidate({ candidate, primary, onCopy }) {
   );
 }
 
-function CandidateGroup({ title, candidates, primaryCode, onCopy }) {
+function CandidateGroup({ title, candidates, primaryCode, primaryLabel, onCopy }) {
   if (!candidates?.length) return null;
   const headingId = `${title.replaceAll(" ", "-").toLowerCase()}-heading`;
   return (
     <section aria-labelledby={headingId}>
       <h2 id={headingId} className="text-base font-semibold text-slate-950">{title}</h2>
       <p className="mb-3 text-xs text-slate-500">Server ordered; coverage context may rank legitimate codes but never creates one.</p>
-      <div className="space-y-3">{candidates.map((candidate, index) => <CodeCandidate key={`${candidate.code}-${candidate.status}-${index}`} candidate={candidate} primary={candidate.code === primaryCode} onCopy={onCopy} />)}</div>
+      <div className="space-y-3">{candidates.map((candidate, index) => <CodeCandidate key={`${candidate.code}-${candidate.status}-${index}`} candidate={candidate} primary={candidate.status === "suggested" && candidate.code === primaryCode ? primaryLabel : null} onCopy={onCopy} />)}</div>
     </section>
   );
 }
@@ -383,6 +385,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
   const icdCandidates = safeCandidates(result?.icd_candidates, encounter);
   const cptCandidates = safeCandidates(result?.cpt_candidates, encounter);
   const primaryDiagnosis = icdCandidates.find((candidate) => candidate.primary === true)?.code || null;
+  const primaryLabel = primaryBadge(result?.diagnosis_sequencing);
   const supportedEm = evidenceSupportedEm(result, encounter);
   const preparedBlock = useMemo(
     () => preparedBillingBlock(result ? { ...result, completeness } : result, encounter),
@@ -445,7 +448,8 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
             <>
               <div className={`rounded-xl border p-4 ${completenessBlocked ? "border-rose-200 bg-rose-50 text-rose-900" : completenessOverridden ? "border-violet-200 bg-violet-50 text-violet-950" : completenessReady ? "border-sky-200 bg-sky-50 text-sky-950" : "border-amber-200 bg-amber-50 text-amber-950"}`}><div className="flex gap-3">{completenessBlocked ? <Ban size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : completenessReady ? <ShieldCheck size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />}<div><p className="font-semibold">{completenessBlocked ? "Prepared review has unresolved completeness blockers" : completenessOverridden ? "Prepared for human review after reasoned completeness override — not transmitted" : completenessReady ? "Prepared for human review — not transmitted" : "Completeness is not verified — manual review required"}</p><p className="mt-1 text-sm">Decision support only. A provider and coder remain responsible for the final billing decision.</p></div></div></div>
               <EmReview em={result.em} supportedEm={supportedEm} encounter={encounter} />
-              <div className="grid gap-5 lg:grid-cols-2"><CandidateGroup title="ICD-10-CM candidates" candidates={icdCandidates} primaryCode={primaryDiagnosis} onCopy={copyText} /><CandidateGroup title="CPT and E/M candidates" candidates={cptCandidates} onCopy={copyText} /></div>
+              <DiagnosisSequencingNotice value={result.diagnosis_sequencing} />
+              <div className="grid gap-5 lg:grid-cols-2"><CandidateGroup title="ICD-10-CM candidates" candidates={icdCandidates} primaryCode={primaryDiagnosis} primaryLabel={primaryLabel} onCopy={copyText} /><CandidateGroup title="CPT and E/M candidates" candidates={cptCandidates} onCopy={copyText} /></div>
               {result.withheld_without_evidence > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result.withheld_without_evidence} candidate{result.withheld_without_evidence === 1 ? " was" : "s were"} withheld because verified evidence was unavailable.</div>}
               {result.withheld_without_reason > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result.withheld_without_reason} held or removed candidate{result.withheld_without_reason === 1 ? " was" : "s were"} withheld because a required review reason was unavailable.</div>}
               <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="copy-heading">

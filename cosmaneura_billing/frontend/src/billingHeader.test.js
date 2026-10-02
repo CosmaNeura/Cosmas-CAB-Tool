@@ -26,6 +26,21 @@ test("exact Unicode code-point evidence and JSONB key reordering remain valid", 
   assert.equal(readBillingHeader(view, encounter), view);
 });
 
+test("held-concept review flags retain exact evidence without a code proposal", () => {
+  const {encounter, view} = fixture();
+  view.header.suggestions = [];
+  view.header.flags = [{id: "held-concept", message: "Unresolved clinical concept — coding review required.", evidenceIds: ["e1"]}];
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.deepEqual(headerDraft(view).codes, []);
+  const exported = exportBillingHeader(view);
+  assert.ok(exported.includes("Unresolved clinical concept — coding review required. [e1]"));
+  assert.ok(exported.includes("café"));
+  for (const refs of [[], ["unknown"], ["e1", "e1"], null]) {
+    const invalid = structuredClone(view); invalid.header.flags[0].evidenceIds = refs;
+    assert.throws(() => readBillingHeader(invalid, encounter));
+  }
+});
+
 for (const [label, tamper] of [
   ["wrong note version", (v) => {v.header.expectedSource.noteVersion = "2";}],
   ["UTF16 offset", (v) => {v.header.evidence[0].start = 3;}],
@@ -204,6 +219,19 @@ test("refresh preserves an in-flight mutation and its exact retry command", () =
   cancelHeaderRequest(pending); // unmount/source-key change cancels the actual owner
   assert.equal(retry.controller.signal.aborted, true);
   assert.equal(pending.current, null);
+});
+test("unresolved primary notice retains exact evidence through header read and export", () => {
+  const {encounter, view} = fixture();
+  view.header.flags.push({id: "primary_diagnosis_sequencing", evidenceIds: ["e1"],
+    message: "The extracted primary diagnosis candidate is unresolved or held. Confirm sequencing in review."});
+  assert.equal(readBillingHeader(view, encounter), view);
+  const draft = headerDraft(view);
+  draft.note = "Human review of secondary diagnoses.";
+  assert.match(exportBillingHeader(view, encounter), /primary diagnosis candidate is unresolved/);
+  assert.match(exportBillingHeader(view, encounter), /café/);
+  assert.equal(Object.hasOwn(draft, "flags"), false);
+  view.header.flags[0].evidenceIds = ["missing"];
+  assert.throws(() => readBillingHeader(view, encounter));
 });
 
 

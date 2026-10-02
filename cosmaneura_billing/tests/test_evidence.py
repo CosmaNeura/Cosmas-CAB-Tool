@@ -99,10 +99,13 @@ def test_stripped_code_cannot_be_captured():
 
     result = BillingOrchestrator(llm=HallucinatingLLM()).process(SAMPLE_VISIT)
     audit = "\n".join(result.biller_worksheet.audit_trail)
-    assert "EVIDENCE-REMOVED" in audit
-    # the fabricated duplicate lost its quote, so at least one K59.00 was held
-    held = [s for s in result.provider_card.declined_codes if s.code == "K59.00"]
+    assert "HOLD    unresolved dx 'Constipation, unspecified'" in audit
+    # The fabricated duplicate is stopped before a code is assigned; the real
+    # evidence-backed constipation suggestion remains available.
+    held = [s for s in result.provider_card.declined_codes if s.label == "Constipation, unspecified"]
     assert held and held[0].disposition == Disposition.REVIEW
+    assert held[0].code == "(unresolved)" and not held[0].evidence
+    assert len([s for s in result.provider_card.captured_codes if s.code == "K59.00"]) == 1
 
 
 def test_demo_pipeline_evidence_all_verifies():
