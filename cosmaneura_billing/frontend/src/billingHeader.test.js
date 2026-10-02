@@ -502,3 +502,37 @@ test("optional model-input proof is closed historical metadata, not generation p
   view.header.expectedSource = structuredClone(encounter.headerSource);
   assert.throws(() => readBillingHeader(view, encounter));
 });
+
+test("provider Azure proof v2 requires the exact source operation/admission and cannot replace Athena v1", () => {
+  const {encounter,view}=fixture();
+  encounter.headerSource.ingestionSource="provider_completed_note";
+  encounter.inferencePolicy={allowed:false,reason:"operational_source_model_not_approved"};
+  view.header.expectedSource=structuredClone(encounter.headerSource);
+  assert.equal(readBillingHeader(view,encounter),view); // Old offline provider headers have no model proof.
+  view.header.generation.inferenceMode="azure_openai";
+  const proof={schemaVersion:"cab-model-input-proof.v2",policyId:"33333333-3333-4333-8333-333333333333",
+    policySha256:"a".repeat(64),sourceSha256:"b".repeat(64),serviceSha256:"c".repeat(64),expiresAt:"2020-01-01T00:00:00Z",
+    sourceOperationId:"44444444-4444-4444-8444-444444444444",sourceAdmissionSha256:"d".repeat(64)};
+  view.header.generation.modelInputProof=proof;
+  assert.equal(readBillingHeader(view,encounter),view);
+  assert.equal(encounter.inferencePolicy.allowed,false); // Historical proof grants no current model authority.
+  assert.equal(Object.hasOwn(headerDraft(view),"modelInputProof"),false);
+  for (const mutate of [p=>{delete p.sourceOperationId;},p=>{delete p.sourceAdmissionSha256;},
+    p=>{p.sourceOperationId="not-a-uuid";},p=>{p.sourceAdmissionSha256="D".repeat(64);},p=>{p.sourceAdmissionSha256=null;},
+    p=>{p.schemaVersion="cab-model-input-proof.v1";},p=>{p.schemaVersion="future";},p=>{p.allowed=true;}]) {
+    const bad=structuredClone(proof);mutate(bad);view.header.generation.modelInputProof=bad;
+    assert.throws(()=>readBillingHeader(view,encounter));
+  }
+  view.header.generation.modelInputProof=proof;view.header.generation.inferenceMode="mock";
+  assert.throws(()=>readBillingHeader(view,encounter));
+  view.header.generation.inferenceMode="azure_openai";
+  encounter.headerSource.ingestionSource="athena_staff_review_operational";
+  view.header.expectedSource=structuredClone(encounter.headerSource);
+  assert.throws(()=>readBillingHeader(view,encounter));
+  const {sourceOperationId,sourceAdmissionSha256,...athena}=proof;
+  view.header.generation.modelInputProof={...athena,schemaVersion:"cab-model-input-proof.v1"};
+  assert.equal(readBillingHeader(view,encounter),view);
+  encounter.headerSource.ingestionSource="provider_completed_note";
+  view.header.expectedSource=structuredClone(encounter.headerSource);
+  assert.throws(()=>readBillingHeader(view,encounter));
+});

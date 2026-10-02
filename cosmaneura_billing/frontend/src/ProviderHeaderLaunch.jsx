@@ -3,12 +3,118 @@ import { FileText, ShieldCheck } from "lucide-react";
 import { api } from "./api.js";
 import BillingHeader from "./BillingHeader.jsx";
 import { sourceLabel, visitTypeLabel } from "./providerBilling.js";
-import { canLaunchHeader, headerLaunchSignIn, readLaunchEncounter } from "./providerHeaderLaunch.js";
+import { canLaunchHeader, canPreviewHandoff, handoffAttempt, handoffSignIn, headerLaunchSignIn,
+  readHandoffFixtures, readHandoffReceipt, readLaunchEncounter } from "./providerHeaderLaunch.js";
 
 const button = "rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50";
 
 export default function ProviderHeaderLaunch({ launch }) {
+  if (launch.handoff) return <HandoffPreview key={launch.error || "handoff"} launch={launch} />;
   return <LaunchContents key={launch.encounterId || "invalid"} launch={launch} />;
+}
+
+function HandoffPreview({ launch }) {
+  const [catalogue, setCatalogue] = useState(null), [selected, setSelected] = useState("");
+  const [loading, setLoading] = useState(false), [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(launch.error || ""), [signIn, setSignIn] = useState(false);
+  const [receipt, setReceipt] = useState(null), [pending, setPending] = useState(false);
+  const request = useRef({ sequence: 0, controller: null, busy: false }), attempt = useRef(null);
+  const received = useRef(false);
+
+  useEffect(() => {
+    if (!launch.error) load();
+    return () => { request.current.sequence++; request.current.busy = false; request.current.controller?.abort(); };
+  }, []);
+  useEffect(() => {
+    if (!pending || receipt) return;
+    const warn = (event) => { if (!received.current) { event.preventDefault(); event.returnValue = true; } };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pending, receipt]);
+
+  async function load() {
+    if (request.current.busy || launch.error || attempt.current) return;
+    const sequence = ++request.current.sequence, controller = new AbortController();
+    request.current = { sequence, controller, busy: true };
+    const deadline = window.setTimeout(() => controller.abort(), 10_000);
+    setLoading(true); setError(""); setSignIn(false);
+    try {
+      const session = await api("/api/session", { signal: controller.signal });
+      if (!canPreviewHandoff(session)) throw new Error("handoff-unavailable");
+      const value = readHandoffFixtures(await api("/api/provider/encounters/handoff/fixtures", { signal: controller.signal }));
+      if (sequence !== request.current.sequence) return;
+      if (controller.signal.aborted) throw new Error("handoff-timed-out");
+      setCatalogue(value);
+    } catch (failure) {
+      if (sequence !== request.current.sequence) return;
+      setSignIn(failure.status === 401);
+      setError(failure.status === 401 ? "Sign in to open the synthetic handoff preview."
+        : failure.status === 403 || failure.message === "handoff-unavailable" ? "The synthetic handoff preview is unavailable for your account or practice."
+        : "The synthetic fixtures could not be verified or loaded. Try loading them again.");
+    } finally {
+      window.clearTimeout(deadline);
+      if (sequence === request.current.sequence) { request.current.busy = false; setLoading(false); }
+    }
+  }
+
+  async function submit() {
+    if (request.current.busy || !catalogue || !selected || receipt) return;
+    const sequence = ++request.current.sequence, controller = new AbortController();
+    request.current = { sequence, controller, busy: true };
+    const deadline = window.setTimeout(() => controller.abort(), 15_000);
+    setSubmitting(true); setError("");
+    try {
+      attempt.current = handoffAttempt(catalogue.fixtures, selected, attempt.current);
+      setPending(true);
+      const { operationId, fixtureKey } = attempt.current;
+      const value = readHandoffReceipt(await api("/api/provider/encounters/handoff/fixture", {
+        method: "POST", body: { operationId, fixtureKey }, signal: controller.signal,
+      }), attempt.current);
+      if (sequence !== request.current.sequence) return;
+      if (controller.signal.aborted) throw new Error("handoff-timed-out");
+      received.current = true; setReceipt(value);
+      if (value.current) window.location.assign(value.launchPath);
+    } catch (failure) {
+      if (sequence !== request.current.sequence) return;
+      setError(failure.status === 409 ? "The handoff conflicts with the server record. Keep this page open; retry will use the same operation."
+        : failure.status === 401 || failure.status === 403 ? "The handoff could not be authorized. No new operation will be created by retry."
+        : "The handoff outcome could not be verified. Keep this page open and retry the same handoff.");
+    } finally {
+      window.clearTimeout(deadline);
+      if (sequence === request.current.sequence) { request.current.busy = false; setSubmitting(false); }
+    }
+  }
+
+  return <div className="min-h-screen bg-slate-50 px-4 py-10 font-sans text-slate-900">
+    <main aria-label="Synthetic provider handoff preview" className="mx-auto max-w-2xl space-y-5">
+      <header><p className="text-xs font-medium text-slate-500">Cosmas · CAB</p><h1 className="mt-1 text-xl font-semibold">Synthetic completed-note handoff</h1></header>
+      <section className="rounded-xl border border-violet-200 bg-violet-50 p-5 text-sm text-violet-950">
+        <p>Preview with a server-owned synthetic fixture.</p>
+        {catalogue && <p className="mt-2">{catalogue.completionMeaning}</p>}
+        <p className="mt-2">The handoff opens the billing header. Use Generate there to request billing analysis.</p>
+      </section>
+      {loading && <p role="status">Loading synthetic fixtures…</p>}
+      {error && <section role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><p>{error}</p>
+        {signIn ? <a className="mt-3 inline-block font-semibold underline" href={handoffSignIn()}>Sign in with Microsoft</a>
+          : !catalogue && !launch.error && <button type="button" className={`${button} mt-3`} disabled={loading} onClick={load}>Reload fixtures</button>}
+      </section>}
+      {catalogue && <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
+        <label className="block text-sm font-medium">Synthetic encounter
+          <select className="mt-2 block w-full rounded-lg border border-slate-300 bg-white p-2" value={selected}
+            disabled={loading || submitting || pending || !!receipt} onChange={(event) => setSelected(event.target.value)}>
+            <option value="">Choose a fixture</option>{catalogue.fixtures.map((fixture) => <option key={fixture.key} value={fixture.key}>{fixture.label}</option>)}
+          </select>
+        </label>
+        {!catalogue.fixtures.length && <p className="text-sm">No synthetic fixtures are currently available.</p>}
+        {!receipt && <button type="button" className={button} disabled={!selected || loading || submitting} onClick={submit}>
+          {submitting ? "Sending handoff…" : pending ? "Retry same handoff" : "Hand off selected fixture"}
+        </button>}
+        {submitting && <p role="status" className="text-sm">Waiting for the handoff receipt…</p>}
+        {receipt && <p role="status" className="text-sm">{receipt.current ? "Handoff received. Opening the billing header…"
+          : "This receipt is superseded. Its billing header cannot be opened from this handoff."}</p>}
+      </section>}
+    </main>
+  </div>;
 }
 
 function LaunchContents({ launch }) {
@@ -83,7 +189,7 @@ function LaunchContents({ launch }) {
             <h2 className="font-semibold text-slate-900">{encounter.encounterType === "office_established" ? "Established patient office visit"
               : encounter.encounterType === "office_new" ? "New patient office visit" : "Selected visit"}</h2>
             <p className="mt-1 text-xs text-slate-600">Source version {encounter.encounterVersion}</p>
-            <p className="mt-1 text-xs text-violet-800">{encounter.headerSource.ingestionSource === "athena_staff_review_operational" ? "Reviewed Athena practice note" : sourceLabel(encounter.dataClass)} · Human review required</p>
+            <p className="mt-1 text-xs text-violet-800">{encounter.headerSource.ingestionSource === "athena_staff_review_operational" ? "Reviewed Athena practice note" : encounter.headerSource.ingestionSource === "provider_completed_note" ? "Provider-confirmed completed note" : sourceLabel(encounter.dataClass)} · Human review required</p>
             <details className="mt-3 text-xs text-slate-500">
               <summary className="w-fit cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500">Source details</summary>
               <dl className="mt-2 space-y-2">
