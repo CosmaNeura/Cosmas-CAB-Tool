@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, Check, ChevronDown, Clock, FileCheck2, Info,
   Pencil, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, X,
@@ -11,6 +11,8 @@ import {
   reviewableCoderView, UNREVIEWED, validateCoderDraft,
 } from "./coderReview.js";
 import ProviderQueue from "./ProviderQueue.jsx";
+import BillingHeader from "./BillingHeader.jsx";
+import { headerProposals, headerReviewRequest, missingHeaderBaseline, readBillingHeader } from "./billingHeader.js";
 import {
   completenessLabel, isSyntheticDemoEncounter, sourceLabel,
 } from "./providerBilling.js";
@@ -183,7 +185,7 @@ function PreparedPreview({ payload, engine, receipt, onRetry, saving }) {
   return (
     <section className="rounded-2xl border border-violet-200 bg-violet-50 p-5 shadow-sm" aria-labelledby="prepared-preview-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 id="prepared-preview-heading" className="flex items-center gap-2 font-semibold text-violet-950"><FileCheck2 size={18} aria-hidden="true" />{prepared ? "Prepared draft — not transmitted" : "Coder decisions — completeness unresolved"}</h2><p className="mt-1 text-sm text-violet-900">{prepared ? "This human-readable preview is assembled from the coder’s decisions." : "These decisions can be recorded for review. Documentation completeness has not passed, so no prepared draft is produced."} The feedback endpoint records the review; a server-owned versioned packet is a separate future slice.</p></div>
+        <div><h2 id="prepared-preview-heading" className="flex items-center gap-2 font-semibold text-violet-950"><FileCheck2 size={18} aria-hidden="true" />{prepared ? "Prepared draft — not transmitted" : "Coder decisions — completeness unresolved"}</h2><p className="mt-1 text-sm text-violet-900">{prepared ? "This human-readable preview is assembled from the coder’s decisions." : "These decisions can be recorded for review. Documentation completeness has not passed, so no prepared draft is produced."}</p></div>
         <Pill tone="bg-white text-violet-900 ring-violet-300">{prepared ? "prepared_not_transmitted" : "Completeness unresolved"}</Pill>
       </div>
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
@@ -206,7 +208,7 @@ function PreparedPreview({ payload, engine, receipt, onRetry, saving }) {
       {receipt && (
         <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950" role="status" aria-live="polite">
           <p className="flex items-center gap-2 font-semibold"><Check size={17} aria-hidden="true" />Review recorded · {receipt.replayed ? "exact replay confirmed" : "first write confirmed"}</p>
-          <p className="mt-1 text-sm">The server acknowledged review <code className="font-mono text-xs">{receipt.reviewId}</code>. This receipt confirms coder feedback only, not a submitted claim or a durable billing packet.</p>
+          <p className="mt-1 text-sm">The server acknowledged review <code className="font-mono text-xs">{receipt.reviewId}</code>. {receipt.headerSignoff ? `These coder decisions are bound to header revision ${receipt.headerSignoff.headerRevision} and its exact source.` : "This receipt confirms coder feedback."} No claim was submitted.</p>
         </div>
       )}
       {receipt && <button type="button" disabled={saving} onClick={onRetry} className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-950 hover:bg-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-800 disabled:opacity-60"><RotateCcw size={15} aria-hidden="true" />{saving ? "Verifying…" : "Verify exact replay"}</button>}
@@ -229,12 +231,21 @@ export default function CoderReview({
   const [saving, setSaving] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [frozen, setFrozen] = useState(false);
+  const [headerEncounter, setHeaderEncounter] = useState(null);
+  const [headerState, setHeaderState] = useState(null);
+  const [headerChoices, setHeaderChoices] = useState({});
+  const [baselineChoices, setBaselineChoices] = useState({});
+  const [headerAcknowledged, setHeaderAcknowledged] = useState(false);
+  const [headerRefresh, setHeaderRefresh] = useState(0);
+  const onHeaderState = useCallback((state) => setHeaderState(state), []);
+  const headerIdentity = useRef(null);
   const loadRequest = useRef(0);
   const saveRequest = useRef(0);
   const saveAbort = useRef(null);
   const savingRef = useRef(false);
   const reviewId = useRef(null);
   const pendingPayload = useRef(null);
+  const pendingHeaderRequest = useRef(null);
   const validationRef = useRef(null);
   const receiptRef = useRef(null);
   const activeLoadEncounter = useRef(null);
@@ -247,9 +258,11 @@ export default function CoderReview({
     setEngine(null); setDecisions({}); setAdditions([]); setSeconds(0);
     setReceipt(null); setLoadError(null); setSaveError(null); setSaveErrorStatus(null);
     setSaving(false); setShowValidation(false); setFrozen(false);
+    setHeaderEncounter(null); setHeaderState(null); setHeaderChoices({}); setBaselineChoices({});
+    setHeaderAcknowledged(false); setHeaderRefresh(0); headerIdentity.current = null;
     onNavigationLockChange(false);
     savingRef.current = false;
-    pendingPayload.current = null; reviewId.current = null;
+    pendingPayload.current = null; pendingHeaderRequest.current = null; reviewId.current = null;
     const cancelRequests = () => {
       if (loadRequest.current === requestId) ++loadRequest.current;
       controller.abort();
@@ -270,20 +283,24 @@ export default function CoderReview({
     onStatusChange(encounterId, { processingStatus: "Loading coder review", reviewState: "Needs review" });
     (async () => {
       try {
-        const response = await api("/api/encounters/coder-view", {
-          method: "POST", body: { encounterId }, signal: controller.signal,
-        });
+        const [response, detail] = await Promise.all([
+          api("/api/encounters/coder-view", { method: "POST", body: { encounterId }, signal: controller.signal }),
+          api("/api/encounters/detail", { method: "POST", body: { encounterId }, signal: controller.signal }),
+        ]);
         if (requestId !== loadRequest.current) return;
         const listed = encounters.find((item) => item.id === encounterId);
         if (response.encounterId !== encounterId) throw new Error("encounter-mismatch-response");
         if (!listed || !isSyntheticDemoEncounter(response) || response.dataClass !== listed.dataClass) throw new Error("synthetic-boundary-response");
         if (!Number.isInteger(response.encounterVersion) || !response.reviewContext || !response.completeness) throw new Error("incomplete-review-context");
+        if (detail.id !== encounterId || detail.encounterVersion !== response.encounterVersion
+          || detail.dataClass !== response.dataClass) throw new Error("source-version-response");
         const reviewable = reviewableCoderView(response);
         if (reviewable.contractViolations > 0) throw new Error("evidence-contract-response");
         const initial = initialCoderDraft(reviewable);
         reviewId.current = globalThis.crypto.randomUUID();
         setDecisions(initial.decisions);
         setEngine(reviewable);
+        setHeaderEncounter({...detail, encounterId: detail.id});
         onStatusChange(encounterId, {
           completenessState: completenessLabel(reviewable.completeness),
           processingStatus: reviewable.degraded ? "Inference unavailable" : "Ready for coder decisions",
@@ -300,6 +317,40 @@ export default function CoderReview({
     return cancelRequests;
   }, [encounterId, live, encounters, onStatusChange, onNavigationLockChange]);
 
+  const headerEnabled = Boolean(headerEncounter?.headerSource);
+  const headerView = headerState?.view;
+  const proposals = useMemo(() => headerView ? headerProposals(headerView) : [], [headerView]);
+  const missingBaseline = useMemo(() => headerView && engine
+    ? missingHeaderBaseline(headerView, capturedRecommendations(engine)
+      .map(({kind, row}) => ({kind, engine_code: row.code, action: "unreviewed"})))
+    : [], [headerView, engine]);
+  const headerReady = !headerEnabled || Boolean(headerView && !headerView.signoff
+    && !headerState.dirty && !headerState.busy && !headerState.stale && headerAcknowledged
+    && proposals.every((p) => ["accept", "reject"].includes(headerChoices[p.id]?.decision)
+      && headerChoices[p.id]?.reason?.trim())
+    && missingBaseline.every((row) => ["retain", "reject"].includes(baselineChoices[row.id]?.decision)
+      && baselineChoices[row.id]?.reason?.trim()));
+
+  useEffect(() => {
+    if (headerState?.dirty || headerState?.stale) setHeaderAcknowledged(false);
+    if (!headerView) return;
+    const identity = `${headerView.header.headerId}:${headerView.revisionNumber}`;
+    if (identity !== headerIdentity.current) {
+      headerIdentity.current = identity;
+      setHeaderChoices({}); setBaselineChoices({}); setHeaderAcknowledged(false);
+    }
+    if (receipt?.headerSignoff && (receipt.headerSignoff.headerId !== headerView.header.headerId
+      || receipt.headerSignoff.headerRevision !== headerView.revisionNumber
+      || (headerView.signoff && receipt.reviewId !== headerView.signoff.reviewId))) {
+      // A saved edit starts a fresh, entirely explicit review of the current revision.
+      pendingPayload.current = null; pendingHeaderRequest.current = null;
+      reviewId.current = globalThis.crypto.randomUUID();
+      setReceipt(null); setFrozen(false); setSaveError(null); setSaveErrorStatus(null);
+      setDecisions(initialCoderDraft(engine).decisions); setAdditions([]); setSeconds(0);
+      setShowValidation(false); onNavigationLockChange(false);
+    }
+  }, [headerView, headerState?.dirty, headerState?.stale, receipt, engine, onNavigationLockChange]);
+
   useEffect(() => {
     if (!engine || engine.degraded || receipt) return undefined;
     const timer = globalThis.setInterval(() => setSeconds((value) => value + 1), 1000);
@@ -307,10 +358,12 @@ export default function CoderReview({
   }, [engine, receipt]);
 
   const validation = useMemo(
-    () => validateCoderDraft(engine, decisions, additions),
-    [engine, decisions, additions],
+    () => validateCoderDraft(engine, decisions, additions, {allowEmpty: missingBaseline.length > 0
+      && missingBaseline.every((row) => baselineChoices[row.id]?.decision === "reject"
+        && baselineChoices[row.id]?.reason?.trim())}),
+    [engine, decisions, additions, missingBaseline, baselineChoices],
   );
-  const queueState = coderQueueState({ engine, draftValid: validation.valid, saved: Boolean(receipt) });
+  const queueState = coderQueueState({ engine, draftValid: validation.valid && headerReady, saved: Boolean(receipt) });
 
   useEffect(() => {
     if (encounterId && engine?.encounterId === encounterId) {
@@ -360,9 +413,21 @@ export default function CoderReview({
         globalThis.requestAnimationFrame(() => validationRef.current?.focus());
         return;
       }
-      pendingPayload.current = buildFeedbackPayload({
+      const candidate = buildFeedbackPayload({
         engine, decisions, additions, reviewId: reviewId.current, seconds,
       });
+      if (headerEnabled) {
+        if (!headerReady) {
+          setSaveError("Generate or save the current header, review every human code proposal and earlier suggestion, and confirm your header review before recording it.");
+          return;
+        }
+        try {
+          pendingHeaderRequest.current = headerReviewRequest(headerView, candidate,
+            proposals.map((p) => ({id: p.id, ...headerChoices[p.id]})), headerAcknowledged,
+            missingBaseline.map((row) => ({id: row.id, ...baselineChoices[row.id]})));
+        } catch { setSaveError("Earlier-header decisions must match your final code outcomes. Retained codes need an explicit human addition or E/M edit below; rejected codes must be absent. Check the header decisions and reasons before saving."); return; }
+      }
+      pendingPayload.current = candidate;
       setFrozen(true);
       onNavigationLockChange(true);
     }
@@ -375,9 +440,18 @@ export default function CoderReview({
     setSaving(true); setSaveError(null); setSaveErrorStatus(null);
     onStatusChange(encounterId, { processingStatus: "Saving coder review" });
     try {
-      const response = await api("/api/feedback", { method: "POST", body: payload, signal: controller.signal });
+      const composed = pendingHeaderRequest.current;
+      const response = await api(composed ? "/api/encounters/header/signoff" : "/api/feedback",
+        { method: "POST", body: composed || payload, signal: controller.signal });
       if (requestId !== saveRequest.current || encounterId !== payload.encounter_id) return;
       if (response.ok !== true || response.reviewId !== payload.review_id || typeof response.replayed !== "boolean") throw new Error("invalid-feedback-receipt");
+      if (composed) {
+        const verified = readBillingHeader(response.view, headerEncounter);
+        if (!verified?.signoff || verified.signoff.reviewId !== payload.review_id
+          || verified.header.headerId !== composed.headerId || verified.revisionNumber !== composed.expectedRevision
+          || JSON.stringify(response.headerSignoff) !== JSON.stringify(verified.signoff)) throw new Error("invalid-header-receipt");
+        setHeaderRefresh((value) => value + 1);
+      }
       setReceipt({ ...response, payload });
       onNavigationLockChange(false);
       onStatusChange(encounterId, { processingStatus: response.replayed ? "Exact replay confirmed" : "Review recorded", reviewState: coderQueueState({ engine, draftValid: true, saved: true }) });
@@ -385,12 +459,16 @@ export default function CoderReview({
       if (error?.name === "AbortError" || requestId !== saveRequest.current) return;
       setSaveError(coderErrorMessage(error, verifyingReplay ? "verify" : "save"));
       setSaveErrorStatus(error?.status || null);
+      if (pendingHeaderRequest.current && [403, 404, 409].includes(error?.status)) {
+        setReceipt(null); setHeaderRefresh((value) => value + 1);
+      }
       onStatusChange(encounterId, {
         processingStatus: verifyingReplay ? "Replay verification unavailable" : "Save failed",
         ...(verifyingReplay ? { reviewState: coderQueueState({ engine, draftValid: true, saved: true }) } : {}),
       });
       if (!verifyingReplay && error?.status === 422) {
         pendingPayload.current = null;
+        pendingHeaderRequest.current = null;
         setFrozen(false);
         onNavigationLockChange(false);
       }
@@ -404,6 +482,7 @@ export default function CoderReview({
 
   const reloadAfterDefinitiveFailure = () => {
     pendingPayload.current = null;
+    pendingHeaderRequest.current = null;
     setFrozen(false);
     onNavigationLockChange(false);
     globalThis.location.reload();
@@ -423,7 +502,7 @@ export default function CoderReview({
         <>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="coder-review-heading">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><h1 id="coder-review-heading" className="text-lg font-semibold text-slate-950">Coder review · {engine.encounterId}</h1><p className="mt-1 text-sm text-slate-600">Review each evidence-linked recommendation. Saving records feedback. An on-screen prepared preview also requires a completeness pass; nothing is transmitted.</p></div>
+              <div><h1 id="coder-review-heading" className="text-lg font-semibold text-slate-950">Coder review · {engine.encounterId}</h1><p className="mt-1 text-sm text-slate-600">Review each evidence-linked recommendation{headerEnabled ? " and the saved billing header" : ""}. An on-screen prepared preview also requires a completeness pass; nothing is transmitted.</p></div>
               <div className="flex flex-wrap items-center gap-2"><Pill><Clock size={12} className="mr-1" aria-hidden="true" />{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</Pill><Pill tone="bg-violet-50 text-violet-800 ring-violet-200">{sourceLabel(engine.dataClass)}</Pill><Pill>version {engine.encounterVersion}</Pill></div>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -435,12 +514,53 @@ export default function CoderReview({
             {engine.suppressedExclusions > 0 && <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><ShieldCheck size={15} className="mr-1 inline" aria-hidden="true" />{engine.suppressedExclusions} engine candidate{engine.suppressedExclusions === 1 ? " is" : "s are"} not shown because no cited documentation evidence was returned. It cannot enter the prepared preview.</p>}
           </section>
 
+          {headerEnabled && <>
+            <BillingHeader encounter={headerEncounter} onStateChange={onHeaderState}
+              disabled={frozen && !receipt || saving} refreshKey={headerRefresh} />
+            <section className="rounded-2xl border border-teal-200 bg-teal-50 p-5" aria-labelledby="header-confirmation-heading">
+              <h2 id="header-confirmation-heading" className="font-semibold text-teal-950">Review the saved header</h2>
+              <p className="mt-1 text-sm text-teal-900">Review the facts, evidence, and documentation warnings above. For each human code proposal, record a decision and reason, then make matching code decisions below.</p>
+              {missingBaseline.length > 0 && <div className="mt-4" aria-label="Earlier header suggestions">
+                <h3 className="font-semibold text-teal-950">Earlier header suggestions need reconciliation</h3>
+                <p className="mt-1 text-sm text-teal-900">The current pipeline run does not include these original header codes. The source and saved edits are unchanged. Review each earlier code explicitly. Retaining one requires a separate human-added code with rationale and evidence below, or an edit to the current E/M. Choosing “Retain” alone adds nothing.</p>
+                {missingBaseline.map((row, index) => <fieldset key={row.id} disabled={frozen || headerState?.dirty || headerState?.busy || headerState?.stale || Boolean(headerView?.signoff)} className="mt-3 grid gap-3 rounded-xl border border-amber-300 bg-white p-3 sm:grid-cols-2">
+                  <legend className="px-1 text-sm font-semibold">Earlier suggestion {index + 1}: {row.kind} {row.code}</legend>
+                  <p className="text-sm text-slate-700 sm:col-span-2">{row.label} · Original pipeline suggestion; absent from the current review.</p>
+                  {row.evidenceIds.map((id) => <blockquote key={id} className="border-l-2 border-slate-300 pl-2 text-sm text-slate-600 sm:col-span-2">{headerView.header.evidence.find((e) => e.id === id).text}</blockquote>)}
+                  <label className="grid gap-1 text-xs font-medium">Earlier suggestion {index + 1} decision
+                    <select aria-label={`Earlier suggestion ${index + 1} decision`} className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm" value={baselineChoices[row.id]?.decision || ""} onChange={(event) => {setHeaderAcknowledged(false); setBaselineChoices((current) => ({...current, [row.id]: {...current[row.id], decision: event.target.value}}));}}>
+                      <option value="">Choose a decision</option><option value="retain">Retain through a human code decision</option><option value="reject">Reject earlier suggestion</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-medium">Earlier suggestion {index + 1} reason
+                    <input className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm" maxLength={1000} value={baselineChoices[row.id]?.reason || ""} onChange={(event) => {setHeaderAcknowledged(false); setBaselineChoices((current) => ({...current, [row.id]: {...current[row.id], reason: event.target.value}}));}} />
+                  </label>
+                </fieldset>)}
+              </div>}
+              {proposals.map((proposal, index) => <fieldset key={proposal.id} disabled={frozen || !headerView || headerState?.dirty || headerState?.busy || headerState?.stale || Boolean(headerView?.signoff)} className="mt-3 grid gap-3 rounded-xl border border-teal-200 bg-white p-3 sm:grid-cols-2">
+                <legend className="px-1 text-sm font-semibold">Header proposal {index + 1}: {proposal.original?.code || "New code"} → {proposal.proposed?.code || "Removal"}</legend>
+                <p className="text-sm text-slate-700 sm:col-span-2">{proposal.proposed?.label || proposal.original?.label}</p>
+                <label className="grid gap-1 text-xs font-medium">Header proposal {index + 1} decision
+                  <select aria-label={`Header proposal ${index + 1} decision`} className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm" value={headerChoices[proposal.id]?.decision || ""} onChange={(event) => {setHeaderAcknowledged(false); setHeaderChoices((current) => ({...current, [proposal.id]: {...current[proposal.id], decision: event.target.value}}));}}>
+                    <option value="">Choose a decision</option><option value="accept">Accept human proposal</option><option value="reject">Reject human proposal</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-medium">Header proposal {index + 1} reason
+                  <input className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm" maxLength={1000} value={headerChoices[proposal.id]?.reason || ""} onChange={(event) => {setHeaderAcknowledged(false); setHeaderChoices((current) => ({...current, [proposal.id]: {...current[proposal.id], reason: event.target.value}}));}} />
+                </label>
+              </fieldset>)}
+              <label className="mt-4 flex items-start gap-2 text-sm font-medium text-teal-950"><input className="mt-1" type="checkbox" checked={headerAcknowledged} disabled={frozen || !headerView || headerState?.dirty || headerState?.busy || headerState?.stale || Boolean(headerView?.signoff)} onChange={(event) => setHeaderAcknowledged(event.target.checked)} />I reviewed this header’s facts, code proposals, evidence, and documentation warnings.</label>
+              {headerView?.signoff && <p className="mt-3 text-sm text-teal-900">This header revision already has a recorded coder review. A saved header edit requires a fresh review.</p>}
+              {headerState?.dirty && <p className="mt-3 text-sm text-teal-900">Save or cancel the header edits before recording the review.</p>}
+            </section>
+          </>}
+
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="captured-heading"><h2 id="captured-heading" className="font-semibold text-slate-950">Engine suggestions</h2><p className="mt-1 text-sm text-slate-600">Each row starts unreviewed. Accept, edit, or reject it affirmatively.</p>{captured.length ? captured.map((item) => <CodeRow key={item.key} item={item} decision={decisions[item.key]} disabled={frozen} issues={showValidation ? issuesFor(item.key) : []} onChange={(value) => updateDecision(item.key, value)} />) : <p className="mt-3 text-sm text-slate-600">No evidence-supported engine suggestions are available.</p>}</section>
 
           {excluded.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="excluded-heading"><h2 id="excluded-heading" className="font-semibold text-slate-950">Engine-held and removed candidates</h2><p className="mt-1 text-sm text-slate-600">These exclusions are read-only because the feedback contract has no “hold” action. A coder may start a separate manual addition, which still requires rationale and evidence.</p>{excluded.map((item) => <ExcludedRow key={item.key} item={item} disabled={frozen} added={additions.some((addition) => addition.sourceKey === item.key)} onStartManualAddition={() => startManualAddition(item)} />)}</section>}
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="manual-heading">
-            <h2 id="manual-heading" className="font-semibold text-slate-950">Human-added codes</h2><p className="mt-1 text-sm text-slate-600">Every addition requires a rationale and a supporting synthetic documentation excerpt. It is stored in the feedback note until a server-owned evidence-span packet exists.</p>
+            <h2 id="manual-heading" className="font-semibold text-slate-950">Human-added codes</h2><p className="mt-1 text-sm text-slate-600">Every addition requires a rationale and a supporting synthetic documentation excerpt. Human additions remain separate from engine suggestions.</p>
             <div className="mt-3 space-y-3">{additions.map((addition, index) => {
               const key = `addition:${addition.id}`;
               const rowIssues = showValidation ? issuesFor(key) : [];
@@ -451,7 +571,7 @@ export default function CoderReview({
                 <fieldset key={addition.id} aria-describedby={describedBy} className="grid gap-3 rounded-xl border border-slate-200 p-4 md:grid-cols-2">
                   <legend className="sr-only">Human-added code {index + 1}</legend>
                   <label htmlFor={`${key}-kind`} className="grid gap-1 text-xs font-medium text-slate-700">Code type
-                    <select id={`${key}-kind`} disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.kind} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, kind: event.target.value } : item))} className="min-h-10 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">{MANUAL_KINDS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                    <select id={`${key}-kind`} aria-label="Code type" disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.kind} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, kind: event.target.value } : item))} className="min-h-10 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">{MANUAL_KINDS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}{!engine.em && <option value="EM">E/M (human addition)</option>}</select>
                   </label>
                   <label htmlFor={`${key}-code`} className="grid gap-1 text-xs font-medium text-slate-700">Code
                     <input id={`${key}-code`} required maxLength={32} disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.code} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, code: event.target.value } : item))} className="min-h-10 rounded-md border border-slate-300 px-2 py-1 font-mono text-sm" />
@@ -473,7 +593,7 @@ export default function CoderReview({
           {showValidation && validation.issues.length > 0 && <div ref={validationRef} tabIndex={-1} role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 focus:outline-none"><p className="font-semibold">Complete the review before saving</p><ul className="mt-2 list-disc space-y-1 pl-5">{validation.issues.map((item, index) => <li key={`${item.key}-${index}`}>{item.message}</li>)}</ul></div>}
           {saveError && <ErrorNotice>{saveError}{frozen && !receipt && (saveErrorStatus == null || saveErrorStatus >= 500) && <p className="mt-2 font-semibold">The server outcome is unknown. Keep this review open and use “Retry exact saved review.” Do not start a replacement review with a new ID.</p>}{frozen && !receipt && saveErrorStatus === 401 && <p className="mt-2"><a href="/.auth/login/aad?post_login_redirect_uri=/" target="_blank" rel="noreferrer" className="font-semibold underline underline-offset-2">Sign in again in a new tab</a>, then return here and retry the exact saved review.</p>}{frozen && !receipt && [403, 404, 409].includes(saveErrorStatus) && <button type="button" onClick={reloadAfterDefinitiveFailure} className="mt-3 flex min-h-10 items-center gap-2 rounded-lg border border-rose-300 bg-white px-3 py-2 font-medium hover:bg-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700"><RefreshCw size={15} aria-hidden="true" />{saveErrorStatus === 409 ? "Reload after confirmed conflict" : "Return to the refreshed workspace"}</button>}{saveErrorStatus === 409 && receipt && <p className="mt-2">Reload the encounter before starting another review.</p>}</ErrorNotice>}
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="save-heading"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 id="save-heading" className="font-semibold text-slate-950">Record coder review</h2><p className="mt-1 text-sm text-slate-600">The first save freezes the exact review ID and payload. An ambiguous failure retries that exact payload; controls remain locked.</p></div><button type="button" disabled={saving || Boolean(receipt)} onClick={saveReview} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-60"><Save size={16} aria-hidden="true" />{saving ? "Saving…" : frozen ? "Retry exact saved review" : canPrepareCoderPreview(engine) ? "Save review and prepare preview" : "Save coder review"}</button></div><p className="mt-3 text-xs text-slate-600">This action writes coder feedback only. It does not write to Athena or an EHR and does not transmit a claim to a clearinghouse or payer.</p></section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="save-heading"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 id="save-heading" className="font-semibold text-slate-950">Record coder review</h2><p className="mt-1 text-sm text-slate-600">Saving records your decisions{headerEnabled ? " with this exact header revision" : ""}. If confirmation is interrupted, retry the same review.</p></div><button type="button" disabled={saving || Boolean(receipt) || (Boolean(headerView?.signoff) && !frozen)} onClick={saveReview} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-60"><Save size={16} aria-hidden="true" />{saving ? "Saving…" : frozen ? "Retry exact saved review" : headerEnabled ? "Record coder review and header" : canPrepareCoderPreview(engine) ? "Save review and prepare preview" : "Save coder review"}</button></div><p className="mt-3 text-xs text-slate-600">This action records coder feedback{headerEnabled ? " and a header review receipt" : ""}. The clinical note remains unchanged. Nothing is written to Athena or an EHR, and no claim is transmitted.</p></section>
 
           <div ref={receiptRef} tabIndex={receipt ? -1 : undefined} className="focus:outline-none"><PreparedPreview payload={visiblePayload} engine={engine} receipt={receipt} onRetry={saveReview} saving={saving} /></div>
         </>

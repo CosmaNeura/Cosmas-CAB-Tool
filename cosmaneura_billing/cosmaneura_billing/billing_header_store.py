@@ -12,7 +12,8 @@ from threading import RLock
 
 from . import billing_header as domain
 from .access_audit import AccessAuditEvent
-from .persistence import PostgresAccessAuditStore, PostgresEncounterStore
+from .persistence import PostgresAccessAuditStore, PostgresEncounterStore, PostgresFeedbackStore
+from .billing_header_signoff import MemoryHeaderFeedbackAdapter, SignoffStoreMixin
 
 
 def _actor(actor):
@@ -35,7 +36,7 @@ def _audit_check(event, practice, actor, resource, action, *, mandatory):
     domain.uuid(event.event_id)
 
 
-class _Store:
+class _Store(SignoffStoreMixin):
     """Shared transaction algorithm; adapters only supply storage primitives."""
 
     def latest(self, encounter_id, *, expected_source):
@@ -49,7 +50,14 @@ class _Store:
         domain.require(record is not None, "store_invalid")
         rows = unit.revisions(record["headerId"])
         domain.require(all(row["number"] == index + 1 for index, row in enumerate(rows)), "store_invalid")
-        return domain.view(record["header"], rows)
+        result = domain.view(record["header"], rows)
+        receipt = unit.signoff_receipt(header_id=record["headerId"])
+        signed = domain.detached(receipt["receipt"]) if receipt else None
+        result["signoff"] = signed if signed and signed["headerRevision"] == len(rows) else None
+        result["previousSignoff"] = ({key: signed[key] for key in
+                                     ("reviewId", "headerRevision", "createdAt", "actor")}
+                                    if signed and result["signoff"] is None else None)
+        return result
 
     @staticmethod
     def _intent(kind, encounter_id, expected_source, actor, **fields):
@@ -141,7 +149,8 @@ class MemoryBillingHeaderStore(_Store):
         domain.require(getattr(encounter_store, "practice_id", None) == practice_id, "not_authorized")
         self.practice_id, self.encounters, self.authorize = practice_id, encounter_store, authorize
         self.clock, self._lock = clock, RLock()
-        self._data = {"headers": {}, "revisions": {}, "receipts": {}, "audit": []}
+        self._data = {"headers": {}, "revisions": {}, "receipts": {}, "audit": [],
+                      "signoffs": {}, "feedback": {}}
 
     @property
     def audit_events(self):
@@ -201,6 +210,21 @@ class _MemoryUnit:
                                    "actor": actor.to_api(), "at": self.store.clock(),
                                    "accessEventId": event.event_id if event else None})
 
+    def signoff_receipt(self, *, header_id=None, review_id=None):
+        if review_id:
+            return self.data["signoffs"].get(review_id)
+        return max((row for row in self.data["signoffs"].values()
+                    if row["receipt"]["headerId"] == header_id),
+                   key=lambda row: row["receipt"]["headerRevision"], default=None)
+
+    def append_feedback(self, feedback, store):
+        domain.require(isinstance(store, MemoryHeaderFeedbackAdapter)
+                       and store.header_store is self.store, "signoff_unavailable")
+        return store._append(self.data, feedback)
+
+    def insert_signoff(self, receipt, intent, actor, feedback, audit_completion):
+        self.data["signoffs"][receipt["reviewId"]] = {"receipt": receipt, "requestDigest": intent}
+
 
 class PostgresBillingHeaderStore(_Store):
     durable = True
@@ -233,7 +257,9 @@ class PostgresBillingHeaderStore(_Store):
                 has_table_privilege(current_user, 'billing_header_revisions', 'SELECT')
                 AND has_table_privilege(current_user, 'billing_header_revisions', 'INSERT') AS revisions,
                 has_table_privilege(current_user, 'billing_header_operations', 'SELECT')
-                AND has_table_privilege(current_user, 'billing_header_operations', 'INSERT') AS receipts
+                AND has_table_privilege(current_user, 'billing_header_operations', 'INSERT') AS receipts,
+                has_table_privilege(current_user, 'billing_header_signoffs', 'SELECT')
+                AND has_table_privilege(current_user, 'billing_header_signoffs', 'INSERT') AS signoffs
             """).fetchone()
             domain.require(row and all(row.values()), "store_invalid")
 
@@ -324,3 +350,32 @@ class _PostgresUnit:
 
     def audit(self, event, actor, action, header_id):
         PostgresAccessAuditStore._insert_completion(self.conn, event)
+
+    def signoff_receipt(self, *, header_id=None, review_id=None):
+        criterion, value = ("review_id", review_id) if review_id else ("header_id", header_id)
+        row = self.conn.execute(
+            f"SELECT receipt,payload_sha256,request_sha256 FROM billing_header_signoffs WHERE practice_id=%s AND {criterion}=%s::uuid ORDER BY header_revision DESC LIMIT 1",
+            (self.practice, value),
+        ).fetchone()
+        if not row:
+            return None
+        domain.require(domain.digest(row["receipt"]) == row["payload_sha256"], "store_invalid")
+        return {"receipt": row["receipt"], "requestDigest": row["request_sha256"]}
+
+    def append_feedback(self, feedback, store):
+        domain.require(isinstance(store, PostgresFeedbackStore)
+                       and store.context.practice_id == self.practice, "signoff_unavailable")
+        return store._append(self.conn, feedback)
+
+    def insert_signoff(self, receipt, intent, actor, feedback, audit_completion):
+        from .coder_feedback import feedback_payload_digest
+        domain.require(isinstance(audit_completion, AccessAuditEvent), "audit_required")
+        self.conn.execute("""INSERT INTO billing_header_signoffs
+            (practice_id,review_id,header_id,header_revision,source_sha256,recommendation_sha256,
+             request_sha256,feedback_sha256,receipt,payload_sha256,actor_tenant_id,actor_user_id,
+             actor_role,created_at,access_event_id)
+            VALUES(%s,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::uuid,%s::uuid,%s,%s::timestamptz,%s::uuid)""",
+            (self.practice, receipt["reviewId"], receipt["headerId"], receipt["headerRevision"],
+             domain.digest(receipt["expectedSource"]), receipt["recommendationDigest"], intent,
+             feedback_payload_digest(feedback), self.store.context.Jsonb(receipt), domain.digest(receipt),
+             actor.tenant_id, actor.user_id, actor.role, receipt["createdAt"], audit_completion.event_id))

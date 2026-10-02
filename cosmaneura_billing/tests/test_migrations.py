@@ -22,6 +22,7 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "008_synthetic_demo_encounter_immutability.up.sql",
         "009_source_import_foundation.up.sql",
         "011_billing_headers.up.sql",
+        "013_billing_header_signoffs.up.sql",
     ]
 
 

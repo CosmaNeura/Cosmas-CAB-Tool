@@ -107,14 +107,14 @@ function issue(issues, key, message) {
   issues.push({ key, message });
 }
 
-export function validateCoderDraft(engine, decisions, additions) {
+export function validateCoderDraft(engine, decisions, additions, {allowEmpty = false} = {}) {
   const issues = [];
   const decisionCount = capturedRecommendations(engine).length + additions.length;
 
   if (decisionCount > 500) {
     issue(issues, "recommendations", "This review exceeds the 500-decision server limit.");
   }
-  if (engine && capturedRecommendations(engine).length === 0 && additions.length === 0) {
+  if (engine && capturedRecommendations(engine).length === 0 && additions.length === 0 && !allowEmpty) {
     issue(issues, "recommendations", "No evidence-supported recommendation or human-added code is available to review.");
   }
   if (engine && !hasCompletenessContract(engine)) {
@@ -152,6 +152,9 @@ export function validateCoderDraft(engine, decisions, additions) {
       issue(issues, key, "Shorten the rationale and evidence to fit the review record.");
     }
   });
+  if ((engine?.em ? 1 : 0) + additions.filter((row) => row.kind === "EM").length > 1) {
+    issue(issues, "recommendations", "Only one E/M decision is permitted. Edit the current E/M instead of adding another.");
+  }
 
   return { valid: issues.length === 0, issues };
 }
@@ -208,7 +211,7 @@ export function buildFeedbackPayload({
     engine_em: engine.em?.code || null,
     final_em: emDecision && emDecision.action !== "reject"
       ? (emDecision.action === "accept" ? engine.em.code : clean(emDecision.finalCode))
-      : null,
+      : humanAdded.find((row) => row.kind === "EM")?.final_code || null,
     decisions: [...captured, ...humanAdded],
     time_spent_seconds: Math.min(86_400, Math.max(0, Math.floor(seconds))),
     overall_note: "",

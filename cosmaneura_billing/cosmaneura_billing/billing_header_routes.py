@@ -5,12 +5,13 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .billing_header import BillingHeaderError, HeaderActor, check_source
 from .billing_header_runtime import generated_header
 from .billing_header_store import MemoryBillingHeaderStore, PostgresBillingHeaderStore
-from .persistence import PostgresContext
+from .persistence import PostgresContext, ReviewerNotAuthorized, StaleEncounter
+from .coder_feedback import FeedbackConflict
 
 router = APIRouter()
 
@@ -30,6 +31,15 @@ class HeaderSave(HeaderGenerate):
     expectedRevision: int = Field(ge=0, le=100)
     draft: dict[str, Any]
     reason: str = Field(min_length=1, max_length=600)
+
+
+class HeaderSignoff(HeaderRead):
+    headerId: str = Field(min_length=36, max_length=36)
+    expectedRevision: int = Field(ge=0, le=100)
+    feedback: dict[str, Any]
+    acknowledged: bool
+    humanProposalDecisions: list[dict[str, Any]] = Field(max_length=40)
+    baselineDecisions: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
 
 
 def configure_header(application, config, encounter_store):
@@ -137,3 +147,37 @@ def save_header(request: Request, req: HeaderSave):
         return {"view": view, "created": created}
     except BillingHeaderError as exc:
         raise _safe(exc) from None
+
+
+@router.post("/api/encounters/header/signoff")
+def signoff_header(request: Request, req: HeaderSignoff):
+    from . import api
+    try:
+        _stored, store, actor = _context(request, req.encounterId)
+        try:
+            payload = api.FeedbackModel.model_validate(req.feedback)
+        except ValidationError:
+            raise BillingHeaderError("invalid_signoff") from None
+        if payload.encounter_id != req.encounterId:
+            raise BillingHeaderError("invalid_signoff")
+        _stored, feedback, context = api._validated_feedback(request, payload)
+        view, created = store.signoff(req.encounterId, header_id=req.headerId,
+            expected_source=req.expectedSource, expected_revision=req.expectedRevision,
+            feedback=feedback, verified_context=context, actor=actor,
+            human_proposal_decisions=req.humanProposalDecisions, acknowledged=req.acknowledged,
+            baseline_decisions=req.baselineDecisions,
+            feedback_store=api._request_feedback_store(request),
+            audit_completion=(api._completion_event(request)
+                              if isinstance(store, PostgresBillingHeaderStore) else None))
+        if isinstance(store, PostgresBillingHeaderStore):
+            request.state.audit_completion_committed = True
+        return {"ok": True, "reviewId": feedback.review_id, "replayed": not created,
+                "headerSignoff": view["signoff"], "view": view}
+    except BillingHeaderError as exc:
+        raise _safe(exc) from None
+    except FeedbackConflict:
+        raise HTTPException(409, "review_conflict") from None
+    except ReviewerNotAuthorized:
+        raise HTTPException(403, "not_authorized") from None
+    except StaleEncounter:
+        raise HTTPException(409, "source_changed") from None

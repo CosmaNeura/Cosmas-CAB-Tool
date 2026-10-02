@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import { fieldAuthor, headerDraft, readBillingHeader } from "./billingHeader.js";
+import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader } from "./billingHeader.js";
 
 const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
 const input = "mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
 const BASE = "/api/encounters/header";
+const NOOP = () => {};
 const changeText = (value) => typeof value === "string" ? value || "Unspecified"
   : value === null ? "None" : `${value.kind} ${value.code}: ${value.label} (${value.evidenceIds.length} evidence references)`;
 
@@ -16,46 +17,59 @@ function Evidence({ids, header}) {
   </details>;
 }
 
-export default function BillingHeader({encounter}) {
+export default function BillingHeader(props) {
+  // A provenance-only source change must also clear pending requests and drafts.
+  return <HeaderContents key={headerSourceKey(props.encounter)} {...props} />;
+}
+
+function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0}) {
   const [view, setView] = useState(null), [draft, setDraft] = useState(null);
   const [reason, setReason] = useState(""), [error, setError] = useState("");
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
   const [retry, setRetry] = useState(null), [stale, setStale] = useState(false);
   const [notice, setNotice] = useState("");
-  const pending = useRef({seq: 0, busy: false, controller: null});
+  const pending = useRef(null), unresolvedCommand = useRef(null);
   const pin = encounter.headerSource;
 
-  useEffect(() => {
-    run();
-    return () => { pending.current.seq++; pending.current.controller?.abort(); };
-  }, []);
+  useEffect(() => run(null, true), [refreshKey]);
+  useEffect(() => () => cancelHeaderRequest(pending), []);
 
-  async function run(command = null) {
-    if (pending.current.busy) return;
-    const seq = ++pending.current.seq, controller = new AbortController();
-    pending.current = {seq, controller, busy: true};
+  useEffect(() => {
+    onStateChange({view, dirty: !!draft, busy: busy || !!retry, stale});
+  }, [view, draft, busy, retry, stale, onStateChange]);
+  useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
+
+  function run(command = null, refresh = false) {
+    const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
+    if (!request) return NOOP;
+    const {controller} = request;
     setBusy(true); setError(""); setNotice("");
-    try {
-      const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
-        body: command?.body || {encounterId: encounter.encounterId, expectedSource: pin}});
-      if (seq !== pending.current.seq) return;
-      const received = readBillingHeader(response.view, encounter);
-      if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
-      setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
-      if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
-        : "Header generated for review. No code has been accepted.");
-    } catch (failure) {
-      if (seq !== pending.current.seq || failure.name === "AbortError") return;
-      const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
-      setRetry(ambiguous ? command : null);
-      if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
-      setError(failure.status === 409
-        ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."
-        : failure.status === 422 ? "The header edit could not be validated. Check the code, evidence, and required reason."
-        : "The header could not be loaded or saved. No replacement result was substituted.");
-    } finally {
-      if (seq === pending.current.seq) { pending.current.busy = false; setBusy(false); }
-    }
+    void (async () => {
+      try {
+        const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
+          body: command?.body || {encounterId: encounter.encounterId, expectedSource: pin}});
+        if (!ownsHeaderRequest(pending, request)) return;
+        const received = readBillingHeader(response.view, encounter);
+        if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
+        unresolvedCommand.current = null;
+        setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
+        if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
+          : "Header generated for review. No code has been accepted.");
+      } catch (failure) {
+        if (!ownsHeaderRequest(pending, request) || failure.name === "AbortError") return;
+        const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
+        unresolvedCommand.current = ambiguous ? command : null;
+        setRetry(unresolvedCommand.current);
+        if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
+        setError(failure.status === 409
+          ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."
+          : failure.status === 422 ? "The header edit could not be validated. Check the code, evidence, and required reason."
+          : "The header could not be loaded or saved. No replacement result was substituted.");
+      } finally {
+        if (finishHeaderRequest(pending, request)) setBusy(false);
+      }
+    })();
+    return () => cancelHeaderRequest(pending, request);
   }
 
   function command(path, body = {}) {
@@ -66,14 +80,27 @@ export default function BillingHeader({encounter}) {
   function editCode(index, patch) {
     setDraft((current) => ({...current, codes: current.codes.map((row, i) => i === index ? {...row, ...patch} : row)}));
   }
-  const disabled = busy || !!retry || stale;
+  async function copyHeader() {
+    try { await navigator.clipboard.writeText(exportBillingHeader(view)); setNotice("Billing header and source citations copied."); }
+    catch { setNotice("Clipboard unavailable. Download the header text instead."); }
+  }
+  function downloadHeader() {
+    const url = URL.createObjectURL(new Blob([exportBillingHeader(view)], {type: "text/plain;charset=utf-8"}));
+    const link = document.createElement("a");
+    link.href = url; link.download = `billing-header-revision-${view.revisionNumber}.txt`; link.click();
+    URL.revokeObjectURL(url);
+    setNotice("Billing header text downloaded with source citations.");
+  }
+  const disabled = hostDisabled || busy || !!retry || stale;
   const h = view?.header;
   const currentDraft = view ? headerDraft(view) : null;
 
   return <section aria-label="Billing header" aria-busy={busy} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="font-semibold text-slate-950">Billing header</h2><p className="mt-1 text-xs text-slate-600">Visit facts and code proposals for first review · clinical note unchanged</p></div>
-      {h && !draft && <button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>}
+      {h && !draft && <div className="flex flex-wrap gap-2"><button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>
+        <button className={button} disabled={disabled} onClick={copyHeader}>Copy header with evidence</button>
+        <button className={button} disabled={disabled} onClick={downloadHeader}>Download header text</button></div>}
       {!h && loaded && !stale && <button className={button} disabled={disabled} onClick={() => command("/generate")}>Generate billing header</button>}
     </div>
     {busy && <p role="status" className="mt-3 text-sm text-slate-600">{loaded ? "Saving or generating header…" : "Loading header…"}</p>}
@@ -83,7 +110,18 @@ export default function BillingHeader({encounter}) {
       {!retry && !stale && <button className={`${button} mt-2`} disabled={busy} onClick={() => run()}>Reload header</button>}
     </div>}
     {h && <>
-      <p className="mt-4 text-xs font-medium text-slate-600">Unreviewed · {h.generation.inferenceMode === "mock" ? "Offline synthetic engine" : "Billing engine"} · revision {view.revisionNumber}</p>
+      <p className="mt-4 text-xs font-medium text-slate-600">{view.signoff ? "Coder review recorded" : "Coder review pending"} · {h.generation.inferenceMode === "mock" ? "Offline synthetic engine" : "Billing engine"} · revision {view.revisionNumber}</p>
+      {view.previousSignoff && <p role="status" className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Header edits require a fresh coder review. The prior receipt covered revision {view.previousSignoff.headerRevision}.</p>}
+      {view.signoff && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+        <p className="font-semibold">Revision {view.signoff.headerRevision} reviewed by {view.signoff.actor.name}</p>
+        <p className="mt-1 text-xs">{new Date(view.signoff.createdAt).toLocaleString()} · receipt {view.signoff.reviewId}</p>
+        <p className="mt-1 text-xs">This receipt binds the saved coder decisions to this header and source. Editing the header requires a fresh review.</p>
+        <details className="mt-2 text-xs"><summary className="cursor-pointer font-medium">Recorded code decisions</summary>
+          <ul className="mt-2 space-y-1">{view.signoff.codeDecisions.map((d, i) => <li key={i}><code>{d.engine_code || "Human addition"}</code>: {d.action} → <code>{d.final_code || "Removed"}</code>{d.note && <p>{d.note}</p>}</li>)}</ul>
+          {view.signoff.humanProposalDecisions.map((d) => <p key={d.id} className="mt-2">Header proposal {d.id}: {d.decision} · {d.reason}</p>)}
+          {(view.signoff.baselineDecisions || []).map((d) => <p key={d.id} className="mt-2">Earlier suggestion {h.suggestions.find((row) => row.id === d.id).code}: {d.decision} · {d.reason}</p>)}
+        </details>
+      </div>}
       <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {h.facts.map((fact) => {
           const value = currentDraft.facts[fact.key], author = fieldAuthor(view, `facts.${fact.key}`);
@@ -102,7 +140,7 @@ export default function BillingHeader({encounter}) {
         <strong className="font-mono">{code.code}</strong> · {code.label}<p className="mt-1 text-xs text-slate-600">{code.basis}</p><Evidence ids={code.evidenceIds} header={h} />
       </li>)}</ul>
       {view.revision && <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
-        <h3 className="font-semibold">Current code proposals · require review</h3>
+        <h3 className="font-semibold">Current code proposals · {view.signoff ? "review outcomes recorded above" : "require review"}</h3>
         <p className="mt-1 text-xs">Edited codes remain separate from engine suggestions. Saving does not accept a code or complete coder signoff.</p>
         <ul className="mt-2 space-y-2">{currentDraft.codes.map((code) => {const author = fieldAuthor(view, `codes.${code.id}`); return <li key={code.id}><code>{code.code}</code> · {code.label}
           <p className="text-xs">{author ? `Human proposal · ${author.name} (${author.role})` : "Original pipeline suggestion retained"}</p><Evidence ids={code.evidenceIds} header={h} /></li>; })}</ul>
@@ -138,7 +176,7 @@ export default function BillingHeader({encounter}) {
       <label className="mt-4 block text-xs font-medium">Reviewer note (optional)<textarea className={input} maxLength={2000} disabled={disabled} value={draft.note} onChange={(e) => setDraft({...draft, note: e.target.value})} /></label>
       <label className="mt-3 block text-xs font-medium">Reason for edit (required)<input className={input} required maxLength={600} disabled={disabled} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
       <div className="mt-3 flex flex-wrap gap-2"><button type="submit" className={`${button} bg-slate-950 text-white`} disabled={disabled || !reason.trim()}>Save header edits</button>
-        <button type="button" className={button} disabled={busy || !!retry} onClick={() => {setDraft(null); setReason("");}}>Cancel edits</button>
+        <button type="button" className={button} disabled={hostDisabled || busy || !!retry} onClick={() => {setDraft(null); setReason("");}}>Cancel edits</button>
         <button type="button" className={button} disabled={disabled} onClick={() => setDraft(headerDraft({...view, revision: null}))}>Reset editor to generated values</button>
       </div>
     </form>}
