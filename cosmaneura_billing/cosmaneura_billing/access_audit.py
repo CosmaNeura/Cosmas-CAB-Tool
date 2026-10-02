@@ -20,6 +20,9 @@ _ENCOUNTER_FIXED_ROUTES = {
     "/api/encounters/billing": "encounter.compute",
     "/api/encounters/coder-view": "encounter.compute",
     "/api/encounters/billing-tab": "encounter.compute",
+    "/api/encounters/header": "billing_header.view",
+    "/api/encounters/header/generate": "billing_header.compute",
+    "/api/encounters/header/save": "billing_header.save",
 }
 _CHASE_POLICY_MUTATIONS = frozenset({
     "/api/chase/policy/create",

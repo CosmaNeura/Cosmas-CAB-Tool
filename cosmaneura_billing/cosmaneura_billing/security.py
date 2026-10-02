@@ -274,6 +274,7 @@ def _rate_class(method: str, path: str) -> str:
         or path.endswith("/billing")
         or path.endswith("/coder-view")
         or path.endswith("/billing-tab")
+        or path == "/api/encounters/header/generate"
     ):
         return "inference"
     return "general"

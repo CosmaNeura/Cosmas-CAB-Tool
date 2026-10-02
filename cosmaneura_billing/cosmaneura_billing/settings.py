@@ -474,6 +474,8 @@ class Settings:
 
     database_url: str = field(default="", repr=False, metadata={"secret": True})
     state_store: str = "local"
+    # Additive header storage is only required when this release control is on.
+    billing_header_enabled: bool = False
     review_context_signing_key: str = field(
         default="", repr=False, metadata={"secret": True}
     )
@@ -721,6 +723,8 @@ class Settings:
             raise SettingsError("COSMANEURA_CHASE_STORE must be memory or postgres")
         if self.state_store not in _STATE_STORES:
             raise SettingsError("COSMANEURA_STATE_STORE must be local or postgres")
+        if type(self.billing_header_enabled) is not bool:
+            raise SettingsError("COSMANEURA_BILLING_HEADER_ENABLED must be a boolean")
         if (not isinstance(self.review_context_signing_key, str)
                 or (self.review_context_signing_key and not re.fullmatch(
                     r"[!-~]{32,256}", self.review_context_signing_key))):
@@ -1163,6 +1167,7 @@ class Settings:
             state_store=(
                 env.get("COSMANEURA_STATE_STORE") or "local"
             ).strip().lower(),
+            billing_header_enabled=_parse_bool(env, "COSMANEURA_BILLING_HEADER_ENABLED", False),
             review_context_signing_key=env.get("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY", ""),
             database_runtime_role=(
                 env.get("COSMANEURA_DB_RUNTIME_ROLE") or "cosmaneura_app"
