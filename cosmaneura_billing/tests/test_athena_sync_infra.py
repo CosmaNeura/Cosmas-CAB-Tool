@@ -114,10 +114,14 @@ def test_athena_client_secret_is_operator_owned_and_exactly_scoped():
     assert "keyVaultUrl:" in job
     assert "secretRef: 'athena-client-secret'" in job
 
-    for symbol in ("application", "chaseWorkerJob"):
-        lane = _resource(APP, symbol)
-        assert "COSMANEURA_ATHENA_" not in lane
-        assert "athena-client-secret" not in lane
+    # The separate staff-review API is an optional receiver; the legacy sync
+    # secret and importer DSN never enter it, and the chase worker stays isolated.
+    assert "COSMANEURA_ATHENA_" not in _resource(APP, "chaseWorkerJob")
+    assert "athenaReviewCredentialsRequired ? [" in application
+    assert "secretRef: 'athena-review-client-secret'" in application
+    assert "secretRef: 'athena-client-secret'" not in application
+    assert "athena-import-database-url" not in application
+    assert "athena-client-secret" not in _resource(APP, "chaseWorkerJob")
 
     migration = _resource(APP, "migrationJob")
     assert "athena-client-secret" not in migration
