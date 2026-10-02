@@ -795,6 +795,8 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         }
     if _request_settings(request).billing_header_enabled and "provider" in views:
         capabilities["capabilities"]["billingHeader"] = True
+        if _request_settings(request).provider_handoff_enabled and principal.has_any_role(("Provider", "Admin")):
+            capabilities["capabilities"]["providerHandoff"] = True
     if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
         capabilities["capabilities"]["athenaReview"] = True
     return capabilities
@@ -836,6 +838,8 @@ def readiness(request: Request):
                     raise RuntimeError("provider model source reader unavailable")
         if request.app.state.billing_header_store is not None:
             request.app.state.billing_header_store.healthcheck()
+        if request.app.state.provider_handoff_store is not None:
+            request.app.state.provider_handoff_store.healthcheck()
         if request.app.state.athena_review_service is not None:
             request.app.state.athena_review_service.store.healthcheck()
         membership_store = request.app.state.membership_store
@@ -2112,6 +2116,8 @@ async def _lifespan(application: FastAPI):
         application.state.feedback_store.healthcheck()
         if application.state.billing_header_store is not None:
             application.state.billing_header_store.healthcheck()
+        if application.state.provider_handoff_store is not None:
+            application.state.provider_handoff_store.healthcheck()
         if application.state.athena_review_service is not None:
             application.state.athena_review_service.store.healthcheck()
         if application.state.membership_store is not None:
@@ -2226,6 +2232,8 @@ def create_app(
     application.state.membership_store = selected_memberships
     from .billing_header_routes import configure_header, router as header_router
     configure_header(application, config, selected_encounters)
+    from .provider_handoff_routes import configure_handoff, router as handoff_router
+    configure_handoff(application, config, selected_encounters)
     from .athena_review_routes import configure_athena, router as athena_router
     configure_athena(application, config, application.state.chase_context, selected_encounters)
     application.state.atomic_feedback_audit = bool(
@@ -2288,6 +2296,7 @@ def create_app(
     )
     application.include_router(router)
     application.include_router(header_router)
+    application.include_router(handoff_router)
     application.include_router(athena_router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):

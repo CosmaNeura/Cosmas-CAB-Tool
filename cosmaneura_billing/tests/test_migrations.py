@@ -29,6 +29,7 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "021_athena_staff_bindings.up.sql",
         "022_athena_configured_review.up.sql",
         "023_athena_read_admission.up.sql",
+        "024_header_visit_context.up.sql",
     ]
 
 

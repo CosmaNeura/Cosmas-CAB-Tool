@@ -477,6 +477,7 @@ class Settings:
     state_store: str = "local"
     # Additive header storage is only required when this release control is on.
     billing_header_enabled: bool = False
+    provider_handoff_enabled: bool = False
     athena_review_mode: str = "disabled"
     athena_credential_environment: str = ""
     athena_deployment_id: str = ""
@@ -740,6 +741,8 @@ class Settings:
             raise SettingsError("COSMANEURA_STATE_STORE must be local or postgres")
         if type(self.billing_header_enabled) is not bool:
             raise SettingsError("COSMANEURA_BILLING_HEADER_ENABLED must be a boolean")
+        if type(self.provider_handoff_enabled) is not bool:
+            raise SettingsError("COSMANEURA_PROVIDER_HANDOFF_ENABLED must be a boolean")
         if (not isinstance(self.review_context_signing_key, str)
                 or (self.review_context_signing_key and not re.fullmatch(
                     r"[!-~]{32,256}", self.review_context_signing_key))):
@@ -1203,6 +1206,7 @@ class Settings:
                 env.get("COSMANEURA_STATE_STORE") or "local"
             ).strip().lower(),
             billing_header_enabled=_parse_bool(env, "COSMANEURA_BILLING_HEADER_ENABLED", False),
+            provider_handoff_enabled=_parse_bool(env, "COSMANEURA_PROVIDER_HANDOFF_ENABLED", False),
             athena_review_mode=env.get("COSMANEURA_ATHENA_REVIEW_MODE", "disabled").strip().lower(),
             athena_credential_environment=env.get("COSMANEURA_ATHENA_CREDENTIAL_ENVIRONMENT", "").strip().lower(),
             athena_deployment_id=env.get("COSMANEURA_ATHENA_DEPLOYMENT_ID", ""),

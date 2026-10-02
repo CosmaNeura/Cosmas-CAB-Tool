@@ -17,6 +17,9 @@ from .settings import Settings
 
 _ENCOUNTER_FIXED_ROUTES = {
     "/api/encounters/detail": "encounter.view",
+    "/api/provider/encounters/handoff/fixtures": "provider_handoff.list",
+    "/api/provider/encounters/handoff/fixture": "provider_handoff.fixture",
+    "/api/provider/encounters/handoff": "provider_handoff.accept",
     "/api/encounters/billing": "encounter.compute",
     "/api/encounters/coder-view": "encounter.compute",
     "/api/encounters/billing-tab": "encounter.compute",

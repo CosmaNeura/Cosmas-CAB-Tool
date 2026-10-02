@@ -97,8 +97,8 @@ to remove existing review evidence. No clinical note, claim or EHR is written.
 ## Dormant Athena schema integration
 
 The available ordered set is now `001`–`009`, `011`, `013`, `014`,
-and `019`–`023`; it is intentionally sparse. Communications migrations
-`010`, `012`, `015`–`018` and later provider/context rungs are absent.
+and `019`–`024` (18 total); it is intentionally sparse. Communications migrations
+`010`, `012`, `015`–`018` and provider model-source rung `025` are absent.
 
 `014_athena_staff_review` creates immutable practice-scoped review receipts,
 current BillingStaff/Admin authorization, same-transaction audit coupling and
@@ -114,16 +114,20 @@ Its receipt guard rechecks admission at persistence and keeps operational source
 provenance distinct. Registration metadata does not activate reads or models.
 
 Canonical `019_provider_note_handoff` and `020_provider_source_admission` are
-required dormant dependencies: they supply the shared canonical JSON function
-and protect the provider source label retained by `023`. Their receiver,
-immutable source/receipt guards and empty admission registry remain intact.
+required shared dependencies: they supply the shared canonical JSON function
+and protect the provider source label retained by `023`. Their guarded receiver
+and owner-only admission CLI are now integrated behind
+`COSMANEURA_PROVIDER_HANDOFF_ENABLED` (default false), together with the header
+release control. Only registered exact operations enter storage. Canonical024
+adds optional serviceDate while preserving existing manifests and receipts.
+Provider model-source admission025 remains deferred. Immutable source/receipt
+guards and the empty admission registry remain intact.
 An ordinary encounter writer cannot manufacture `provider_completed_note`.
 
-These files are exact preserved migrations; this slice adds no API grants,
-operator registrations, source admission, transport or application setting.
-The existing runtime provisioner grants none of the new tables/functions.
-The local restricted-role proof grants only its own disposable test role the
-narrow capabilities under test; that is not deployment provisioning.
+These are exact preserved migrations. The runtime provisioner grants only the
+guarded provider writer and registry/receipt reads; private019 remains denied.
+Receiver readiness checks those privileges. Operator registrations and hosted
+activation are separate from this source integration.
 Retain expand structures and evidence during code rollback; destructive
 rollback is not the recovery path.
 
