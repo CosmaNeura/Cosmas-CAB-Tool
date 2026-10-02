@@ -4,7 +4,7 @@ This integration exposes POST /api/athena/card-chase,
 /api/athena/card-chase/read, /api/athena/card-chase/apply,
 /api/athena/billing/read and /api/athena/billing/apply. Admin and BillingStaff
 need current practice membership and the existing configured Entra session.
-Coder/Provider roles do not gain access. All three routes use the normal
+Coder/Provider roles alone do not grant access. All five routes use the normal
 minimum-necessary access audit.
 
 COSMANEURA_ATHENA_REVIEW_MODE defaults to disabled. Mock is local only; preview
@@ -45,7 +45,9 @@ mismatched policy reports inferencePolicy.allowed:false while preserving source
 and existing header access. The global synthetic-only latch still blocks Athena
 operational text. New headers retain modelInputProof; exact replay requires no
 new model call. Policy removal requires retiring old replicas that loaded it.
-Provider source admission remains unavailable without its later025 integration.
+Provider model-source verification is implemented through migration025; Core
+workload intake additionally uses026. Those separate permissions do not follow
+from Athena access. See [provider policy](PROVIDER_MODEL_SOURCE_POLICY.md).
 
 Local proof uses synthetic fixtures, a new owned database and fake read-only
 source transport. Hosted configuration, secrets, data-handling approval and

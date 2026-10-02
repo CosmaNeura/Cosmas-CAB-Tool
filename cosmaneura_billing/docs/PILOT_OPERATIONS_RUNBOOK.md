@@ -4,6 +4,12 @@ Status: operator checklist for the synthetic pilot. This runbook does not
 authorize real PHI, patient messaging, Athena writes, or a live billing import.
 The detailed infrastructure rationale remains in [`../../infra/README.md`](../../infra/README.md).
 
+For staff training, start with the [MCD quickstart](MCD_TRAINING_QUICKSTART.md).
+Use the [current deployment guide](../../infra/BETA_DEPLOYMENT.md) for the full
+001–026 migration sequence, editable header, staff Athena review, SMS services
+and separate Core receiver. The background-sync procedures below describe that
+older job; they do not replace the current staff review workflow.
+
 ## Owners and escalation
 
 Fill these before a pilot user is invited. Do not put credentials, object IDs,
@@ -56,7 +62,8 @@ decommissioning change.
 Record the following in a credential-free release record before deployment:
 
 1. Full source commit, expected parent, PR, and immutable image digest. Require a
-   clean release worktree and all seven currently required GitHub checks green.
+   clean release worktree and applicable recorded local checks under the owner
+   local-check-and-merge policy; do not dispatch Actions for this training step.
 2. Local/CI gates from the same commit:
 
    ```bash
@@ -89,8 +96,8 @@ Record the following in a credential-free release record before deployment:
    mutable tag alone.
 6. Deploy with external ingress closed, run the migration job, and require its
    execution to succeed before health checks. For a synthetic demo, run only the
-   fixed digest-pinned seed command documented in
-   [`../migrations/README.md`](../migrations/README.md).
+   twelve-case command in [MCD seed setup](MCD_TRAINING_SEED.md).
+   The separate four-case CardChase setup is in the MCD quickstart.
 7. Prove `/api/live` is public, protected readiness/health routes return 401
    when signed out, a forged `X-MS-CLIENT-PRINCIPAL` still returns 401, HTTPS is
    enforced, and every persona passes the matrix below. Open ingress only after
@@ -125,6 +132,7 @@ PostgreSQL membership for the same tenant, object ID, and practice:
 | Provider | `Provider` | Provider only | No |
 | Medical coder | `Coder` | Provider, Coder review, Card Chase | No |
 | Card Chase staff | `BillingStaff` | Card Chase only | Yes |
+| Combined MCD staff | `Coder` and `BillingStaff` | All three | Yes |
 | Administrator | `Admin` | All three | Yes, including admin gates |
 
 Set **Assignment required = Yes** on the Entra enterprise application and use
@@ -290,12 +298,14 @@ Run once with synthetic data before pilot launch:
 
 ## Open release blockers
 
-- Billing Athena OAuth exchange, literal endpoint/query allowlist, vendor
-  decoders, and live acceptance are not implemented. The database role and
-  atomic source-neutral receipt/checkpoint foundation are implemented but stay
-  unprovisioned by default.
-- Athena has not supplied a vendor-enforced read-only AthenaOne scope; the
-  Read/Write wildcard remains unusable without an approved GET-only exception.
+- Staff Athena OAuth, bounded reads, decoders, explicit field review and billing
+  note import are implemented. Retained synthetic Preview evidence covers
+  contact/insurance, document listing and a nonempty open-note summary; it does
+  not establish a completed source note or hosted availability for training.
+  Configure the reviewed credentials, case mappings and applicable source/model
+  permissions before enabling the relevant workflow. No EHR writes occur.
+- Athena's combined Read/Write grant is used only within the owner's approved
+  bounded read scope. It does not establish permission for writes or new cohorts.
 - Athena-job log-stream coverage is not in the deployment count-report schema.
 - The repository has no automated PostgreSQL restore workflow, and pilot RPO/RTO
   are not approved.
