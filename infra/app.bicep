@@ -55,6 +55,71 @@ param enablePatientMessaging bool = false
 @description('Second explicit operational latch for outbound patient email. It must exactly match enablePatientMessaging.')
 param activatePatientMessaging bool = false
 
+@description('Provision separate Twilio worker/callback identities and services. This does not activate outreach or public ingress.')
+param provisionCommunications bool = false
+param enableCommunications bool = false
+param enableCommunicationsScheduler bool = false
+param enableCommunicationsMessaging bool = false
+param activateCommunicationsMessaging bool = false
+param communicationsExternalIngress bool = false
+param communicationsCronExpression string = '*/5 * * * *'
+@allowed(['sms'])
+@description('Outbound channels shared by API, worker and callback. Keep SMS for the current texting-only scope; calls require a separate explicit configuration decision.')
+param communicationsEnabledChannels string = 'sms'
+@description('Restrict outgoing SMS to the explicit test-recipient scope. Does not enable communications or consent.')
+param communicationsTestMode bool = false
+@secure()
+@description('Comma-separated consenting tester E.164 numbers, protected as API/worker Container Apps secrets. Empty test scope blocks sends; never put real values in tracked examples, CLI arguments or outputs.')
+param communicationsTestRecipients string = ''
+param twilioAccountSid string = ''
+param twilioFromNumber string = ''
+@maxLength(34)
+@description('Optional Messaging Service MG SID; the adapter still supplies the exact From number. Empty uses no service.')
+param twilioMessagingServiceSid string = ''
+@description('Operator-created dedicated Twilio account AuthToken secret; worker/callback only. No value is accepted here.')
+param twilioAuthTokenSecretName string = 'twilio-account-auth-token'
+@description('Optional operator-created JSON roster secret mounted identically and read-only by API and outbound worker. Empty retains the existing fail-closed file path.')
+param directContractRosterSecretName string = ''
+@description('Immutable Key Vault version of the reviewed roster. Required when a roster name is supplied; API and worker must read exactly the same version.')
+param directContractRosterSecretVersion string = ''
+@description('Enable the editable, evidence-linked header only after migration and source-bound acceptance.')
+param enableBillingHeader bool = false
+@description('Expose the existing provider completed-note handoff only with the header feature. Does not authorize operational data admission.')
+param enableProviderHandoff bool = false
+
+@description('Create the separate Core workload receiver only after its image contains migration026 and the dedicated login exists. Never mounts it in the staff API.')
+param provisionCoreBridge bool = false
+@description('Explicit reachability choice for authenticated Core workloads. Private ingress requires a verified cross-environment network path.')
+param coreBridgeExternalIngress bool = false
+param enableCoreBridgeInference bool = false
+param coreBridgeDatabaseRole string = ''
+param coreBridgeDatabaseSecretName string = 'core-bridge-database-url'
+@secure()
+@maxLength(8192)
+param coreBridgePolicyJson string = ''
+@secure()
+@maxLength(8192)
+param coreBridgeModelDataPolicyJson string = ''
+param coreBridgeDeploymentId string = ''
+param coreBridgeStorageId string = ''
+
+@description('Required operator-created shared 32–256 ASCII signing-secret reference for PostgreSQL coder review. API only, across all replicas.')
+param reviewContextSigningKeySecretName string = 'billing-review-signing-key'
+@allowed(['disabled', 'preview', 'configured'])
+@description('Staff-reviewed CAB Athena reads, separate from sync. Configured mode resolves operator-owned case mappings; operational reads additionally require exact server-owned admission.')
+param athenaReviewMode string = 'disabled'
+@allowed(['', 'preview', 'production'])
+@description('Explicit environment of the dedicated credential. Required for configured mode; empty preserves legacy Preview behavior.')
+param athenaReviewCredentialEnvironment string = ''
+@maxLength(128)
+@description('Operator-reviewed deployment reference for exact Athena read/storage admission. Empty leaves operational reads unavailable.')
+param athenaDeploymentId string = ''
+@maxLength(128)
+@description('Operator-reviewed storage reference paired with Athena read/storage admission. This is not a credential or permission.')
+param athenaStorageId string = ''
+param athenaReviewClientId string = ''
+param athenaReviewClientSecretName string = 'athena-cab-preview-client-secret'
+
 @description('Existing Azure Communication Services email endpoint; shared as non-secret policy metadata only.')
 param acsEmailEndpoint string = ''
 
@@ -67,8 +132,13 @@ param acsEmailReplyToAddress string = ''
 @description('Enable API-only Azure OpenAI inference. Keep false until private networking, managed identity, telemetry, and synthetic model acceptance are complete.')
 param enableAzureOpenAIInference bool = false
 
-@description('Restrict model-backed API routes to stored encounters carrying the reserved server-owned synthetic demo provenance. Required whenever Azure OpenAI and external ingress are enabled together.')
+@description('Restrict model-backed API routes to reserved stored synthetic encounters. External Azure inference requires this restriction or a separately reviewed operational model-data policy.')
 param restrictAzureOpenAIToSyntheticDemo bool = false
+
+@secure()
+@maxLength(8192)
+@description('Immutable reviewed model-data policy JSON. Empty by default; API verifies exact source, runtime and Azure identities. Never contains patient data or credentials.')
+param modelDataPolicyJson string = ''
 
 @description('Must match the immutable deployment created by the foundation template.')
 param azureOpenAIDeploymentName string = 'gpt-5-6-sol-2026-07-09'
@@ -185,6 +255,8 @@ var appName = '${containerNamePrefix}-api-${suffix}'
 var migrationJobName = '${containerNamePrefix}-mig-${suffix}'
 var chaseWorkerJobName = '${containerNamePrefix}-wrk-${suffix}'
 var athenaSyncJobName = '${containerNamePrefix}-ath-${suffix}'
+var communicationsWorkerName = '${containerNamePrefix}-sms-${suffix}'
+var communicationsCallbackName = '${containerNamePrefix}-cb-${suffix}'
 var normalizedImageDigest = toLower(imageDigest)
 var imageDigestHex = substring(normalizedImageDigest, 7, 64)
 var imageDigestNonHex = reduce([
@@ -231,8 +303,8 @@ var patientMessagingEnabledValue = validatedPatientMessagingEnabled ? 'true' : '
 var validatedAzureOpenAISyntheticOnly = restrictAzureOpenAIToSyntheticDemo && !enableAzureOpenAIInference
   ? fail('restrictAzureOpenAIToSyntheticDemo requires enableAzureOpenAIInference')
   : restrictAzureOpenAIToSyntheticDemo
-var validatedAzureOpenAIInferenceEnabled = enableAzureOpenAIInference && externalIngress && !validatedAzureOpenAISyntheticOnly
-  ? fail('externally accessible Azure OpenAI inference requires restrictAzureOpenAIToSyntheticDemo')
+var validatedAzureOpenAIInferenceEnabled = enableAzureOpenAIInference && externalIngress && !validatedAzureOpenAISyntheticOnly && empty(modelDataPolicyJson)
+  ? fail('externally accessible Azure OpenAI inference requires restrictAzureOpenAIToSyntheticDemo or a reviewed modelDataPolicyJson')
   : enableAzureOpenAIInference
 var azureOpenAIEnabledValue = validatedAzureOpenAIInferenceEnabled ? 'true' : 'false'
 var azureOpenAISyntheticOnlyValue = validatedAzureOpenAISyntheticOnly ? 'true' : 'false'
@@ -282,7 +354,60 @@ var validatedAthenaSyncEnabled = enableAthenaSync && !provisionAthenaSync
     : enableAthenaSync
 var athenaSyncEnabledValue = validatedAthenaSyncEnabled ? 'true' : 'false'
 var athenaSyncMode = validatedAthenaSyncEnabled ? 'live' : 'disabled'
-var chaseTransport = validatedPatientMessagingEnabled ? 'acs_email' : 'record_only'
+var chaseTransport = validatedCommunicationsEnabled ? 'twilio' : validatedPatientMessagingEnabled ? 'acs_email' : 'record_only'
+var betaSecretNames = [toLower(reviewContextSigningKeySecretName), toLower(twilioAuthTokenSecretName), toLower(athenaReviewClientSecretName)]
+var betaSecretNameConflict = length(union(betaSecretNames, [])) != length(betaSecretNames) || contains(betaSecretNames, toLower(directContractRosterSecretName)) || contains(betaSecretNames, toLower(entraClientSecretKeyVaultSecretName)) || contains(betaSecretNames, toLower(athenaClientSecretKeyVaultSecretName))
+var validatedReviewSigningSecretName = empty(reviewContextSigningKeySecretName) || contains(athenaReservedSecretNames, toLower(reviewContextSigningKeySecretName)) || betaSecretNameConflict
+  ? fail('Beta credential names must be nonempty, distinct, and separate from platform/Entra/sync/roster secrets')
+  : reviewContextSigningKeySecretName
+var athenaReviewCredentialsRequired = contains(['preview', 'configured'], athenaReviewMode)
+var validatedAthenaReviewCredentialEnvironment = (athenaReviewMode == 'configured' && empty(athenaReviewCredentialEnvironment)) || (athenaReviewMode == 'preview' && athenaReviewCredentialEnvironment == 'production')
+  ? fail('Configured Athena review requires an explicit credential environment; Preview mode cannot use Production credentials')
+  : athenaReviewMode == 'preview' && empty(athenaReviewCredentialEnvironment) ? 'preview' : athenaReviewCredentialEnvironment
+var validatedAthenaReviewSecretName = contains(athenaReservedSecretNames, toLower(athenaReviewClientSecretName)) || (athenaReviewCredentialsRequired && (empty(athenaReviewClientId) || empty(athenaReviewClientSecretName)))
+  ? fail('Athena review requires an explicit client ID and dedicated secret name')
+  : athenaReviewClientSecretName
+var validatedRosterSecretName = !empty(directContractRosterSecretName) && (contains(athenaReservedSecretNames, toLower(directContractRosterSecretName)) || toLower(directContractRosterSecretName) == toLower(entraClientSecretKeyVaultSecretName) || toLower(directContractRosterSecretName) == toLower(athenaClientSecretKeyVaultSecretName) || enableChaseScheduler || enablePatientMessaging || activatePatientMessaging)
+  ? fail('The beta roster requires legacy outreach disabled and must not alias any credential secret')
+  : directContractRosterSecretName
+var validatedRosterSecretVersion = !empty(validatedRosterSecretName) && length(directContractRosterSecretVersion) != 32
+  ? fail('The approved direct-contract roster requires its immutable 32-character Key Vault version')
+  : directContractRosterSecretVersion
+var twilioAccountNonHex = reduce(split('0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f', ','), toLower(skip(twilioAccountSid, 2)), (remaining, character) => replace(remaining, character, ''))
+var twilioMessagingServiceNonHex = reduce(split('0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f', ','), toLower(skip(twilioMessagingServiceSid, 2)), (remaining, character) => replace(remaining, character, ''))
+var validatedTwilioMessagingServiceSid = !empty(twilioMessagingServiceSid) && (length(twilioMessagingServiceSid) != 34 || !contains(['MG'], take(twilioMessagingServiceSid, 2)) || !empty(twilioMessagingServiceNonHex))
+  ? fail('twilioMessagingServiceSid must be empty or MG followed by 32 hexadecimal characters')
+  : twilioMessagingServiceSid
+var twilioSenderNonDigits = reduce(split('0,1,2,3,4,5,6,7,8,9', ','), skip(twilioFromNumber, 1), (remaining, character) => replace(remaining, character, ''))
+var validatedTwilioAccountSid = provisionCommunications && (length(twilioAccountSid) != 34 || !startsWith(twilioAccountSid, 'AC') || !empty(twilioAccountNonHex))
+  ? fail('provisionCommunications requires an explicit Twilio AC account SID')
+  : twilioAccountSid
+var validatedTwilioFromNumber = provisionCommunications && (length(twilioFromNumber) < 9 || length(twilioFromNumber) > 16 || !startsWith(twilioFromNumber, '+') || startsWith(twilioFromNumber, '+0') || !empty(twilioSenderNonDigits))
+  ? fail('provisionCommunications requires an explicit E.164 sender number')
+  : twilioFromNumber
+var validatedCommunicationsEnabled = enableCommunications && (!provisionCommunications || enableChaseScheduler || enablePatientMessaging || activatePatientMessaging)
+  ? fail('Communications requires its provisioned services and the legacy ACS scheduler/messaging disabled')
+  : enableCommunications
+var validatedProviderHandoff = enableProviderHandoff && !enableBillingHeader
+  ? fail('Provider handoff requires enableBillingHeader; operational admission remains separate')
+  : enableProviderHandoff
+var validatedCommunicationsTestMode = (!communicationsTestMode && !empty(communicationsTestRecipients)) || (communicationsTestMode && communicationsEnabledChannels != 'sms')
+  ? fail('Test recipients require test mode, and test mode permits SMS only')
+  : communicationsTestMode
+var communicationsTestRecipientEnv = empty(communicationsTestRecipients)
+  ? { name: 'COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS', value: '' }
+  : { name: 'COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS', secretRef: 'communications-test-recipients' }
+var validatedCommunicationsScheduler = enableCommunicationsScheduler && !validatedCommunicationsEnabled
+  ? fail('Communications scheduler requires enableCommunications')
+  : enableCommunicationsScheduler
+var validatedCommunicationsMessaging = enableCommunicationsMessaging != activateCommunicationsMessaging || (enableCommunicationsMessaging && (!validatedCommunicationsScheduler || !communicationsExternalIngress))
+  ? fail('Communications messaging requires matching activation, its scheduler, and approved public callback ingress')
+  : enableCommunicationsMessaging
+var validatedCommunicationsIngress = communicationsExternalIngress && !provisionCommunications
+  ? fail('Communications ingress requires provisionCommunications')
+  : communicationsExternalIngress
+var effectiveRosterPath = empty(validatedRosterSecretName) ? directContractListPath : '/var/lib/cosmaneura/roster/direct_contract_patients.json'
+var communicationsCallbackOrigin = 'https://${communicationsCallbackName}.${environment.properties.defaultDomain}'
 
 resource environment 'Microsoft.App/managedEnvironments@2026-01-01' existing = {
   name: environmentName
@@ -331,6 +456,123 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
+}
+
+resource reviewSigningSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: keyVault
+  name: validatedReviewSigningSecretName
+}
+resource reviewSigningReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: reviewSigningSecret
+  name: guid(reviewSigningSecret.id, identity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+  }
+}
+resource reviewAthenaSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = if (athenaReviewCredentialsRequired) {
+  parent: keyVault
+  name: validatedAthenaReviewSecretName
+}
+resource reviewAthenaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (athenaReviewCredentialsRequired) {
+  scope: reviewAthenaSecret
+  name: guid(reviewAthenaSecret.id, identity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+  }
+}
+resource rosterSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = if (!empty(validatedRosterSecretName)) {
+  parent: keyVault
+  name: validatedRosterSecretName
+}
+resource apiRosterReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(validatedRosterSecretName)) {
+  scope: rosterSecret
+  name: guid(rosterSecret.id, identity.id, 'key-vault-secrets-user')
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+  }
+}
+
+
+var validatedCoreDatabaseRole = provisionCoreBridge && (empty(coreBridgeDatabaseRole) || contains([toLower(postgresAppLogin), toLower(postgresChaseWorkerLogin), toLower(postgresAthenaImportLogin), 'postgres', 'cosmaneura_admin'], toLower(coreBridgeDatabaseRole)))
+  ? fail('Core bridge requires its separate owner-registered runtime login')
+  : coreBridgeDatabaseRole
+var validatedCoreDatabaseSecret = provisionCoreBridge && (empty(coreBridgeDatabaseSecretName) || contains(union(athenaReservedSecretNames, betaSecretNames, [toLower(entraClientSecretKeyVaultSecretName), toLower(athenaClientSecretKeyVaultSecretName)]), toLower(coreBridgeDatabaseSecretName)))
+  ? fail('Core bridge database secret must not alias any API, owner, worker, importer or credential secret')
+  : coreBridgeDatabaseSecretName
+var validatedCoreProvisioning = (coreBridgeExternalIngress || enableCoreBridgeInference || !empty(coreBridgePolicyJson) || !empty(coreBridgeModelDataPolicyJson)) && !provisionCoreBridge
+  ? fail('Core bridge policy, ingress and inference require explicit provisionCoreBridge')
+  : provisionCoreBridge
+
+module coreBridge './core-bridge.bicep' = if (validatedCoreProvisioning) {
+  name: 'core-workload-runtime'
+  params: {
+    location: location
+    environmentName: environmentName
+    registryName: acrName
+    keyVaultName: keyVaultName
+    appName: '${containerNamePrefix}-core-${suffix}'
+    identityName: '${namePrefix}-core-identity-${suffix}'
+    image: image
+    practiceId: practiceId
+    tenantId: entraTenantId
+    databaseRole: validatedCoreDatabaseRole
+    databaseSecretName: validatedCoreDatabaseSecret
+    reviewSigningSecretName: validatedReviewSigningSecretName
+    policyJson: coreBridgePolicyJson
+    modelDataPolicyJson: coreBridgeModelDataPolicyJson
+    deploymentId: coreBridgeDeploymentId
+    storageId: coreBridgeStorageId
+    externalIngress: coreBridgeExternalIngress
+    enableInference: enableCoreBridgeInference
+    azureOpenAIAccountName: azureOpenAIName
+    azureOpenAIDeployment: azureOpenAIDeploymentName
+    azureOpenAIModel: azureOpenAIModelName
+    azureOpenAIApiVersion: azureOpenAIApiVersion
+    tags: tags
+  }
+}
+
+module communications './communications.bicep' = if (provisionCommunications) {
+  name: 'communications-runtime'
+  params: {
+    location: location
+    environmentName: environmentName
+    registryName: acrName
+    keyVaultName: keyVaultName
+    workerName: communicationsWorkerName
+    callbackName: communicationsCallbackName
+    workerIdentityName: '${namePrefix}-sms-identity-${suffix}'
+    callbackIdentityName: '${namePrefix}-callback-identity-${suffix}'
+    image: image
+    practiceId: practiceId
+    practiceName: practiceName
+    practiceTimezone: practiceTimezone
+    contactSnapshotMaxAgeHours: contactSnapshotMaxAgeHours
+    workerDatabaseRole: postgresChaseWorkerLogin
+    accountSid: validatedTwilioAccountSid
+    fromNumber: validatedTwilioFromNumber
+    communicationsEnabledChannels: communicationsEnabledChannels
+    communicationsTestMode: validatedCommunicationsTestMode
+    communicationsTestRecipients: communicationsTestRecipients
+    twilioMessagingServiceSid: validatedTwilioMessagingServiceSid
+    callbackOrigin: communicationsCallbackOrigin
+    authTokenSecretName: twilioAuthTokenSecretName
+    directContractListPath: effectiveRosterPath
+    rosterSecretName: validatedRosterSecretName
+    rosterSecretVersion: validatedRosterSecretVersion
+    enableScheduler: validatedCommunicationsScheduler
+    enableMessaging: validatedCommunicationsMessaging
+    activateMessaging: activateCommunicationsMessaging
+    externalIngress: validatedCommunicationsIngress
+    cronExpression: communicationsCronExpression
+    tags: tags
+  }
 }
 
 resource athenaSyncAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionAthenaSync) {
@@ -653,7 +895,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           identity: identity.id
         }
       ]
-      secrets: [
+      secrets: concat([
         {
           name: 'database-url'
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/database-url'
@@ -669,7 +911,23 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/chase-gate-hmac-key'
           identity: identity.id
         }
-      ]
+        {
+          name: 'review-signing-key'
+          keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${validatedReviewSigningSecretName}'
+          identity: identity.id
+        }
+      ], athenaReviewCredentialsRequired ? [{
+        name: 'athena-review-client-secret'
+        keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${validatedAthenaReviewSecretName}'
+        identity: identity.id
+      }] : [], empty(validatedRosterSecretName) ? [] : [{
+        name: 'direct-contract-roster'
+        keyVaultUrl: 'https://${keyVault.name}${az.environment().suffixes.keyvaultDns}/secrets/${validatedRosterSecretName}/${validatedRosterSecretVersion}'
+        identity: identity.id
+      }], empty(communicationsTestRecipients) ? [] : [{
+        name: 'communications-test-recipients'
+        value: communicationsTestRecipients
+      }])
     }
     template: {
       containers: [
@@ -677,6 +935,17 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           name: 'api'
           image: image
           env: concat([
+            { name: 'COSMANEURA_BILLING_HEADER_ENABLED', value: string(enableBillingHeader) }
+            { name: 'COSMANEURA_PROVIDER_HANDOFF_ENABLED', value: string(validatedProviderHandoff) }
+            { name: 'COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY', secretRef: 'review-signing-key' }
+            { name: 'COSMANEURA_ATHENA_REVIEW_MODE', value: athenaReviewMode }
+            { name: 'COSMANEURA_ATHENA_CREDENTIAL_ENVIRONMENT', value: validatedAthenaReviewCredentialEnvironment }
+            { name: 'COSMANEURA_ATHENA_DEPLOYMENT_ID', value: athenaDeploymentId }
+            { name: 'COSMANEURA_ATHENA_STORAGE_ID', value: athenaStorageId }
+            { name: 'COSMANEURA_COMMUNICATIONS_ENABLED', value: string(validatedCommunicationsEnabled) }
+            { name: 'COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS', value: communicationsEnabledChannels }
+            { name: 'COSMANEURA_COMMUNICATIONS_TEST_MODE', value: string(validatedCommunicationsTestMode) }
+            communicationsTestRecipientEnv
             {
               name: 'DATABASE_URL'
               secretRef: 'database-url'
@@ -705,6 +974,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               name: 'COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY'
               value: azureOpenAISyntheticOnlyValue
             }
+            { name: 'COSMANEURA_MODEL_DATA_POLICY_JSON', value: modelDataPolicyJson }
             {
               name: 'COSMANEURA_AZURE_LANGUAGE_ENABLED'
               value: azureLanguageEnabledValue
@@ -795,15 +1065,15 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             }
             {
               name: 'COSMANEURA_CHASE_SCHEDULER_ENABLED'
-              value: schedulerEnabledValue
+              value: validatedCommunicationsEnabled ? string(validatedCommunicationsScheduler) : schedulerEnabledValue
             }
             {
               name: 'COSMANEURA_PATIENT_MESSAGING_ENABLED'
-              value: patientMessagingEnabledValue
+              value: validatedCommunicationsEnabled ? string(validatedCommunicationsMessaging) : patientMessagingEnabledValue
             }
             {
               name: 'COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED'
-              value: patientMessagingEnabledValue
+              value: validatedCommunicationsEnabled ? string(validatedCommunicationsMessaging) : patientMessagingEnabledValue
             }
             {
               name: 'COSMANEURA_CHASE_TRANSPORT'
@@ -835,9 +1105,17 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             }
             {
               name: 'COSMANEURA_DIRECT_CONTRACT_LIST'
-              value: directContractListPath
+              value: effectiveRosterPath
             }
-          ], enableAzureOpenAIInference ? [
+          ], validatedCommunicationsEnabled ? [
+            { name: 'COSMANEURA_TWILIO_ACCOUNT_SID', value: validatedTwilioAccountSid }
+            { name: 'COSMANEURA_TWILIO_FROM_NUMBER', value: validatedTwilioFromNumber }
+            { name: 'COSMANEURA_TWILIO_MESSAGING_SERVICE_SID', value: validatedTwilioMessagingServiceSid }
+            { name: 'COSMANEURA_TWILIO_CALLBACK_BASE_URL', value: communicationsCallbackOrigin }
+          ] : [], athenaReviewCredentialsRequired ? [
+            { name: 'COSMANEURA_ATHENA_CLIENT_ID', value: athenaReviewClientId }
+            { name: 'COSMANEURA_ATHENA_CLIENT_SECRET', secretRef: 'athena-review-client-secret' }
+          ] : [], enableAzureOpenAIInference ? [
             {
               name: 'AZURE_OPENAI_ENDPOINT'
               value: azureOpenAI!.properties.endpoint
@@ -877,6 +1155,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
               value: validatedAcsEmailReplyToAddress
             }
           ] : [])
+          volumeMounts: empty(validatedRosterSecretName) ? [] : [{ volumeName: 'roster', mountPath: '/var/lib/cosmaneura/roster' }]
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
@@ -920,6 +1199,11 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           ]
         }
       ]
+      volumes: empty(validatedRosterSecretName) ? [] : [{
+        name: 'roster'
+        storageType: 'Secret'
+        secrets: [{ secretRef: 'direct-contract-roster', path: 'direct_contract_patients.json' }]
+      }]
       scale: {
         minReplicas: minReplicas
         maxReplicas: maxReplicas
@@ -929,6 +1213,9 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
   dependsOn: [
     entraClientSecretVault
     entraClientSecretReader
+    reviewSigningReader
+    reviewAthenaReader
+    apiRosterReader
     apiAzureLanguageReader
     azureLanguagePrivateDnsGroup
   ]
@@ -1275,3 +1562,19 @@ output athenaSyncProvisioned bool = provisionAthenaSync
 output athenaSyncEnabled bool = validatedAthenaSyncEnabled
 output athenaSyncIdentityName string = provisionAthenaSync ? athenaSyncIdentity!.name : ''
 output athenaSyncJobName string = provisionAthenaSync ? athenaSyncJob!.name : ''
+
+output billingHeaderEnabled bool = enableBillingHeader
+output providerHandoffEnabled bool = validatedProviderHandoff
+output communicationsTestModeEnabled bool = validatedCommunicationsTestMode
+output athenaReviewMode string = athenaReviewMode
+output communicationsProvisioned bool = provisionCommunications
+output communicationsEnabled bool = validatedCommunicationsEnabled
+output communicationsWorkerJobName string = provisionCommunications ? communications!.outputs.workerJobName : ''
+output communicationsCallbackOrigin string = provisionCommunications ? communicationsCallbackOrigin : ''
+output communicationsSchedulerEnabled bool = validatedCommunicationsScheduler
+output communicationsMessagingEnabled bool = validatedCommunicationsMessaging
+output communicationsIngressExternal bool = validatedCommunicationsIngress
+
+output coreBridgeProvisioned bool = validatedCoreProvisioning
+output coreBridgeFqdn string = validatedCoreProvisioning ? coreBridge!.outputs.applicationFqdn : ''
+output coreBridgeManagedIdentityClientId string = validatedCoreProvisioning ? coreBridge!.outputs.managedIdentityClientId : ''
