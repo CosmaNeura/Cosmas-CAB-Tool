@@ -28,15 +28,16 @@ code points. Human facts do not establish documentation or clear completeness
 flags. Engine suggestions remain unchanged; human code edits and removals are
 separate unreviewed proposals with before/after history.
 
-The header remains unreviewed after existing coder feedback. A future signoff
-slice must compose the current recommendation digest with the reviewed header
-ID/revision and validate both atomically. This change does not claim that
-existing coder signoff approves header edits. Native provider-platform launch,
-verified terminology manifests, and that combined signoff are follow-up work.
+Feedback-only records do not approve header edits. The implemented
+[header signoff](BILLING_HEADER_SIGNOFF.md) atomically records coder decisions
+against the current source and saved header revision. Editing it requires a
+fresh review. The separate Core provider receiver is also implemented; its
+deployment and source permissions remain separate from this workspace.
+See the [MCD quickstart](MCD_TRAINING_QUICKSTART.md) for the staff workflow.
 
 Focused checks cover provider/coder editing, source/revision conflicts, exact
 request retries, source evidence and unchanged notes. The PostgreSQL API
 rehearsal requires an explicitly configured disposable database and signing
 key. Its result is recorded separately from in-memory checks. Live Athena,
-messaging, hosted rollout, and parity with later clinical qualification repairs
-are separate from this workspace integration.
+messaging, hosted rollout, and hosted clinical acceptance remain separate from
+these local checks.

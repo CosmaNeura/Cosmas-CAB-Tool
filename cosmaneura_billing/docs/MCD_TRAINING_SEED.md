@@ -31,10 +31,10 @@ If an ID already has different content, the entire insertion rolls back with
 The older demo seed and this pack can coexist under their distinct IDs.
 
 Sign in with an active same-practice `Coder` membership to select the cases in
-the standard CAB queue. Seed loading does not grant user roles. This integration
-supplies the protected source visits; editable billing headers and header
-signoff are separate integrations. Existing billing and feedback capabilities
-continue to use the configured full pipeline and their current access controls.
+the standard CAB queue. Seed loading does not grant user roles. The pack supplies
+the protected source visits. Editable headers and revision-specific coder review
+are now implemented; follow the [MCD quickstart](MCD_TRAINING_QUICKSTART.md).
+Existing billing and feedback capabilities continue to use the configured full pipeline and their current access controls.
 Do not treat packaging as approval of clinical output or model disclosure.
 The command does not invoke a model, start outreach, import Athena data, or
 enable a capability.

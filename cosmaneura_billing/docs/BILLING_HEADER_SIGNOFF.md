@@ -40,7 +40,9 @@ validation fails closed before displaying a current review.
 ## Atomic persistence and migration rung
 
 Migration `013_billing_header_signoffs.up.sql` expands after 003 and 011;
-communications migrations 010/012 are independent and absent from this tree. The runtime role receives only
+communications migrations010/012 are independent prerequisites of their own
+workflows and are included in the current full001–026 deployment chain. The
+header signoff table grants the runtime role only
 SELECT and INSERT. Forced practice RLS, active role checks, immutable rows,
 current encounter/header locks, and unique review/revision constraints apply.
 
