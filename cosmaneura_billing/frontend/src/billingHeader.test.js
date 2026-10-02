@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { exportBillingHeader, factKeys, fieldAuthor, headerDraft, headerProposals,
+import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, factKeys, fieldAuthor, finishHeaderRequest, headerDraft, headerProposals, ownsHeaderRequest,
   headerReviewRequest, headerSourceKey, missingHeaderBaseline, readBillingHeader } from "./billingHeader.js";
 
 function fixture() {
@@ -149,4 +149,59 @@ test("same-source drift needs explicit consistent baseline decisions without cha
   assert.deepEqual(headerReviewRequest({...view, signoff: null}, {...feedback,
     decisions: view.signoff.codeDecisions}, [], true, view.signoff.baselineDecisions).baselineDecisions,
   view.signoff.baselineDecisions);
+});
+
+
+test("overlapping header refreshes replace reads without stale completion or cleanup unlocking the new owner", async () => {
+  for (const staleFinishesFirst of [true, false]) {
+    const pending = {current: null}, state = {busy: false, value: null};
+    function start(value) {
+      const request = beginHeaderRequest(pending, null, true);
+      assert.ok(request);
+      state.busy = true;
+      let resolve;
+      const result = new Promise((done) => {resolve = done;});
+      const completion = (async () => {
+        try {
+          await result;
+          if (ownsHeaderRequest(pending, request)) state.value = value;
+        } finally {
+          if (finishHeaderRequest(pending, request)) state.busy = false;
+        }
+      })();
+      return {request, resolve, completion, cleanup: () => cancelHeaderRequest(pending, request)};
+    }
+    const old = start("old receipt");
+    old.cleanup(); // refreshKey cleanup before replacement effect
+    const latest = start("latest receipt");
+    assert.equal(old.request.controller.signal.aborted, true);
+    old.cleanup(); // a late cleanup must not abort or unlock the replacement
+    assert.equal(latest.request.controller.signal.aborted, false);
+    if (staleFinishesFirst) {
+      old.resolve(); await old.completion;
+      assert.deepEqual(state, {busy: true, value: null});
+      assert.equal(pending.current, latest.request);
+    }
+    latest.resolve(); await latest.completion;
+    old.resolve(); await old.completion;
+    assert.deepEqual(state, {busy: false, value: "latest receipt"});
+    assert.equal(pending.current, null);
+  }
+});
+
+test("refresh preserves an in-flight mutation and its exact retry command", () => {
+  const pending = {current: null};
+  const command = {path: "/api/encounters/header/save", body: {operationId: "same-request", expectedRevision: 2}};
+  const mutation = beginHeaderRequest(pending, command);
+  assert.equal(beginHeaderRequest(pending, null, true), null);
+  assert.equal(mutation.controller.signal.aborted, false);
+  assert.equal(pending.current, mutation);
+  assert.equal(finishHeaderRequest(pending, mutation), true);
+  const retry = beginHeaderRequest(pending, command);
+  assert.equal(retry.command, command);
+  cancelHeaderRequest(pending, mutation);
+  assert.equal(pending.current, retry);
+  cancelHeaderRequest(pending); // unmount/source-key change cancels the actual owner
+  assert.equal(retry.controller.signal.aborted, true);
+  assert.equal(pending.current, null);
 });

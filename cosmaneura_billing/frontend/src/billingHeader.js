@@ -201,3 +201,26 @@ export function exportBillingHeader(view) {
   for (const e of h.evidence) rows.push(`[${e.id}] ${e.source}, ${e.sourceId}, version ${e.sourceVersion}, ${e.start}–${e.end}`, e.text);
   return rows.join("\n");
 }
+
+// Each completion/cleanup may release only the request that owns this ref.
+export function ownsHeaderRequest(pending, request) {
+  return Boolean(request) && pending.current === request;
+}
+
+export function finishHeaderRequest(pending, request) {
+  if (!ownsHeaderRequest(pending, request)) return false;
+  pending.current = null;
+  return true;
+}
+
+export function cancelHeaderRequest(pending, request = pending.current) {
+  if (finishHeaderRequest(pending, request)) request.controller.abort();
+}
+
+export function beginHeaderRequest(pending, command = null, refresh = false) {
+  // Refresh may replace reads, but must not discard an unresolved mutation.
+  if (refresh && pending.current && !pending.current.command) cancelHeaderRequest(pending);
+  if (pending.current) return null;
+  pending.current = {controller: new AbortController(), command};
+  return pending.current;
+}

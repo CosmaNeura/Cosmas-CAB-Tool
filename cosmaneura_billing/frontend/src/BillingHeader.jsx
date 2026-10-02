@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import { exportBillingHeader, fieldAuthor, headerDraft, headerSourceKey, readBillingHeader } from "./billingHeader.js";
+import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader } from "./billingHeader.js";
 
 const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
 const input = "mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
@@ -28,45 +28,46 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
   const [retry, setRetry] = useState(null), [stale, setStale] = useState(false);
   const [notice, setNotice] = useState("");
-  const pending = useRef({seq: 0, busy: false, controller: null});
+  const pending = useRef(null);
   const pin = encounter.headerSource;
 
-  useEffect(() => {
-    run();
-    return () => { pending.current.seq++; pending.current.controller?.abort(); };
-  }, [refreshKey]);
+  useEffect(() => run(null, true), [refreshKey]);
+  useEffect(() => () => cancelHeaderRequest(pending), []);
 
   useEffect(() => {
     onStateChange({view, dirty: !!draft, busy: busy || !!retry, stale});
   }, [view, draft, busy, retry, stale, onStateChange]);
   useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
 
-  async function run(command = null) {
-    if (pending.current.busy) return;
-    const seq = ++pending.current.seq, controller = new AbortController();
-    pending.current = {seq, controller, busy: true};
+  function run(command = null, refresh = false) {
+    const request = beginHeaderRequest(pending, command, refresh);
+    if (!request) return NOOP;
+    const {controller} = request;
     setBusy(true); setError(""); setNotice("");
-    try {
-      const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
-        body: command?.body || {encounterId: encounter.encounterId, expectedSource: pin}});
-      if (seq !== pending.current.seq) return;
-      const received = readBillingHeader(response.view, encounter);
-      if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
-      setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
-      if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
-        : "Header generated for review. No code has been accepted.");
-    } catch (failure) {
-      if (seq !== pending.current.seq || failure.name === "AbortError") return;
-      const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
-      setRetry(ambiguous ? command : null);
-      if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
-      setError(failure.status === 409
-        ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."
-        : failure.status === 422 ? "The header edit could not be validated. Check the code, evidence, and required reason."
-        : "The header could not be loaded or saved. No replacement result was substituted.");
-    } finally {
-      if (seq === pending.current.seq) { pending.current.busy = false; setBusy(false); }
-    }
+    void (async () => {
+      try {
+        const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
+          body: command?.body || {encounterId: encounter.encounterId, expectedSource: pin}});
+        if (!ownsHeaderRequest(pending, request)) return;
+        const received = readBillingHeader(response.view, encounter);
+        if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
+        setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
+        if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
+          : "Header generated for review. No code has been accepted.");
+      } catch (failure) {
+        if (!ownsHeaderRequest(pending, request) || failure.name === "AbortError") return;
+        const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
+        setRetry(ambiguous ? command : null);
+        if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
+        setError(failure.status === 409
+          ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."
+          : failure.status === 422 ? "The header edit could not be validated. Check the code, evidence, and required reason."
+          : "The header could not be loaded or saved. No replacement result was substituted.");
+      } finally {
+        if (finishHeaderRequest(pending, request)) setBusy(false);
+      }
+    })();
+    return () => cancelHeaderRequest(pending, request);
   }
 
   function command(path, body = {}) {
