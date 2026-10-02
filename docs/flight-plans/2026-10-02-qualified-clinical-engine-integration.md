@@ -1,7 +1,7 @@
 # Qualified E/M engine integration
 
 Risk: Tier 2 (billing adjudication and source evidence).
-Base: `4edbfef12d4e0d30e78789a2f277c7348eec80bf`.
+Base: `12341a92b667d570b754d6a17d76129a8cdc903f`.
 Source: selected final `8d0caca` clinical wiring plus corrected C1/C2 leaf overrides.
 
 ## One outcome

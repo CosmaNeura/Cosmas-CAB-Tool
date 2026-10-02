@@ -48,3 +48,16 @@ The time proof has no public rule-version field, so its shape stays unchanged.
 Encounter-care and order ownership bytes are untouched. Keep the initial evidence,
 add direct source-heading/reset controls, and freeze the focused repair separately
 for independent review; pipeline replay remains assigned to C6.
+
+## Original-note acceptance correction
+
+The first ownership repair incorrectly classified identity metadata containing
+`patient` as a report scope, suppressing time in unchanged training notes 1–9.
+Retain the prior reporting/borrowed-document holds while recognizing explicit
+identity labels and complete bounded demographic values as neutral metadata.
+No synthetic label or name grants an exception. A neutral identity,
+Assessment or Time heading cannot reset a genuine reported/template scope.
+Direct tests load the hash-pinned original notes, preserve their bytes and verify
+exact time evidence. Keep the failed acceptance and previous repair evidence;
+rerun only affected leaf controls and invariants, then obtain independent review
+before downstream propagation and renewed acceptance.
