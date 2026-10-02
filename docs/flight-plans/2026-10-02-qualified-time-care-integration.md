@@ -1,6 +1,6 @@
 # Qualified total-time and encounter-work foundation
 
-Risk: Tier 2 (billing evidence). Base: `ea88788db206695cc97c597de9e7967b52008239`.
+Risk: Tier 2 (billing evidence). Base: `d2dc9a729a0de3a7ab3fa666f05fcb5a6d8ec25c`.
 
 ## Outcome
 
@@ -38,3 +38,13 @@ Revert this dormant module/test outcome before activation; no state needs rollba
 Bounded source qualification and synthetic checks do not certify clinical accuracy,
 claim validity or deployment readiness. C6 must enforce retained current-care
 necessity and the final evidence-qualified time/MDM ceiling together.
+
+## Independent-review repair
+
+C5-01 retains patient/report/template source ownership across blank paragraphs
+and neutral headings. Only an explicit current clinician label resets that owner;
+ordinary multiline notes and exact source/time fingerprints remain supported.
+The time proof has no public rule-version field, so its shape stays unchanged.
+Encounter-care and order ownership bytes are untouched. Keep the initial evidence,
+add direct source-heading/reset controls, and freeze the focused repair separately
+for independent review; pipeline replay remains assigned to C6.

@@ -96,6 +96,19 @@ def _contexts(text: str):
             yield start, end, text[start:end]
 
 
+def _owner_transitions(text: str):
+    """Carry reported/template ownership past paragraphs and neutral headings."""
+    for heading in re.finditer(r"(?:^[ \t]*|;[ \t]*)([A-Za-z][A-Za-z /'-]{0,60}):", text, re.M):
+        label = heading[1].strip()
+        if re.search(r"\b(?:patient|pt|family|caregiver|reported|quotation|example|template|"
+            r"nurse|nursing|staff|assistant|outside|external|imported|copied|quoted|prior|previous|historical)\b", label, re.I):
+            yield heading.start(), True
+        elif re.fullmatch(r"(?:current\s+)?(?:physician|qhp|provider|doctor|clinician)"
+            r"(?:\s+(?:note|assessment(?: and plan)?|plan))?", label, re.I):
+            yield heading.start(), False
+        # A subordinate Time/Assessment label cannot change who owns the text.
+
+
 def _affirmative_amount(context, total, duration):
     """Only supported affirmative numeric clauses, not arbitrary qualifiers.
 
@@ -189,7 +202,13 @@ def qualify_em_time(minutes: object, quote: object, bundle: VisitBundle) -> Time
         if occurrences:
             occurrence_seen = True
         contexts = list(_contexts(text))
+        owners = iter(_owner_transitions(text))
+        owner = next(owners, None)
+        excluded_owner = False
         for index, (start, end, context) in enumerate(contexts):
+            while owner is not None and owner[0] <= start:
+                excluded_owner = owner[1]
+                owner = next(owners, None)
             linked = []
             unsupported_exclusion = False
             for _, _, following in contexts[index + 1:index + 4]:
@@ -204,7 +223,7 @@ def qualify_em_time(minutes: object, quote: object, bundle: VisitBundle) -> Time
                     # cannot hide inside a sentence labelled an exclusion.
                     unsupported_exclusion = True
                 linked.append(following)
-            claims = [] if unsupported_exclusion else _claims(context, name, " ".join(linked))
+            claims = [] if unsupported_exclusion or excluded_owner else _claims(context, name, " ".join(linked))
             eligible.extend(amount for amount, _, _ in claims)
             if not choose_here or len(occurrences) != 1:
                 continue

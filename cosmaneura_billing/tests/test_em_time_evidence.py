@@ -181,3 +181,45 @@ def test_total_requires_bounded_integer_minutes(minutes):
 
 def test_missing_time_has_no_invented_attestation():
     assert qualify_em_time(None, "", bundle()).attestation is None
+
+
+@pytest.mark.parametrize("heading", [
+    "Patient reports:", "Template example:", "Family says:", "Nursing notes:",
+    "Prior physician note:", "External clinician report:",
+])
+@pytest.mark.parametrize("continuation", ["", "Time:\n\n", "Assessment:\n\n"])
+def test_time_keeps_source_owner_across_paragraphs_and_neutral_labels(heading, continuation):
+    quote = "Total physician time today was 45 minutes."
+    note = heading + "\n\n" + continuation + quote
+    source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11", signed_note=note)
+    assert qualify_em_time(45, quote, source).attestation is None
+
+
+@pytest.mark.parametrize("heading", ["Patient reports:", "Template example:"])
+@pytest.mark.parametrize("where", ["signed_note", "transcript"])
+def test_explicit_current_clinician_resets_reported_time_owner(heading, where):
+    quote = "Physician: Total physician time today was 45 minutes."
+    note = heading + "\n\nA previous discussion is quoted here.\n\n" + quote
+    source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11", **{where: note})
+    q = qualify_em_time(45, quote, source).attestation
+    assert q is not None and q.minutes == 45 and q.source == where
+    assert q.quote == note[q.start:q.end] == quote
+    assert q.source_sha256 == hashlib.sha256(note.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("prefix", [
+    "HPI:\nRash began today.\n\nAssessment:\nI examined the rash.\n\n",
+    "Patient reports:\n\nAn earlier conversation.\n\nCurrent clinician note:\n\n",
+])
+def test_normal_multiline_note_and_explicit_current_note_keep_time(prefix):
+    quote = "Total physician time today was 45 minutes."
+    source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11", signed_note=prefix + quote)
+    q = qualify_em_time(45, quote, source).attestation
+    assert q is not None and q.quote == quote
+
+
+def test_reported_note_total_cannot_fall_back_to_clinician_transcript():
+    quote = "Total physician time today was 45 minutes."
+    source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11",
+        signed_note="Patient reports:\n\n" + quote, transcript="Physician: " + quote)
+    assert qualify_em_time(45, quote, source).attestation is None
