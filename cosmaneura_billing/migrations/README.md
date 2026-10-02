@@ -77,6 +77,15 @@ in a migration numbered from then-current `main`; the Athena importer cannot
 write such receipts directly. This migration adds no coverage/lab table,
 Card Chase UI, OAuth behavior, or network path.
 
+`011_billing_headers` adds immutable generated headers and attributed human
+revisions, source/version locks, idempotency receipts and mandatory atomic
+access-audit coupling. Only current Provider/Coder/Admin memberships may write.
+This integration adds the domain and store only; no API, UI or activation
+setting consumes them yet. Edits remain unreviewed proposals and never mutate
+an encounter note or accept billing codes. The available migration set is
+`001`–`009` plus `011`; `010` communications is independent and absent here.
+Recovery leaves these expand structures dormant rather than dropping history.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).
