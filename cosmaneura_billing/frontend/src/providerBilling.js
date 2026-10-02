@@ -3,12 +3,16 @@ import { sequencingMessage } from "./diagnosisSequencing.js";
 const SOURCE_LABELS = Object.freeze({
   synthetic_demo_release_candidate: "Validated synthetic release-candidate fixture",
   athena_preview_synthetic: "Athena Preview synthetic fixture",
+  athena_staff_review_preview_synthetic: "Reviewed Athena Preview synthetic encounter",
+  athena_staff_review_mock: "Local Athena workflow simulation",
   operational: "Operational source",
 });
 
 const SYNTHETIC_SOURCES = new Set([
   "synthetic_demo_release_candidate",
   "athena_preview_synthetic",
+  "athena_staff_review_preview_synthetic",
+  "athena_staff_review_mock",
 ]);
 
 const EVIDENCE_SOURCES = Object.freeze({

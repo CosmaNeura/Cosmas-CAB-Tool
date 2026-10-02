@@ -1,3 +1,4 @@
+import { headerLaunchPath } from "./providerHeaderLaunch.js";
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { readAthenaEnvelope, athenaSourceReadFields, athenaConnectionMessage, mergeAthenaBilling, athenaBillingReadBody, athenaField, athenaDepartments, athenaPhoneReview, athenaSourceDepartment, athenaImportMessage, fieldDisplay, athenaFailure, ambiguousAthenaFailure } from "./athenaCaseReview.js";
@@ -23,7 +24,7 @@ function Check({ label, checked, onChange, disabled }) {
 export default function AthenaCaseReview(props) {
   return <CaseBody key={props.task.chaseId} {...props} />;
 }
-function CaseBody({ task, active, manageChase, blocked, onOpenEncounter, onApplied, onReviewLock }) {
+function CaseBody({ task, active, manageChase, blocked, headerLaunchAvailable = false, onApplied, onReviewLock }) {
   const chaseId = task.chaseId;
   const billingAvailable = task.athenaReview?.billingAvailable === true;
   const [view, setView] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -247,7 +248,10 @@ function CaseBody({ task, active, manageChase, blocked, onOpenEncounter, onAppli
         </form>}
       </section>}
       {view.billingImport && <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-950"><p>{athenaImportMessage(view.billingImport)}</p>{view.billingImport.source === "athena_staff_review_operational" && <p className="mt-1 text-xs">Athena Production · Operational source.</p>}<p className="mt-1 text-xs">{view.billingImport.encounterId}</p><p className="mt-1 text-xs">Chart query department {view.billingImport.departmentId} · Encounter department {athenaSourceDepartment(view.billingImport.sourceDepartmentId)}{view.billingImport.sourceDepartmentOrigin === "metadata" ? " (from encounter metadata)" : ""}</p>
-        {onOpenEncounter && <button className={`${button} mt-2`} disabled={locked} onClick={() => onOpenEncounter(view.billingImport.encounterId)}>Open CAB encounter</button>}</div>}
+        {headerLaunchAvailable && <a role="link" className={`${button} mt-2 inline-block aria-disabled:opacity-50`}
+          href={locked ? undefined : headerLaunchPath(view.billingImport.encounterId)}
+          aria-disabled={locked || undefined} tabIndex={locked ? -1 : undefined} target="_blank" rel="noopener noreferrer">
+          Open billing header <span className="text-xs">(new tab)</span></a>}</div>}
     </>}
   </section>;
 }

@@ -101,7 +101,7 @@ function CaseActivity({ value }) {
 
 function FollowUpTask({
   task, loading, error, manageChase, actionBusy, actionError,
-  actionNotice, retryAction, onAction, onReviewCounts, onReviewLock, onAthenaLock, athenaLocked, onAthenaApplied,
+  actionNotice, retryAction, onAction, onReviewCounts, onReviewLock, onAthenaLock, athenaLocked, onAthenaApplied, billingHeaderAvailable,
 }) {
   const [outcome, setOutcome] = useState("reached");
   const [minutes, setMinutes] = useState("0");
@@ -157,7 +157,7 @@ function FollowUpTask({
       </div>
       <div id="case-activity" role="tabpanel" aria-labelledby="case-activity-tab" hidden={panel !== "activity"} className="px-5 pb-5"><CaseActivity value={task.activity} /></div>
       {hasCommunications && <div id="case-communications" role="tabpanel" aria-labelledby="case-communications-tab" hidden={panel !== "communications"} className="px-5 pb-1"><CaseCommunications task={task} active={panel === "communications"} manageChase={manageChase} blocked={actionBusy || athenaLocked} onReviewCounts={onReviewCounts} onReviewLock={onReviewLock} /></div>}
-      {hasAthena && <div id="case-athena" role="tabpanel" aria-labelledby="case-athena-tab" hidden={panel !== "athena"} className="px-5 pb-1"><AthenaCaseReview task={task} active={panel === "athena"} manageChase={manageChase} blocked={actionBusy} onReviewLock={onAthenaLock} onApplied={onAthenaApplied} /></div>}
+      {hasAthena && <div id="case-athena" role="tabpanel" aria-labelledby="case-athena-tab" hidden={panel !== "athena"} className="px-5 pb-1"><AthenaCaseReview task={task} active={panel === "athena"} manageChase={manageChase} blocked={actionBusy} onReviewLock={onAthenaLock} onApplied={onAthenaApplied} headerLaunchAvailable={billingHeaderAvailable} /></div>}
       <div id="case-summary" role="tabpanel" aria-labelledby="case-summary-tab" hidden={panel !== "summary"} className="p-5">
       {(() => {
         const activity = readChaseActivity(task.activity);
@@ -365,7 +365,7 @@ function FollowUpTask({
   );
 }
 
-export default function CardChase({ live, demoSeed = null, manageChase = false }) {
+export default function CardChase({ live, demoSeed = null, manageChase = false, billingHeaderAvailable = false }) {
   const [bucket, setBucket] = useState("");
   const [query, setQuery] = useState("");
   const [worklist, setWorklist] = useState(null);
@@ -669,6 +669,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
           onAthenaLock={setAthenaLocked}
           athenaLocked={athenaLocked}
           onAthenaApplied={refreshAppliedCase}
+          billingHeaderAvailable={billingHeaderAvailable}
           key={task?.chaseId || "empty-task"}
           task={task}
           loading={taskLoading}
