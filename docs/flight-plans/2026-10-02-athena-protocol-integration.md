@@ -7,7 +7,10 @@ Preserved implementation: 8d0caca22aaed8001aaeec955c81c3f7ecc11bd4.
 
 Bring forward the complete final staff read protocol, immutable practice/case
 scope, and read-lease boundary without selecting an application transport.
-The final client and two supporting modules are exact preserved bytes.
+The two supporting modules retain exact preserved bytes. Independent review
+found an optional summary practice-ID binding gap in the preserved client; this
+integration rejects supplied wrong/malformed practice IDs and retains absent-ID
+compatibility. The client also corrects stale comments about the lease gate.
 The existing client/sync/import behavior remains unchanged. No API, settings,
 UI, schema, credentials, source data, or deployment configuration changes.
 
@@ -40,3 +43,12 @@ this dormant code slice; no schema or stored-data rollback exists. Next comes
 the final contact/insurance candidate mapper and human-reviewed case receipt,
 then staff API/UI wiring. Case registry/admission and operational source/model
 approval remain separate from these protocol metadata objects.
+
+## Review correction AP-01
+
+Before accepting summary text, validate its optional practiceid with the same
+canonical response-ID rule as patient and encounter IDs and compare it with the
+server-owned vendor practice. Exercise absent/string/integer controls and wrong,
+boolean, float, zero-prefixed and null IDs for legacy Preview, explicit Preview
+and an authored leased Production scope. This changes no activation or source
+completion rule. Final independent review must bind the corrected pushed SHA.

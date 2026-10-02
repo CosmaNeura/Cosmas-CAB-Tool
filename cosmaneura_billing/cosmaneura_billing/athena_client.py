@@ -20,8 +20,9 @@ reads credentials or opens a socket, and the one-shot sync skeleton runs only
 the mock in this release.
 
 The separate staff lane at the end retains its approved Preview transport.
-Its immutable practice/case contract also builds and decodes Production fixture
-data, but actual Production transport remains unavailable before authentication.
+Its immutable practice/case contract also builds and decodes Production data.
+Production transport additionally requires a server-issued, active read/storage
+lease; this module does not configure an application caller or issue that lease.
 """
 from __future__ import annotations
 
@@ -58,8 +59,8 @@ ATHENA_PREVIEW_INTROSPECTION_URL = (
 ATHENA_PREVIEW_PRACTICE_ID = "195900"
 ATHENA_PREVIEW_SCOPE = "athena/service/Athenanet.MDP.*"
 ATHENA_PRODUCTION_ORIGIN = "https://api.platform.athenahealth.com"
-# Only the pure staff contract supports Production in this release. The actual
-# staff transport rejects it before credential/token use, including injected I/O.
+# Production transport requires an exact active read/storage lease before any
+# credential or token use, including when the HTTP boundary is injected.
 _STAFF_ORIGINS = MappingProxyType({
     "preview": ATHENA_PREVIEW_ORIGIN,
     "production": ATHENA_PRODUCTION_ORIGIN,
@@ -1268,7 +1269,7 @@ def build_athena_staff_read_url(scope: AthenaStaffScope, kind: str, *,
     """Pure fixed-endpoint contract, not authority to send a request.
 
     The server supplies the immutable case/patient binding. Production URL
-    construction is available for offline integration; its transport is closed.
+    construction does not supply the active lease required by its transport.
     Encounter IDs still require patient-bound discovery before any later read.
     """
     _staff_scope(scope)
@@ -1595,7 +1596,8 @@ class AthenaStaffReadClient:
         payload = _card_json(raw, text_limit=131072, allow_lines=True)
         if not isinstance(payload, dict) or not isinstance(payload.get("summaryhtml"), str):
             raise AthenaSchemaError()
-        for key, expected in (("patientid", patient), ("encounterid", encounter)):
+        for key, expected in (("patientid", patient), ("encounterid", encounter),
+                              ("practiceid", _staff_practice(self._scope))):
             if key in payload and _staff_response_id(payload[key]) != expected:
                 raise AthenaSchemaError()
         html = payload["summaryhtml"]
