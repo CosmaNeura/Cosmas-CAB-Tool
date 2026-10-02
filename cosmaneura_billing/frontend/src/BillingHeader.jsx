@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import MdmDataReview from "./MdmDataReview.jsx";
+import MdmClinicalReview from "./MdmClinicalReview.jsx";
 import DiagnosisMapping from "./DiagnosisMapping.jsx";
 import {mappingReviewText} from "./diagnosisMapping.js";
 import { api } from "./api.js";
@@ -86,10 +88,13 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   }
   async function copyHeader() {
     try { await navigator.clipboard.writeText(exportBillingHeader(view, encounter)); setNotice("Billing header and source citations copied."); }
-    catch { setNotice("Clipboard unavailable. Download the header text instead."); }
+    catch { setNotice("Copy unavailable. Verify the current header and source before retrying."); }
   }
   function downloadHeader() {
-    const url = URL.createObjectURL(new Blob([exportBillingHeader(view, encounter)], {type: "text/plain;charset=utf-8"}));
+    let content;
+    try { content = exportBillingHeader(view, encounter); }
+    catch { setNotice("Download unavailable. Verify the current header and source before retrying."); return; }
+    const url = URL.createObjectURL(new Blob([content], {type: "text/plain;charset=utf-8"}));
     const link = document.createElement("a");
     link.href = url; link.download = `billing-header-revision-${view.revisionNumber}.txt`; link.click();
     URL.revokeObjectURL(url);
@@ -155,6 +160,8 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
       <ul className="mt-2 grid gap-2 sm:grid-cols-2">{h.suggestions.map((code) => <li key={code.id} className="rounded-lg border border-slate-200 p-3 text-sm">
         <strong className="font-mono">{code.code}</strong> · {code.label}<p className="mt-1 text-xs text-slate-600">{code.basis}</p><Evidence ids={code.evidenceIds} header={h} />
       </li>)}</ul>
+      <MdmDataReview review={h.dataReview} encounter={encounter} original />
+      <MdmClinicalReview review={h.clinicalReview} encounter={encounter} original />
       {view.revision && <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
         <h3 className="font-semibold">Current code proposals · {view.signoff ? "review outcomes recorded above" : "require review"}</h3>
         <p className="mt-1 text-xs">Edited codes remain separate from engine suggestions. Saving does not accept a code or complete coder signoff.</p>

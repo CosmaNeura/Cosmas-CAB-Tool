@@ -1,0 +1,163 @@
+{
+  "encounter": {
+    "signedNote": "😀 Hypertension is at goal; continue medication.\nMedication response reviewed; continue losartan.\nHistorical rash is listed.",
+    "transcript": "",
+    "intake": ""
+  },
+  "raw": {
+    "rule_version": "office-mdm-clinical.2026-09-30.v1",
+    "problems": {
+      "rule_version": "office-mdm-problems.2026-09-30.v1",
+      "level": "low",
+      "events": [
+        {
+          "id": "mdm-problem-1",
+          "subject": "Hypertension",
+          "status": "counted",
+          "category": "stable_chronic",
+          "reason": "Current clinician work and condition status are documented.",
+          "evidence": [
+            {
+              "source": "signed_note",
+              "quote": "Hypertension is at goal; continue medication."
+            }
+          ]
+        },
+        {
+          "id": "mdm-problem-2",
+          "subject": "HTN",
+          "status": "duplicate",
+          "category": null,
+          "reason": "The same underlying condition was already counted.",
+          "evidence": [
+            {
+              "source": "signed_note",
+              "quote": "Hypertension is at goal; continue medication."
+            }
+          ]
+        },
+        {
+          "id": "mdm-problem-3",
+          "subject": "Historical rash",
+          "status": "held",
+          "category": null,
+          "reason": "Current evaluation or management was not established.",
+          "evidence": [
+            {
+              "source": "signed_note",
+              "quote": "Historical rash is listed."
+            }
+          ]
+        }
+      ]
+    },
+    "risk": {
+      "rule_version": "office-mdm-risk.2026-09-30.v1",
+      "level": "moderate",
+      "events": [
+        {
+          "id": "mdm-risk-1",
+          "subject": "Losartan",
+          "status": "counted",
+          "category": "prescription_management",
+          "reason": "The source establishes a current prescription decision.",
+          "evidence": [
+            {
+              "source": "signed_note",
+              "quote": "Medication response reviewed; continue losartan."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "display": {
+    "rule_version": "office-mdm-clinical.2026-09-30.v1",
+    "problems": {
+      "rule_version": "office-mdm-problems.2026-09-30.v1",
+      "level": "low",
+      "evidence_complete": true,
+      "events": [
+        {
+          "id": "mdm-problem-1",
+          "subject": "Hypertension",
+          "status": "counted",
+          "category": "stable_chronic",
+          "reason": "Current clinician work and condition status are documented.",
+          "evidence_complete": true,
+          "evidence_spans": [
+            {
+              "source": "signed_note",
+              "text": "Hypertension is at goal; continue medication.",
+              "loc": {
+                "start": 2,
+                "end": 47
+              }
+            }
+          ]
+        },
+        {
+          "id": "mdm-problem-2",
+          "subject": "HTN",
+          "status": "duplicate",
+          "category": null,
+          "reason": "The same underlying condition was already counted.",
+          "evidence_complete": true,
+          "evidence_spans": [
+            {
+              "source": "signed_note",
+              "text": "Hypertension is at goal; continue medication.",
+              "loc": {
+                "start": 2,
+                "end": 47
+              }
+            }
+          ]
+        },
+        {
+          "id": "mdm-problem-3",
+          "subject": "Historical rash",
+          "status": "held",
+          "category": null,
+          "reason": "Current evaluation or management was not established.",
+          "evidence_complete": true,
+          "evidence_spans": [
+            {
+              "source": "signed_note",
+              "text": "Historical rash is listed.",
+              "loc": {
+                "start": 97,
+                "end": 123
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "risk": {
+      "rule_version": "office-mdm-risk.2026-09-30.v1",
+      "level": "moderate",
+      "evidence_complete": true,
+      "events": [
+        {
+          "id": "mdm-risk-1",
+          "subject": "Losartan",
+          "status": "counted",
+          "category": "prescription_management",
+          "reason": "The source establishes a current prescription decision.",
+          "evidence_complete": true,
+          "evidence_spans": [
+            {
+              "source": "signed_note",
+              "text": "Medication response reviewed; continue losartan.",
+              "loc": {
+                "start": 48,
+                "end": 96
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

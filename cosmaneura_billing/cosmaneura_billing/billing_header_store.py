@@ -48,6 +48,10 @@ class _Store(SignoffStoreMixin):
     @staticmethod
     def _view(unit, record):
         domain.require(record is not None, "store_invalid")
+        for key, validate in (("dataReview", domain.valid_data_review),
+                              ("clinicalReview", domain.valid_clinical_review)):
+            if key in record["header"]:
+                domain.require(validate(record["header"][key], unit.stored.bundle), "store_invalid")
         rows = unit.revisions(record["headerId"])
         domain.require(all(row["number"] == index + 1 for index, row in enumerate(rows)), "store_invalid")
         if rows:
