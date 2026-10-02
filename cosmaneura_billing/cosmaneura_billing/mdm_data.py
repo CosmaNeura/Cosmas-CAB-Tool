@@ -15,7 +15,7 @@ import re
 from .knowledge.mdm_tests import TestIdentity, resolve_test, test_mentions
 from .schemas import Evidence, VisitBundle
 
-VERSION = "office-mdm-data.2026-09-30.v2"
+VERSION = "office-mdm-data.2026-10-02.v3"
 ACTIONS = ("test_order", "test_result_review", "test_considered",
            "external_note_review", "independent_historian",
            "independent_interpretation", "external_discussion")
@@ -516,6 +516,31 @@ def _safe_subject(value: object) -> str:
     return value.strip()[:160]
 
 
+def _historian_need_supported(text: str) -> bool:
+    # Exact history words do not affirm that an independent historian was needed.
+    if ("?" in text or _BAD_ASSERTION.search(text) or _UNFINISHED.search(text)
+            or _HISTORICAL.search(text) or re.search(r"\b(?:if|unless|false|untrue)\b", text, re.I)):
+        return False
+    if re.search(
+        r"\b(?:no|without)\s+(?:(?:a|any|additional)\s+)?(?:need|requirement|"
+        r"(?:confirmatory|conflicting|independent)\s+history)\b|"
+        r"\bhistory\s+(?:(?:is|was)\s+)?(?:not|never)\s+(?:needed|required|necessary)\b|"
+        r"\bhistory\s+(?:(?:is|was)\s+)?unnecessary\b", text, re.I):
+        return False
+    affirmative = (
+        r"\bpatient\s+(?:(?:is|was)\s+)?(?:unable to|cannot|can't|can’t)\s+(?:provide|give)\s+"
+        r"(?:a\s+)?(?:(?:complete|reliable|accurate|full|medical|and)\s+)*history\b|"
+        r"\b(?:confirmatory|conflicting)\s+history\s+(?:(?:is|was)\s+)?(?:needed|required|necessary)\b|"
+        r"\b(?:I|we)\s+(?:need|needed|require|required)\s+(?:confirmatory|conflicting)\s+history\b"
+    )
+    for _, _, sentence in _sentences(text):
+        for clause in re.split(r";|\bbut\b", sentence, flags=re.I):
+            match = re.search(affirmative, clause, re.I)
+            if match and not re.search(r"\b(?:no|not|never|without|denies|denied)\b", clause[:match.start()], re.I):
+                return True
+    return False
+
+
 def _qualify(raw: dict, index: int, bundle: VisitBundle) -> _Event:
     action = raw.get("action") if raw.get("action") in ACTIONS else "unclassified"
     subject = _safe_subject(raw.get("subject"))
@@ -576,9 +601,7 @@ def _qualify(raw: dict, index: int, bundle: VisitBundle) -> _Event:
         historian = _HISTORIAN.search(identity_anchor.quote)
         if not historian or not re.search(rf"\b{historian[0]}\b", text, re.I):
             return replace(event, reason="A distinct historian providing history could not be linked to the action.")
-        if not qualification_anchor or not re.search(
-            r"\b(?:patient (?:is |was )?(?:unable to (?:provide|give)|cannot (?:provide|give))|"
-            r"(?:confirmatory|conflicting) history|confirm (?:the )?history)\b", qualification_anchor.quote, re.I):
+        if not qualification_anchor or not _historian_need_supported(qualification_anchor.quote):
             return replace(event, reason="Historian need or confirmatory history requires human review under CAB's evidence policy.")
         if re.search(r"\b(?:translator|interpreter|translation only|present only)\b", joined, re.I):
             return replace(event, reason="Presence or translation alone does not establish an independent historian.")

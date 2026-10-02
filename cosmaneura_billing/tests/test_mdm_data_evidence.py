@@ -294,3 +294,41 @@ def test_test_identity_action_and_date_must_be_a_single_supported_relation(quote
 def test_patient_report_heading_is_not_lost_at_a_line_break():
     quote = "I ordered TSH today."
     assert run(event("TSH", "test_order", quote), note="Patient report:\n" + quote)["category_one_units"] == 0
+
+
+@pytest.mark.parametrize("qualification,expected", [
+    ("No confirmatory history was needed; the patient provided a complete and reliable history.", False),
+    ("Confirmatory history was not required; the patient provided a complete and reliable history.", False),
+    ("Confirmatory history was unnecessary.", False),
+    ("There was no need for confirmatory history.", False),
+    ("It is not true that the patient is unable to provide reliable history.", False),
+    ("The patient is unable to provide reliable history?", False),
+    ("Confirmatory history was needed?", False),
+    ("Confirmatory history will be needed if the patient is unable to provide history.", False),
+    ("The patient was unable to provide reliable history yesterday.", False),
+    ("Confirmatory history was needed. Correction: this was not required.", False),
+    ("Confirmatory history was needed.", True),
+    ("Conflicting history required.", True),
+    ("I needed confirmatory history.", True),
+    ("The patient is unable to provide complete and reliable history.", True),
+    ("The patient cannot give reliable history.", True),
+])
+def test_historian_credit_requires_affirmed_current_need(qualification, expected):
+    historian = event("mother", "independent_historian", "I obtained history from the mother today.", qualification)
+    result = run(historian, event("CBC", "test_order", "I ordered CBC today."),
+                 event("TSH", "test_order", "I ordered TSH today."))
+    assert result["independent_historian"] is expected
+    assert (result["category_one_units"], result["level"]) == ((3, "moderate") if expected else (2, "low"))
+    assert result["events"][0]["status"] == ("counted" if expected else "held")
+    assert qualification in [a["quote"] for a in result["events"][0]["evidence"]]
+
+
+def test_clipped_historian_qualification_cannot_remove_denied_need():
+    action = "I obtained history from the mother today."
+    historian = event("mother", "independent_historian", action, "confirmatory history was needed")
+    note = action + " No confirmatory history was needed; the patient provided reliable history."
+    result = run(historian, note=note)
+    assert result["independent_historian"] is False
+    assert result["category_one_units"] == 0
+    assert result["events"][0]["status"] == "held"
+    assert any(a["quote"].startswith("No confirmatory") for a in result["events"][0]["evidence"])

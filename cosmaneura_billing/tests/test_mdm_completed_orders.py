@@ -50,7 +50,7 @@ FROZEN_ROUTED_ORDERS = (
 ])
 def test_completed_lists_preserve_each_known_test_and_exact_evidence(quote, subjects):
     result = qualified(quote, subjects)
-    assert result.public["rule_version"] == VERSION == "office-mdm-data.2026-09-30.v2"
+    assert result.public["rule_version"] == VERSION == "office-mdm-data.2026-10-02.v3"
     assert result.public["category_one_units"] == len(subjects)
     assert all(e["status"] == "counted" for e in result.public["events"])
     assert all(e.quote == quote for e in result.evidence())
