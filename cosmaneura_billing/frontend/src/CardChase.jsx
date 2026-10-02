@@ -601,7 +601,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
         {countUpdate.at && <> Last updated <time dateTime={new Date(countUpdate.at).toISOString()}>{new Date(countUpdate.at).toLocaleTimeString()}</time>.</>}
       </p>}
       {manageChase && hasInbox && <UnassignedTexts blocked={actionBusy || reviewLocked} refreshVersion={inboxRefresh} onLock={setInboxLocked}
-        onReviewed={async () => { await load(); const selected = selectedChaseIdRef.current; if (selected) await openTaskById(selected); }} />}
+        onReviewed={load} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(25rem,0.9fr)_minmax(0,1.1fr)]">
         <section aria-label="Insurance follow-up queue" className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 p-4">

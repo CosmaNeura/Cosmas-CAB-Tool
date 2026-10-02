@@ -7,7 +7,8 @@ strict response/command contracts, bounded count refresh helper and their tests
 from 8d0caca. Mount the inbox only for an explicit server worklist capability,
 including an empty queue. An unknown sender is never assigned automatically.
 Staff explicitly select and confirm a current-contact match or leave it
-unassigned; reviewed STOP events remain suppressed. Preserve exact retry IDs.
+unassigned; reviewed STOP events remain suppressed. Preserve exact retry IDs. Inbox completion reloads queue counts without
+remounting the selected case or losing its unfinished draft.
 
 While visible, refresh only per-case and unassigned counts every 15 seconds.
 Preserve selected case, draft, queue order and newer local review decisions.

@@ -121,3 +121,52 @@ test("another case's incoming texts update badges without replacing the open SMS
   expect(pageErrors).toEqual([]);
   await page.screenshot({path: testInfo.outputPath("counts-with-draft-preserved.png"), fullPage: true});
 });
+
+
+for (const decision of ["leave_unassigned", "attribute"]) test(`inbox ${decision} preserves the open draft and case identity`, async ({ page }) => {
+  await page.clock.install();
+  const selected = workspaceRows[0].chaseId, taskReads = [], commands = [];
+  const item = {ref: "b".repeat(64), sourceHash: "f".repeat(64), kind: "sms_reply", channel: "sms",
+    text: reply.text, at, status: "received", disposition: "reply_received", mediaCount: 0,
+    senderHint: "Ending 0177", reviewState: "pending", reviewedAt: null, attributedCaseId: null};
+  let saved = false;
+  page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/chase/task") taskReads.push(request.postDataJSON()); });
+  await page.route("**/api/chase/worklist", (route) => route.fulfill({json: {
+    rows: workspaceRows.map((row) => ({...row, communicationReview: {pending: saved && decision === "attribute" && row.chaseId === selected ? 1 : 0, held: 0}})),
+    communications: {available: true, mode: "durable"},
+  }}));
+  await page.route("**/api/chase/communications**", (route) => {
+    const path = new URL(route.request().url()).pathname, body = route.request().postDataJSON();
+    if (path === base) return route.fulfill({json: conversation(body.chaseId, saved && decision === "attribute" ? [reply] : [])});
+    if (path === `${base}/unassigned-texts/count`) return route.fulfill({json: {schemaVersion: "communications-unassigned-count.v1", pendingCount: saved ? 0 : 1}});
+    if (path === `${base}/unassigned-texts`) return route.fulfill({json: {schemaVersion: "communications-unassigned.v1", state: "pending", pendingCount: saved ? 0 : 1, items: saved ? [] : [item], hasMore: false, nextCursor: null}});
+    if (path === `${base}/unassigned-text-cases`) return route.fulfill({json: {schemaVersion: "communications-unassigned-cases.v1", eventRef: item.ref, sourceHash: item.sourceHash, hasMore: false, nextCursor: null,
+      items: [{...workspaceRows[0], contactSnapshotId: "11111111-1111-4111-8111-111111111111", verifiedAt: at}]}});
+    if (path === `${base}/review-unassigned-text`) {
+      commands.push(body); saved = true;
+      return route.fulfill({json: {schemaVersion: "communications-unassigned-decision.v1", pendingCount: 0, receipt: {...body, reviewedAt: at}}});
+    }
+    throw new Error(`Unexpected request ${path}`);
+  });
+  await page.goto("/");
+  const row = page.getByRole("button", {name: /Synthetic patient A/});
+  await row.click(); await page.getByRole("tab", {name: "Communications", exact: true}).click();
+  const panel = page.getByRole("region", {name: "Case communications", exact: true});
+  const draft = panel.getByRole("textbox", {name: "SMS draft", exact: true});
+  await draft.fill("Synthetic unfinished text that must survive inbox review.");
+  const inbox = page.getByRole("region", {name: "Unassigned texts", exact: true});
+  await inbox.getByRole("button", {name: "Unassigned texts · 1", exact: true}).click();
+  await inbox.getByRole("button", {name: "Review text", exact: true}).click();
+  const form = inbox.getByRole("form", {name: "Review selected text"});
+  await form.getByLabel("Text review decision", {exact: true}).selectOption(decision);
+  if (decision === "attribute") await form.getByLabel("Existing case", {exact: true}).selectOption(selected);
+  await form.getByRole("checkbox").check(); await form.getByRole("button", {name: "Save text review"}).click();
+  await expect(inbox).toContainText("No unassigned texts await review.");
+  await page.clock.runFor(15_001);
+  await expect(draft).toHaveValue("Synthetic unfinished text that must survive inbox review.");
+  await expect(row).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("tab", {name: "Communications", exact: true})).toHaveAttribute("aria-selected", "true");
+  expect(taskReads).toEqual([{chaseId: selected}]); expect(commands).toHaveLength(1);
+  expect(commands[0].decision).toBe(decision); expect(commands[0].chaseId).toBe(decision === "attribute" ? selected : null);
+  if (decision === "attribute") await expect(panel.getByRole("list", {name: "SMS thread"})).toContainText(reply.text);
+});
