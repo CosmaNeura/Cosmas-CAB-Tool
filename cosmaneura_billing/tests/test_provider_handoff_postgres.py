@@ -28,11 +28,11 @@ pytestmark = pytest.mark.skipif(not DSN, reason="explicit disposable integration
 @pytest.fixture
 def context():
     with psycopg.connect(DSN, autocommit=True) as db:
-        assert db.info.dbname == "cab_provider_receiver_test_20261002_r1" and db.info.host == "127.0.0.1" and db.info.port == 32800
+        assert db.info.dbname in {"cab_provider_receiver_test_20261002_r1", "cab_provider_model_test_20261002_r1"} and db.info.host == "127.0.0.1" and db.info.port == 32800
         # Full sparse chain is applied by the locked runner before the suite.
         import hashlib
         paths = sorted((Path(__file__).resolve().parents[1] / "migrations").glob("*.up.sql"))
-        assert len(paths) == 18
+        assert len(paths) == 19
         assert dict(db.execute("SELECT name,checksum_sha256 FROM cosmaneura_schema_migrations").fetchall()) == {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
         import re

@@ -1,4 +1,4 @@
-"""Immutable v1/v2 parsing; provider source authority is a later schema slice."""
+"""Immutable v1/v2 parsing; registered provider authority is checked separately at runtime."""
 import hashlib
 import json
 from uuid import uuid4

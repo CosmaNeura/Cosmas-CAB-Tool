@@ -49,7 +49,7 @@ def test_restricted_pg_optional_date_replay_source_version_and_wrapper(context):
     assert not accept(ctx, actor, raw)["current"]
     with ctx.connection() as db:
         assert not db.execute("SELECT has_function_privilege(current_user,'cosmaneura_commit_provider_handoff_019(jsonb)','EXECUTE') AS allowed").fetchone()["allowed"]
-        assert db.execute("SELECT to_regprocedure('public.cosmaneura_provider_model_source(uuid,uuid,text,text)') AS fn").fetchone()["fn"] is None
+        assert db.execute("SELECT to_regprocedure('public.cosmaneura_provider_model_source(uuid,uuid,text,text)') AS fn").fetchone()["fn"] is not None
 
 
 @pytest.mark.parametrize("flag", ["azure_openai_enabled", "azure_language_enabled", "azure_language_shadow_enabled"])

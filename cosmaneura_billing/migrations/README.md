@@ -97,8 +97,8 @@ to remove existing review evidence. No clinical note, claim or EHR is written.
 ## Dormant Athena schema integration
 
 The available ordered set is now `001`–`009`, `011`, `013`, `014`,
-and `019`–`024` (18 total); it is intentionally sparse. Communications migrations
-`010`, `012`, `015`–`018` and provider model-source rung `025` are absent.
+and `019`–`025` (19 total); it is intentionally sparse. Communications migrations
+`010`, `012`, `015`–`018` are absent.
 
 `014_athena_staff_review` creates immutable practice-scoped review receipts,
 current BillingStaff/Admin authorization, same-transaction audit coupling and
@@ -120,7 +120,10 @@ and owner-only admission CLI are now integrated behind
 `COSMANEURA_PROVIDER_HANDOFF_ENABLED` (default false), together with the header
 release control. Only registered exact operations enter storage. Canonical024
 adds optional serviceDate while preserving existing manifests and receipts.
-Provider model-source admission025 remains deferred. Immutable source/receipt
+Canonical025 provides a narrow source-proof reader for a separately configured
+provider model policy; the runtime gets EXECUTE only. The reader checks current
+source, latest admission and revocation without taking encounter/head locks.
+Immutable source/receipt
 guards and the empty admission registry remain intact.
 An ordinary encounter writer cannot manufacture `provider_completed_note`.
 
