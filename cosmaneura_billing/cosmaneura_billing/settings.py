@@ -18,10 +18,27 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .runtime import safe_llm_model_label
+from .communications_channels import enabled_channels
+from .communications_test_policy import parse_test_recipients, validated_test_recipients
 
 
 class SettingsError(ValueError):
     """A runtime setting is missing, incomplete, or malformed."""
+
+
+def _parse_communications_channels(env):
+    try:
+        raw = env.get("COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS", "sms")
+        return enabled_channels(tuple(part.strip() for part in raw.split(",")))
+    except (ValueError, AttributeError):
+        raise SettingsError("COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS must name distinct sms or automated_voice channels") from None
+
+
+def _parse_communications_test_recipients(env):
+    try:
+        return parse_test_recipients(env.get("COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS", ""))
+    except ValueError:
+        raise SettingsError("invalid communications test recipients") from None
 
 
 AMA_CREDENTIAL_ENV_VARS = (
@@ -39,7 +56,7 @@ _CHASE_STORES = frozenset({"memory", "postgres"})
 _STATE_STORES = frozenset({"local", "postgres"})
 _APPROVAL_MODES = frozenset({"per_policy", "per_message"})
 _AUTH_MODES = frozenset({"disabled", "container_apps"})
-_CHASE_TRANSPORTS = frozenset({"record_only", "acs_email"})
+_CHASE_TRANSPORTS = frozenset({"record_only", "acs_email", "twilio"})
 _DEFAULT_ALLOWED_ROLES = ("Admin", "BillingStaff", "Coder", "Provider")
 _LOCAL_CORS_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
 _EMAIL = re.compile(
@@ -485,6 +502,14 @@ class Settings:
     review_context_signing_key: str = field(
         default="", repr=False, metadata={"secret": True}
     )
+    communications_enabled: bool = False
+    communications_enabled_channels: tuple[str, ...] = ("sms",)
+    communications_test_mode: bool = False
+    communications_test_recipients: tuple[str, ...] = field(default=(), repr=False, metadata={"secret": True})
+    twilio_account_sid: str = ""
+    twilio_from_number: str = field(default="", repr=False, metadata={"secret": True})
+    twilio_callback_base_url: str = ""
+    twilio_messaging_service_sid: str = ""
     database_runtime_role: str = "cosmaneura_app"
     database_runtime_password: str = field(
         default="", repr=False, metadata={"secret": True}
@@ -735,6 +760,37 @@ class Settings:
                 or (self.review_context_signing_key and not re.fullmatch(
                     r"[!-~]{32,256}", self.review_context_signing_key))):
             raise SettingsError("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY requires 32–256 ASCII secret characters")
+        if type(self.communications_enabled) is not bool:
+            raise SettingsError("COSMANEURA_COMMUNICATIONS_ENABLED must be a boolean")
+        try:
+            object.__setattr__(self, "communications_enabled_channels", enabled_channels(self.communications_enabled_channels))
+        except ValueError:
+            raise SettingsError("invalid communications enabled channels") from None
+        try:
+            object.__setattr__(self, "communications_test_recipients", validated_test_recipients(
+                self.communications_test_mode, self.communications_test_recipients, self.communications_enabled_channels))
+        except ValueError as exc:
+            raise SettingsError(str(exc)) from None
+        if not isinstance(self.twilio_messaging_service_sid, str) or (
+                self.twilio_messaging_service_sid and not re.fullmatch(r"MG[0-9a-fA-F]{32}", self.twilio_messaging_service_sid)):
+            raise SettingsError("invalid Twilio Messaging Service SID")
+        twilio_fields = (self.twilio_account_sid, self.twilio_from_number, self.twilio_callback_base_url, self.twilio_messaging_service_sid)
+        if self.communications_enabled or any(twilio_fields):
+            try:
+                parsed = urlsplit(self.twilio_callback_base_url)
+                if (not re.fullmatch(r"AC[0-9a-fA-F]{32}", self.twilio_account_sid)
+                        or not re.fullmatch(r"\+[1-9][0-9]{7,14}", self.twilio_from_number)
+                        or parsed.scheme != "https" or not parsed.hostname
+                        or parsed.username or parsed.password or parsed.query or parsed.fragment
+                        or parsed.path not in {"", "/"} or parsed.port not in {None, 443}
+                        or any(c.isspace() for c in self.twilio_callback_base_url)):
+                    raise ValueError()
+            except (ValueError, TypeError):
+                raise SettingsError("complete valid Twilio sender metadata and an HTTPS callback origin are required") from None
+        if self.communications_enabled and (self.state_store != "postgres" or self.chase_store != "postgres"):
+            raise SettingsError("operational communications require PostgreSQL stores")
+        if self.chase_transport == "twilio" and not self.communications_enabled:
+            raise SettingsError("Twilio transport requires COSMANEURA_COMMUNICATIONS_ENABLED=true")
         if self.athena_review_mode not in {"disabled", "mock", "preview", "configured"}:
             raise SettingsError("COSMANEURA_ATHENA_REVIEW_MODE must be disabled, mock, preview or configured")
         if self.athena_credential_environment not in {"", "preview", "production"}:
@@ -761,7 +817,7 @@ class Settings:
             )
         if self.chase_transport not in _CHASE_TRANSPORTS:
             raise SettingsError(
-                "COSMANEURA_CHASE_TRANSPORT must be record_only or acs_email"
+                "COSMANEURA_CHASE_TRANSPORT must be record_only, acs_email or twilio"
             )
         try:
             ZoneInfo(self.practice_timezone)
@@ -869,12 +925,12 @@ class Settings:
                 raise SettingsError(
                     "real patient messaging requires durable PostgreSQL stores"
                 )
-            if self.chase_transport != "acs_email":
+            if self.chase_transport not in {"acs_email", "twilio"}:
                 raise SettingsError(
                     "real patient messaging requires "
-                    "COSMANEURA_CHASE_TRANSPORT=acs_email"
+                    "COSMANEURA_CHASE_TRANSPORT=acs_email or twilio"
                 )
-            if not all(acs_metadata_fields.values()):
+            if self.chase_transport == "acs_email" and not all(acs_metadata_fields.values()):
                 raise SettingsError(
                     "real patient messaging requires complete ACS email "
                     "settings metadata"
@@ -1201,6 +1257,14 @@ class Settings:
             athena_client_id=env.get("COSMANEURA_ATHENA_CLIENT_ID", ""),
             athena_client_secret=env.get("COSMANEURA_ATHENA_CLIENT_SECRET", ""),
             review_context_signing_key=env.get("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY", ""),
+            communications_enabled=_parse_bool(env, "COSMANEURA_COMMUNICATIONS_ENABLED", False),
+            communications_enabled_channels=_parse_communications_channels(env),
+            communications_test_mode=_parse_bool(env, "COSMANEURA_COMMUNICATIONS_TEST_MODE", False),
+            communications_test_recipients=_parse_communications_test_recipients(env),
+            twilio_account_sid=env.get("COSMANEURA_TWILIO_ACCOUNT_SID", ""),
+            twilio_from_number=env.get("COSMANEURA_TWILIO_FROM_NUMBER", ""),
+            twilio_callback_base_url=env.get("COSMANEURA_TWILIO_CALLBACK_BASE_URL", ""),
+            twilio_messaging_service_sid=env.get("COSMANEURA_TWILIO_MESSAGING_SERVICE_SID", ""),
             database_runtime_role=(
                 env.get("COSMANEURA_DB_RUNTIME_ROLE") or "cosmaneura_app"
             ).strip(),

@@ -1300,6 +1300,7 @@ def _chase_task_json(
 ) -> dict[str, Any]:
     """One audited contact task without copying operational destinations."""
     from .chase import State
+    from .chase.activity import build_activity
     from .chase.synthetic_demo import synthetic_case_for
 
     synthetic = synthetic_case_for(item)
@@ -1349,6 +1350,7 @@ def _chase_task_json(
             "Open the approved patient record in the practice source system. The contact "
             "destination is not copied into this application."
         )
+    activity = build_activity(item.attempts)
     return {
         "chaseId": item.chase_id,
         "patientLabel": (
@@ -1358,12 +1360,13 @@ def _chase_task_json(
         "state": item.state.value,
         "assigned": bool(item.assignee),
         "touches": item.touches,
-        "staffMinutes": item.staff_minutes,
+        "staffMinutes": activity["staffMinutes"] if activity is not None else None,
         "open": item.is_open,
         "hasPendingTask": item.pending_task is not None,
         "allowedActions": allowed_actions,
         "instruction": instruction,
         "contact": contact,
+        "activity": activity,
         "systemOfRecord": {
             "name": "Practice source system",
             "deepLinkConfigured": False,
