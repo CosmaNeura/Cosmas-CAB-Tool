@@ -191,7 +191,10 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   const panel = await open(page);
   await panel.getByRole("button", { name: "Reminder", exact: true }).click();
   await panel.getByRole("button", { name: "Prepare SMS", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Retry same action", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled();
   await panel.getByRole("button", { name: "Retry same action", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
   await expect(panel.getByRole("list", { name: "SMS thread" }).getByRole("listitem")).toHaveCount(1);
   expect(bodies).toHaveLength(2);
   expect(bodies[0]).toEqual(bodies[1]);

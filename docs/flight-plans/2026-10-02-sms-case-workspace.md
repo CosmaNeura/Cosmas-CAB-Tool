@@ -6,7 +6,8 @@ Tier 2: staff outreach authorization and communication evidence display.
 
 Stack on the reviewed CardChase workspace at 3f6d57d. Bring the six complete
 case-conversation and event-review components/contracts/tests from preserved
-8d0caca into the focused case workspace. The server must advertise an available
+8d0caca into the focused case workspace, with a combined parent refresh lock
+for in-flight actions and unresolved retries. The server must advertise an available
 communications capability before its tab appears; default training/staging
 responses keep their existing Summary and Activity tabs.
 

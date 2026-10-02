@@ -164,6 +164,11 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
     request.current.busy = false;
   }, [chaseId]);
 
+  useEffect(() => {
+    onReviewLock?.(busy || !!retry || requiresRefresh || reviewLocked);
+    return () => onReviewLock?.(false);
+  }, [busy, retry, requiresRefresh, reviewLocked, onReviewLock]);
+
   async function run(command = null) {
     if (request.current.busy || blocked) return;
     background.current?.abort();
@@ -293,7 +298,7 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
     {notice && <p role="status" className="text-xs text-sky-800">{notice}</p>}
     {reviewAvailable && <CommunicationsEventReview key={chaseId} chaseId={chaseId} active={active} blocked={reviewBlocked}
       canReview={manageChase} refreshVersion={reviewVersion} onReviewed={() => run()} onCounts={onReviewCounts}
-      onLockChange={(value) => { setReviewLocked(value); onReviewLock?.(value); }} />}
+      onLockChange={setReviewLocked} />}
     {!view ? <p className="py-4 text-sm text-slate-500">{busy ? "Loading communications…" : "Communication history unavailable."}</p> : <>
       {durable && <OutreachSetup key={`${chaseId}:${view.policy.hash}:${view.policy.approved}:${view.enabledChannels.join(",")}`} view={view} locked={locked} act={act} />}
       {view.truncated && <p className="text-xs text-slate-500">Showing the most recent 200 history entries. Current delivery states include earlier receipts.</p>}
