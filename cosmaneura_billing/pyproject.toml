@@ -68,6 +68,8 @@ include = ["cosmaneura_billing*"]
     "data/corpora/*.md",
     "data/demo_release_candidate/*.json",
     "data/demo_source_extension/*.json",
+    "data/mcd_training/*.json",
+    "data/mcd_training/*.md",
     "data/synthetic_chase/*.json",
     "data/mcd/*.csv.gz",
     "data/mcd/*.md",
