@@ -36,3 +36,14 @@ Revert the added module and tests before activation; no state requires rollback.
 Unknown wording remains held for human review. These bounded qualification rules
 and tests do not certify clinical accuracy, claim validity or deployment readiness.
 The existing pipeline stays in place until all C6 dependencies are integrated.
+
+## Independent-review repair
+
+C4-R1 binds the life-sustaining withdrawal verb, named intervention and prognosis
+inside one current clinician clause. C4-R2 consumes a closed dose/route regimen
+without discarding unknown product words behind prepositions. The risk rule is
+now v4; v3 snapshots remain historical inputs for later C7 readers. Retain the
+eight direct original product-regression definitions and exact helpers from
+8d0caca; its CASES-dependent dose/evidence parity replay stays assigned to C6.
+Run the changed leaf tests, paired controls and existing invariant proof; preserve
+original source/review evidence and freeze this repair separately before review.

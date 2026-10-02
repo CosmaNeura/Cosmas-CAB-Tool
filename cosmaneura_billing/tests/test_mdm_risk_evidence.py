@@ -372,7 +372,7 @@ def test_affirmative_begin_forms_bind_the_current_whole_product(quote):
     q = run(event(subject, quote))
     assert (q.level, q.established) == ("moderate", True)
     assert [e.quote for e in q.evidence()] == [quote]
-    assert q.public["rule_version"] == "office-mdm-risk.2026-09-30.v3"
+    assert q.public["rule_version"] == "office-mdm-risk.2026-09-30.v4"
 
 
 @pytest.mark.parametrize("quote", [
@@ -565,3 +565,33 @@ def test_delegated_future_authority_and_post_dose_product_suffix_cannot_establis
 def test_product_dose_boundary_preserves_current_regimens_and_clinical_conditions(action):
     subject = next(s for s in ("metformin", "amoxicillin", "albuterol") if s in action)
     assert run(event(subject, action)).level == "moderate"
+
+
+@pytest.mark.parametrize("quote", [
+    "I recommended dialysis because of poor prognosis. I stopped metformin today.",
+    "I recommended dialysis because of poor prognosis and stopped metformin.",
+    "I recommended dialysis because of poor prognosis; I decided against metformin.",
+    "I did not stop dialysis today because of poor prognosis.",
+    "The patient reports: I stopped dialysis today because of poor prognosis.",
+    "The nurse stopped dialysis today because of poor prognosis.",
+    "I stopped dialysis yesterday because of poor prognosis.",
+])
+def test_life_sustaining_withdrawal_cannot_borrow_another_action_or_actor(quote):
+    q = run(event("dialysis", quote, "life_sustaining_decision"))
+    assert not q.established and not q.evidence()
+
+
+@pytest.mark.parametrize("quote", [
+    "I stopped dialysis today because of poor prognosis.",
+    "I decided to forgo dialysis because of terminal illness.",
+    "I withdrew dialysis due to irreversible organ failure.",
+    "I decided against dialysis because of end-stage disease.",
+])
+def test_life_sustaining_withdrawal_binds_action_and_cause_to_exact_intervention(quote):
+    raw = event("dialysis", quote, "life_sustaining_decision")
+    before = deepcopy(raw)
+    q = run(raw)
+    assert q.established and q.level == "high"
+    assert q.public["events"][0]["category"] == "life_sustaining_deescalation"
+    assert [e.quote for e in q.evidence()] == [quote]
+    assert q.matches([raw]) and raw == before
