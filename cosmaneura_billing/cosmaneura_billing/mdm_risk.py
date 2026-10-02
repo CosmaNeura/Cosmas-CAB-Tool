@@ -25,7 +25,7 @@ import re
 from .knowledge.mdm_tests import resolve_test
 from .schemas import Evidence, VisitBundle
 
-VERSION = "office-mdm-risk.2026-09-30.v3"
+VERSION = "office-mdm-risk.2026-09-30.v4"
 ACTIONS = ("medication_management", "toxicity_monitoring", "surgery_decision",
            "hospitalization_decision", "life_sustaining_decision",
            "social_constraint", "individualized_management")
@@ -277,13 +277,11 @@ def _dose_boundary(tail: str) -> bool:
     the extracted subject ends early. A separate clinical clause remains in
     the original source evidence and still passes decision/context checks.
     """
-    if not re.match(r"\s+" + _AMOUNT, tail, re.I):
-        return True
-    dose = re.match(r"\s+" + _DOSE, tail, re.I)
-    if not dose:
-        return False
-    remainder = re.split(r";|[.!?](?:\s|$)", tail[dose.end():], maxsplit=1)[0]
-    administration = re.compile(r"^\s+(?:" + _ROUTE + "|" + _FREQUENCY
+    remainder = re.split(r";|[.!?](?:\s|$)", tail, maxsplit=1)[0]
+    # A route/preposition can precede the dose. Consume only closed regimen
+    # tokens in any supported order; never let an unknown tail bypass parsing.
+    administration = re.compile(r"^\s+(?:(?:(?:at|from|to|by)\s+)?" + _DOSE
+        + "|" + _ROUTE + "|" + _FREQUENCY
         + r"|as needed|with (?:the )?(?:morning|evening) meal|with (?:food|meals)|"
         r"at bedtime|for\s+" + _AMOUNT + r"\s+(?:days?|weeks?|months?)|today|now)\b", re.I)
     while match := administration.match(remainder):
@@ -702,10 +700,16 @@ def _qualify(raw: object, index: int, bundle: VisitBundle) -> _Event:
                 return counted("hospitalization", "high", "A substantive current hospitalization/escalation decision is tied to this patient's clinical need, including a documented shared decision against admission.")
         return replace(e, reason="A current substantive hospitalization decision needs its clinical context; an ED contingency or routine referral is insufficient.")
     if action == "life_sustaining_decision":
-        if re.search(r"\b(?:resuscitation|mechanical ventilation|life-sustaining treatment|dialysis|artificial nutrition)\b", subject, re.I) and re.search(
-            r"\b(?:forgo|forwent|withdraw|withdrew|withhold|withheld|stop|stopped|discontinue|discontinued|decided against)\b", action_text, re.I) and re.search(
-            _subject(subject) + r"\s+(?:today\s+)?(?:because of|due to|given)\s+(?:poor prognosis|terminal illness|terminal cancer|end-stage disease|irreversible organ failure)\b", action_text, re.I):
-            return counted("life_sustaining_deescalation", "high", "A current decision to limit life-sustaining treatment is explicitly caused by poor prognosis.")
+        if re.search(r"\b(?:resuscitation|mechanical ventilation|life-sustaining treatment|dialysis|artificial nutrition)\b", subject, re.I):
+            # The withdrawal action, intervention and prognosis must belong to
+            # one clinical clause; stopping another medicine is not withdrawal.
+            for a, b in _sentences(action_text):
+                for clause in action_text[a:b].split(";"):
+                    body = _body(clause.strip())
+                    match = re.search(r"\b(?:forgo|forwent|withdraw|withdrew|withhold|withheld|stop|stopped|discontinue|discontinued|decided against)\s+(?:the\s+)?"
+                        + _subject(subject) + r"\s+(?:today\s+)?(?:because of|due to|given)\s+(?:poor prognosis|terminal illness|terminal cancer|end-stage disease|irreversible organ failure)\b", body, re.I)
+                    if match and _intro(body[:match.start()]) and _safe(body):
+                        return counted("life_sustaining_deescalation", "high", "A current decision to limit life-sustaining treatment is explicitly caused by poor prognosis.")
         return replace(e, reason="A code-status label alone is insufficient; a current life-sustaining treatment decision must be causally tied to poor prognosis.")
     return e
 
