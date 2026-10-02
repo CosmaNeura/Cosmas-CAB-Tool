@@ -766,6 +766,7 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         # Authentication already rejects principals without an allowed app
         # role. Keep this defensive branch fail-closed if that contract drifts.
         raise HTTPException(status_code=403, detail="access is not permitted")
+    settings = _request_settings(request)
     capabilities: dict[str, Any] = {
         "views": views,
         "defaultView": views[0],

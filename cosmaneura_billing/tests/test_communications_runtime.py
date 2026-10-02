@@ -494,6 +494,10 @@ def test_empty_worklist_advertises_staff_communications_capability(lane):
             with psycopg.connect(DSN) as db:
                 db.execute("UPDATE practice_memberships SET roles=%s WHERE practice_id=%s", ([role], lane.practice))
             headers = _auth_headers(user_id=lane.actor, tenant_id=lane.tenant, roles=(role,))
+            session = client.get("/api/session", headers=headers)
+            assert session.status_code == 200, session.text
+            assert session.json()["patientOutreachEnabled"] is False
+            assert session.json()["capabilities"]["manageChase"] is True
             response = client.post("/api/chase/worklist", headers=headers, json={"assignee": str(uuid4())})
             assert response.status_code == 200, response.text
             assert response.json()["rows"] == []
