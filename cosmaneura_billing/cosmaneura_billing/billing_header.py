@@ -12,10 +12,13 @@ import json
 import re
 from uuid import UUID, uuid4
 
+from .icd10_validity import valid_human_icd10
+
 SCHEMA = "provider-billing-header.v1"
 FACT_KEYS = ("visit_type", "patient_type", "modality", "patient_location",
              "place_of_service", "provider_location", "consent", "visit_duration", "em_time")
 OFFICE_EM = frozenset(("99202", "99203", "99204", "99205", "99212", "99213", "99214", "99215"))
+DIAGNOSIS_ORDER_DECISION = "@diagnosis-order"  # Reserved; impossible as a code-row ID.
 MAX_REVISIONS = 100
 
 
@@ -263,14 +266,18 @@ def code_fields(line):
 
 
 def create_draft(header, revision=None):
-    return detached(revision["draft"]) if revision else {
+    return {"diagnosisOrderConfirmed": False, **detached(revision["draft"])} if revision else {
         "facts": {fact["key"]: fact["value"] or "" for fact in header["facts"]},
-        "codes": [code_fields(line) for line in header["suggestions"]], "note": ""}
+        "codes": [code_fields(line) for line in header["suggestions"]], "note": "",
+        "diagnosisOrderConfirmed": False}
 
 
 def normalize_draft(header, draft):
     try:
-        closed(draft, ("facts", "codes", "note"))
+        closed(draft, ("facts", "codes", "note", *(
+            ("diagnosisOrderConfirmed",) if type(draft) is dict and "diagnosisOrderConfirmed" in draft else ())))
+        confirmed = draft.get("diagnosisOrderConfirmed", False)
+        require(type(confirmed) is bool)
         closed(draft["facts"], FACT_KEYS)
         facts = {key: text(draft["facts"][key], 600, empty=True) for key in FACT_KEYS}
         note = text(draft["note"], 2000, empty=True)
@@ -294,13 +301,31 @@ def normalize_draft(header, draft):
                 code = normalized["code"]
                 require(code in OFFICE_EM if line["kind"] == "EM" else
                         re.fullmatch(r"[A-Z][0-9][A-Z0-9](?:\.[A-Z0-9]{1,4})?", code) is not None)
+            if line["kind"] == "ICD10":
+                require(valid_human_icd10(normalized["code"]))
             key = (normalized["kind"], normalized["code"])
             require(key not in codes)
             codes.add(key)
             result.append(normalized)
-        return {"facts": facts, "codes": result, "note": note}
+        require(not confirmed or any(row["kind"] == "ICD10" for row in result))
+        return {"facts": facts, "codes": result, "note": note, "diagnosisOrderConfirmed": confirmed}
     except (BillingHeaderError, TypeError, KeyError):
         raise BillingHeaderError("invalid_edit") from None
+
+
+def diagnosis_order(draft):
+    """An ordered human proposal; array position alone is never confirmation."""
+    if draft.get("diagnosisOrderConfirmed") is not True:
+        return []
+    return [code_fields(row) for row in draft["codes"] if row["kind"] == "ICD10"]
+
+
+def diagnosis_order_snapshot(draft):
+    rows = [code_fields(row) for row in draft["codes"] if row["kind"] == "ICD10"]
+    # Bound audit history even when every row references the full evidence envelope.
+    return {"confirmed": draft.get("diagnosisOrderConfirmed", False),
+            "ids": [row["id"] for row in rows], "codes": [row["code"] for row in rows],
+            "contentSha256": digest(rows)}
 
 
 def changes_between(header, before, after):
@@ -315,6 +340,10 @@ def changes_between(header, before, after):
         if old.get(key) != new.get(key):
             changes.append({"path": f"codes.{key}", "label": "Human code proposal",
                             "before": old.get(key), "after": new.get(key)})
+    old_order, new_order = (diagnosis_order_snapshot(value) for value in (before, after))
+    if old_order != new_order:
+        changes.append({"path": "diagnosisOrder", "label": "Human diagnosis order",
+                        "before": old_order, "after": new_order})
     if before["note"] != after["note"]:
         changes.append({"path": "note", "label": "Note to reviewer",
                         "before": before["note"], "after": after["note"]})

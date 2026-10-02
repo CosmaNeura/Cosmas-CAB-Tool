@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader } from "./billingHeader.js";
+import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
 
 const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
 const input = "mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
 const BASE = "/api/encounters/header";
 const NOOP = () => {};
 const changeText = (value) => typeof value === "string" ? value || "Unspecified"
-  : value === null ? "None" : `${value.kind} ${value.code}: ${value.label} (${value.evidenceIds.length} evidence references)`;
+  : value === null ? "None" : typeof value.confirmed === "boolean"
+    ? `${value.confirmed ? "Confirmed proposal" : "Unconfirmed"}: ${(value.codes || []).join(" → ") || "No diagnoses"}`
+    : `${value.kind} ${value.code}: ${value.label} (${value.evidenceIds.length} evidence references)`;
 
 function Evidence({ids, header}) {
   return <details className="mt-2 text-xs text-slate-600"><summary className="cursor-pointer">Source evidence</summary>
@@ -78,14 +80,14 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   }
   function startEdit() { setDraft(headerDraft(view)); setReason(""); setNotice(""); }
   function editCode(index, patch) {
-    setDraft((current) => ({...current, codes: current.codes.map((row, i) => i === index ? {...row, ...patch} : row)}));
+    setDraft((current) => replaceHeaderCodes(current, current.codes.map((row, i) => i === index ? {...row, ...patch} : row)));
   }
   async function copyHeader() {
-    try { await navigator.clipboard.writeText(exportBillingHeader(view)); setNotice("Billing header and source citations copied."); }
+    try { await navigator.clipboard.writeText(exportBillingHeader(view, encounter)); setNotice("Billing header and source citations copied."); }
     catch { setNotice("Clipboard unavailable. Download the header text instead."); }
   }
   function downloadHeader() {
-    const url = URL.createObjectURL(new Blob([exportBillingHeader(view)], {type: "text/plain;charset=utf-8"}));
+    const url = URL.createObjectURL(new Blob([exportBillingHeader(view, encounter)], {type: "text/plain;charset=utf-8"}));
     const link = document.createElement("a");
     link.href = url; link.download = `billing-header-revision-${view.revisionNumber}.txt`; link.click();
     URL.revokeObjectURL(url);
@@ -94,6 +96,9 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   const disabled = hostDisabled || busy || !!retry || stale;
   const h = view?.header;
   const currentDraft = view ? headerDraft(view) : null;
+  const proposedOrder = view ? proposedDiagnosisOrder(view) : [];
+  const acceptedOrder = view ? acceptedDiagnosisOrder(view) : [];
+  const draftDiagnoses = draft?.codes.filter((row) => row.kind === "ICD10") || [];
 
   return <section aria-label="Billing header" aria-busy={busy} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -118,10 +123,19 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         <p className="mt-1 text-xs">This receipt binds the saved coder decisions to this header and source. Editing the header requires a fresh review.</p>
         <details className="mt-2 text-xs"><summary className="cursor-pointer font-medium">Recorded code decisions</summary>
           <ul className="mt-2 space-y-1">{view.signoff.codeDecisions.map((d, i) => <li key={i}><code>{d.engine_code || "Human addition"}</code>: {d.action} → <code>{d.final_code || "Removed"}</code>{d.note && <p>{d.note}</p>}</li>)}</ul>
-          {view.signoff.humanProposalDecisions.map((d) => <p key={d.id} className="mt-2">Header proposal {d.id}: {d.decision} · {d.reason}</p>)}
+          {view.signoff.humanProposalDecisions.map((d) => <p key={d.id} className="mt-2">{d.id === diagnosisOrderDecisionId ? "Diagnosis order" : `Header proposal ${d.id}`}: {d.decision} · {d.reason}</p>)}
           {(view.signoff.baselineDecisions || []).map((d) => <p key={d.id} className="mt-2">Earlier suggestion {h.suggestions.find((row) => row.id === d.id).code}: {d.decision} · {d.reason}</p>)}
         </details>
       </div>}
+      <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm" aria-label="Human diagnosis order">
+        <h3 className="font-semibold">Human diagnosis order</h3>
+        {proposedOrder.length ? <>
+          <p className="mt-1">Proposed primary: <code>{proposedOrder[0].code}</code> · {proposedOrder.map((row) => row.code).join(" → ")}</p>
+          <p className="mt-1 text-xs">Saved by {fieldAuthor(view, "diagnosisOrder")?.name || view.revision.actor.name}. {diagnosisOrderReviewText(view)}</p>
+          <p className="mt-1 font-medium">{acceptedOrder.length ? `Coder-confirmed primary: ${acceptedOrder[0].code} · Order: ${acceptedOrder.map((row) => row.code).join(" → ")}` : "Coder-confirmed primary: unresolved."}</p>
+        </> : <p className="mt-1">Unconfirmed. Edit the header to choose and confirm a primary and diagnosis order.</p>}
+        <p className="mt-1 text-xs">Original inferred sequencing and held reasons remain unchanged below.</p>
+      </div>
       <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {h.facts.map((fact) => {
           const value = currentDraft.facts[fact.key], author = fieldAuthor(view, `facts.${fact.key}`);
@@ -166,14 +180,23 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
             <label className="text-xs">Kind<select className={input} value={code.kind} onChange={(e) => editCode(index, {kind: e.target.value})}><option>EM</option><option>ICD10</option></select></label>
             <label className="text-xs">Code<input className={input} maxLength={15} required value={code.code} onChange={(e) => editCode(index, {code: e.target.value.toUpperCase()})} /></label>
             <label className="text-xs">Short label<input className={input} maxLength={150} required value={code.label} onChange={(e) => editCode(index, {label: e.target.value})} /></label>
-            <button type="button" className={`${button} self-end`} onClick={() => setDraft({...draft, codes: draft.codes.filter((_, i) => i !== index)})}>Remove proposal</button>
+            <button type="button" className={`${button} self-end`} onClick={() => setDraft(replaceHeaderCodes(draft, draft.codes.filter((_, i) => i !== index)))}>Remove proposal</button>
           </div>
+          {code.kind === "ICD10" && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" role="group" aria-label={`Order ${code.code || "new diagnosis"}`}>
+            <span>{draftDiagnoses[0]?.id === code.id ? "Proposed primary" : `Diagnosis ${draftDiagnoses.findIndex((row) => row.id === code.id) + 1}`} · {draft.diagnosisOrderConfirmed ? "confirmed in editor" : "unconfirmed"}</span>
+            <button type="button" className={button} disabled={draftDiagnoses[0]?.id === code.id} onClick={() => setDraft(moveHeaderDiagnosis(draft, code.id, 0))}>Make primary</button>
+            <button type="button" className={button} disabled={draftDiagnoses[0]?.id === code.id} onClick={() => setDraft(moveHeaderDiagnosis(draft, code.id, draftDiagnoses.findIndex((row) => row.id === code.id) - 1))}>Move up</button>
+            <button type="button" className={button} disabled={draftDiagnoses.at(-1)?.id === code.id} onClick={() => setDraft(moveHeaderDiagnosis(draft, code.id, draftDiagnoses.findIndex((row) => row.id === code.id) + 1))}>Move down</button>
+          </div>}
           <details className="mt-3 text-xs"><summary className="cursor-pointer">Source evidence ({code.evidenceIds.length} selected; required)</summary>
             {h?.evidence.map((e) => <label key={e.id} className="mt-2 flex items-start gap-2"><input type="checkbox" checked={code.evidenceIds.includes(e.id)} onChange={(event) => editCode(index, {evidenceIds: event.target.checked ? [...code.evidenceIds, e.id] : code.evidenceIds.filter((id) => id !== e.id)})} /><span>{e.source}: {e.text}</span></label>)}
           </details>
         </div>)}
-        <button type="button" className={button} disabled={draft.codes.length >= 20} onClick={() => setDraft({...draft, codes: [...draft.codes, {id: `human-${crypto.randomUUID()}`, kind: "ICD10", code: "", label: "", evidenceIds: []}]})}>Add code proposal</button>
+        <button type="button" className={button} disabled={draft.codes.length >= 20} onClick={() => setDraft(replaceHeaderCodes(draft, [...draft.codes, {id: `human-${crypto.randomUUID()}`, kind: "ICD10", code: "", label: "", evidenceIds: []}]))}>Add code proposal</button>
       </fieldset>
+      <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" disabled={disabled || !draftDiagnoses.length} checked={draft.diagnosisOrderConfirmed === true} onChange={(event) => setDraft({...draft, diagnosisOrderConfirmed: event.target.checked})} />
+        <span>I confirm {draftDiagnoses[0]?.code || "the first diagnosis"} as my proposed primary and the displayed diagnosis order. Saving sends this proposal for coder review. Code, order, or evidence edits clear this confirmation.</span>
+      </label>
       <label className="mt-4 block text-xs font-medium">Reviewer note (optional)<textarea className={input} maxLength={2000} disabled={disabled} value={draft.note} onChange={(e) => setDraft({...draft, note: e.target.value})} /></label>
       <label className="mt-3 block text-xs font-medium">Reason for edit (required)<input className={input} required maxLength={600} disabled={disabled} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
       <div className="mt-3 flex flex-wrap gap-2"><button type="submit" className={`${button} bg-slate-950 text-white`} disabled={disabled || !reason.trim()}>Save header edits</button>

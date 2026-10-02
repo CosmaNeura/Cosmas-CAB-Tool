@@ -281,7 +281,7 @@ def test_feedback_roundtrip_and_summary(client):
         "decisions": [
             *_accept_all_recommendations(view),
             {"kind": "ICD10", "engine_code": None, "action": "add",
-             "final_code": "Z86.010", "reason_code": "dx_missed_by_engine",
+             "final_code": "Z86.0100", "reason_code": "dx_missed_by_engine",
              "note": "Rationale: history is documented\nEvidence: synthetic note excerpt"},
         ],
         "time_spent_seconds": 45,

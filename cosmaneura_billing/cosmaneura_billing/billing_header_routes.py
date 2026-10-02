@@ -38,7 +38,7 @@ class HeaderSignoff(HeaderRead):
     expectedRevision: int = Field(ge=0, le=100)
     feedback: dict[str, Any]
     acknowledged: bool
-    humanProposalDecisions: list[dict[str, Any]] = Field(max_length=40)
+    humanProposalDecisions: list[dict[str, Any]] = Field(max_length=41)
     baselineDecisions: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
 
 

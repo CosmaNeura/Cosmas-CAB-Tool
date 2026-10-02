@@ -33,6 +33,8 @@ from pathlib import Path
 from statistics import median
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from .icd10_validity import valid_human_icd10
+
 
 # Controlled vocabulary the review UI presents as dropdowns. Stored as strings.
 class Action:
@@ -118,6 +120,10 @@ class FeedbackConflict(ValueError):
     """One review ID was reused for different content or a different actor."""
 
 
+class InvalidCurrentICD10(ValueError):
+    """A new final diagnosis has no affirmative current-catalogue validation."""
+
+
 def feedback_payload_digest(feedback: EncounterFeedback) -> str:
     """Stable retry comparison, excluding only the server receipt timestamp."""
     payload = feedback.to_dict()
@@ -127,8 +133,8 @@ def feedback_payload_digest(feedback: EncounterFeedback) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def validate_feedback(feedback: EncounterFeedback) -> None:
-    """Enforce the normalized API/DDL contract before any durable write."""
+def validate_feedback_shape(feedback: EncounterFeedback) -> None:
+    """Check immutable request structure before an exact-replay lookup."""
     if not isinstance(feedback.encounter_id, str) or not 1 <= len(
         feedback.encounter_id
     ) <= 128:
@@ -192,6 +198,15 @@ def validate_feedback(feedback: EncounterFeedback) -> None:
             raise ValueError("invalid feedback decision note")
 
 
+def validate_feedback(feedback: EncounterFeedback) -> None:
+    """Validate structure and current codes before every new durable write."""
+    validate_feedback_shape(feedback)
+    for decision in feedback.decisions:
+        if (decision.kind == "ICD10" and decision.action != Action.REJECT
+                and not valid_human_icd10(decision.final_code)):
+            raise InvalidCurrentICD10("final ICD-10 code is not verified as currently billable")
+
+
 _FILE_LOCKS: dict[str, threading.Lock] = {}
 _FILE_LOCKS_GUARD = threading.Lock()
 
@@ -210,7 +225,7 @@ class FeedbackStore:
 
     def append(self, fb: EncounterFeedback) -> bool:
         """Append once. Exact retry is a no-op; conflicting reuse fails."""
-        validate_feedback(fb)
+        validate_feedback_shape(fb)
         with _file_lock(self.path):
             existing = next(
                 (row for row in self.load() if row.review_id == fb.review_id),
@@ -220,6 +235,7 @@ class FeedbackStore:
                 if feedback_payload_digest(existing) != feedback_payload_digest(fb):
                     raise FeedbackConflict("review ID conflicts with an existing review")
                 return False
+            validate_feedback(fb)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(fb.to_dict(), separators=(",", ":")) + "\n")
@@ -227,7 +243,7 @@ class FeedbackStore:
 
     def exact_replay(self, fb: EncounterFeedback) -> bool:
         """Classify an existing review before mutable encounter checks."""
-        validate_feedback(fb)
+        validate_feedback_shape(fb)
         with _file_lock(self.path):
             existing = next(
                 (row for row in self.load() if row.review_id == fb.review_id),

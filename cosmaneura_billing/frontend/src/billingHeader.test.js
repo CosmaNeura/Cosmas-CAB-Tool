@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, factKeys, fieldAuthor, finishHeaderRequest, headerDraft, headerProposals, ownsHeaderRequest,
-  headerReviewRequest, headerSourceKey, missingHeaderBaseline, readBillingHeader } from "./billingHeader.js";
+import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, factKeys, fieldAuthor, finishHeaderRequest, headerDraft, headerProposals, ownsHeaderRequest, headerReviewRequest, headerSourceKey, missingHeaderBaseline, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, headerDecisionIds, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes,  } from "./billingHeader.js";
 
 function fixture() {
   const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic provider", role: "provider"};
@@ -255,4 +254,150 @@ test("an ambiguous completed save blocks late refreshes and new writes until its
   const refreshed = beginHeaderRequest(pending, null, true, null);
   assert.ok(refreshed);
   cancelHeaderRequest(pending);
+});
+
+function orderedFixture() {
+  const f = fixture(), {view, actor} = f;
+  view.header.suggestions.push(...[["dx1", "R51.9"], ["dx2", "R53.83"]].map(([id, code]) =>
+    ({...view.header.suggestions[0], id, kind: "ICD10", code, label: "Synthetic diagnosis"})));
+  view.header.flags.push({id: "primary_diagnosis_sequencing", message: "Original primary unresolved; held concept.", evidenceIds: ["e1"]});
+  const draft = headerDraft(view); draft.diagnosisOrderConfirmed = true;
+  view.revisionNumber = 1;
+  view.revision = {number: 1, headerId: view.header.headerId, expectedSource: view.header.expectedSource,
+    reviewStatus: "unreviewed", actor, createdAt: "2026-09-29T13:00:00Z", reason: "Source reviewed", draft,
+    history: [{actor, createdAt: "2026-09-29T13:00:00Z", reason: "Source reviewed", changes: [
+      {path: "diagnosisOrder", label: "Human diagnosis order", before: false, after: true}]}]};
+  signed(view, actor); view.signoff.headerRevision = 1;
+  view.signoff.codeDecisions.push(...["R51.9", "R53.83"].map((code) =>
+    ({kind: "ICD10", engine_code: code, action: "accept", final_code: code, note: ""})));
+  view.signoff.humanProposalDecisions = [{id: diagnosisOrderDecisionId, decision: "accept", reason: "Source verified"}];
+  return f;
+}
+
+test("explicit saved order survives read and export independently of original held intent", () => {
+  const {view, encounter} = orderedFixture(), before = structuredClone(view.header);
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.deepEqual(proposedDiagnosisOrder(view).map((row) => row.code), ["R51.9", "R53.83"]);
+  assert.deepEqual(acceptedDiagnosisOrder(view).map((row) => row.code), ["R51.9", "R53.83"]);
+  assert.deepEqual(headerProposals(view), []); // unchanged code content still needs order affirmation
+  assert.deepEqual(headerDecisionIds(view), [diagnosisOrderDecisionId]);
+  const exported = exportBillingHeader(view, encounter);
+  assert.match(exported, /Coder-confirmed primary: R51\.9/);
+  assert.match(exported, /Coder-confirmed order: R51\.9 → R53\.83/);
+  assert.match(exported, /Saved proposal \(revision 1\) by Synthetic provider/);
+  assert.match(exported, /Original primary unresolved; held concept\. \[e1\]/);
+  assert.match(exported, /R51\.9 \[e1\]/);
+  assert.deepEqual(view.header, before);
+  assert.throws(() => exportBillingHeader(view)); // exact source needed for new confirmation
+  view.header.evidence[0].text = "not the source";
+  assert.throws(() => exportBillingHeader(view, encounter));
+});
+
+test("rejected primary cannot be replaced by a surviving secondary at read, request or export", () => {
+  const {view, encounter} = orderedFixture();
+  const primary = view.signoff.codeDecisions.find((row) => row.final_code === "R51.9");
+  primary.action = "reject"; primary.final_code = null;
+  assert.throws(() => readBillingHeader(view, encounter));
+  assert.throws(() => exportBillingHeader(view, encounter));
+  const feedback = {encounter_id: "synthetic", encounter_version: 1, decisions: view.signoff.codeDecisions};
+  assert.throws(() => headerReviewRequest({...view, signoff: null}, feedback, view.signoff.humanProposalDecisions, true));
+  view.signoff.humanProposalDecisions[0].decision = "reject";
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.deepEqual(acceptedDiagnosisOrder(view), []);
+  assert.match(exportBillingHeader(view, encounter), /Coder-confirmed primary: unresolved/);
+  assert.doesNotMatch(exportBillingHeader(view, encounter), /Coder-confirmed primary: R53\.83/);
+});
+
+test("secondary removal retains primary, but final diagnoses outside saved order fail closed", () => {
+  const {view, encounter} = orderedFixture();
+  const secondary = view.signoff.codeDecisions.find((row) => row.final_code === "R53.83");
+  secondary.action = "reject"; secondary.final_code = null;
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.deepEqual(acceptedDiagnosisOrder(view).map((r) => r.code), ["R51.9"]);
+  view.signoff.codeDecisions.push({kind: "ICD10", engine_code: null, action: "add", final_code: "Z31.69", note: "Source verified"});
+  assert.throws(() => readBillingHeader(view, encounter));
+});
+
+test("legacy and new unconfirmed arrays establish no human primary", () => {
+  const {view, encounter} = orderedFixture();
+  delete view.revision.draft.diagnosisOrderConfirmed;
+  view.signoff.humanProposalDecisions = [];
+  assert.equal(headerDraft(view).diagnosisOrderConfirmed, false);
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.deepEqual(proposedDiagnosisOrder(view), []);
+  assert.match(exportBillingHeader(view, encounter), /Unconfirmed — list order/);
+  assert.doesNotMatch(exportBillingHeader(view, encounter), /Coder-confirmed primary: R/);
+  for (const flag of [1, 0, null, "true", {}, []]) {
+    view.revision.draft.diagnosisOrderConfirmed = flag;
+    assert.throws(() => readBillingHeader(view, encounter));
+  }
+  view.revision.draft.diagnosisOrderConfirmed = false;
+  view.signoff.humanProposalDecisions = [{id: diagnosisOrderDecisionId, decision: "accept", reason: "Not legitimate"}];
+  assert.throws(() => readBillingHeader(view, encounter));
+});
+
+test("editor clears confirmation on ICD membership, code, evidence, kind and order changes", () => {
+  const {view} = orderedFixture(), draft = headerDraft(view);
+  for (const change of [
+    (rows) => rows.filter((row) => row.id !== "dx1"),
+    (rows) => [...rows, {...rows[1], id: "new", code: "Z31.69"}],
+    (rows) => rows.map((row) => row.id === "dx1" ? {...row, code: "Z31.69"} : row),
+    (rows) => rows.map((row) => row.id === "dx1" ? {...row, evidenceIds: []} : row),
+    (rows) => rows.map((row) => row.id === "dx1" ? {...row, kind: "EM"} : row),
+    (rows) => rows.toReversed(),
+  ]) assert.equal(replaceHeaderCodes(draft, change(draft.codes)).diagnosisOrderConfirmed, false);
+  const moved = moveHeaderDiagnosis(draft, "dx2", 0);
+  assert.equal(moved.diagnosisOrderConfirmed, false);
+  assert.deepEqual(moved.codes.map((r) => r.id), ["s1", "dx2", "dx1"]);
+  assert.equal(replaceHeaderCodes(draft, draft.codes.map((row) => row.kind === "EM" ? {...row, code: "99214"} : row)).diagnosisOrderConfirmed, true);
+  assert.equal(draft.diagnosisOrderConfirmed, true); // original draft is detached
+});
+
+test("changed evidence proposal requires acceptance before its row can be human primary", () => {
+  const {view, encounter} = orderedFixture();
+  view.revision.draft.codes.find((row) => row.id === "dx1").label = "New human description";
+  view.signoff.humanProposalDecisions.push({id: "dx1", decision: "reject", reason: "Reject change"});
+  assert.throws(() => readBillingHeader(view, encounter));
+  view.signoff.humanProposalDecisions[1].decision = "accept";
+  assert.equal(readBillingHeader(view, encounter), view);
+});
+
+test("new receipt needs separate decision and new revision makes old order acceptance unavailable", () => {
+  const {view, encounter} = orderedFixture();
+  const original = structuredClone(view.signoff);
+  view.signoff.humanProposalDecisions = [];
+  assert.throws(() => readBillingHeader(view, encounter));
+  view.signoff = original;
+  view.revisionNumber = 2; view.revision.number = 2;
+  view.revision.history.push({...view.revision.history[0], changes: [{path: "note", label: "Note", before: "", after: "Review again"}]});
+  assert.throws(() => readBillingHeader(view, encounter));
+  view.signoff = null;
+  view.previousSignoff = {reviewId: original.reviewId, headerRevision: 1, actor: original.actor, createdAt: original.createdAt};
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.deepEqual(acceptedDiagnosisOrder(view), []);
+  assert.match(exportBillingHeader(view, encounter), /Coder-confirmed primary: unresolved/);
+});
+
+
+test("sequencing copy distinguishes pending, accepted and rejected review with original author", () => {
+  const {view, encounter} = orderedFixture();
+  assert.equal(diagnosisOrderReviewText(view), "Coder acceptance recorded for this revision.");
+  let exported = exportBillingHeader(view, encounter);
+  assert.match(exported, /Proposed primary: R51\.9\. Coder acceptance recorded for this revision\./);
+  assert.match(exported, /Saved proposal \(revision 1\) by Synthetic provider/);
+  assert.doesNotMatch(exported, /requires separate coder acceptance|Awaiting separate coder acceptance/);
+  view.signoff.humanProposalDecisions[0].decision = "reject";
+  assert.equal(diagnosisOrderReviewText(view), "Coder rejected this proposed primary and order.");
+  exported = exportBillingHeader(view, encounter);
+  assert.match(exported, /Coder rejected this proposed primary and order\./);
+  assert.match(exported, /Saved proposal \(revision 1\) by Synthetic provider/);
+  assert.match(exported, /Coder-confirmed primary: unresolved/);
+  const signed = structuredClone(view.signoff);
+  view.signoff = null;
+  assert.equal(diagnosisOrderReviewText(view), "Awaiting separate coder acceptance.");
+  assert.match(exportBillingHeader(view, encounter), /Awaiting separate coder acceptance\./);
+  view.signoff = {...signed, headerRevision: 0};
+  assert.equal(diagnosisOrderReviewText(view), "Awaiting separate coder acceptance.");
+  view.signoff = {...signed, expectedSource: {...signed.expectedSource, noteVersion: "other"}};
+  assert.equal(diagnosisOrderReviewText(view), "Awaiting separate coder acceptance.");
 });

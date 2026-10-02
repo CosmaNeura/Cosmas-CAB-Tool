@@ -1096,6 +1096,10 @@ def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
         ) from exc
     except ReviewerNotAuthorized as exc:
         raise HTTPException(status_code=403, detail="access is not permitted") from exc
+    except coder_feedback.InvalidCurrentICD10 as exc:
+        raise HTTPException(
+            status_code=422, detail="final ICD-10 code is not verified as currently billable",
+        ) from exc
     return {"ok": True, "reviewId": str(fb.review_id), "replayed": not created}
 
 
