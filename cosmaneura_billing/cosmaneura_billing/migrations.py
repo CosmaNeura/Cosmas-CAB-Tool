@@ -274,6 +274,9 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
             "GRANT EXECUTE ON FUNCTION cosmaneura_billing_header_editor_allowed(uuid,uuid,text) TO {}"
         ).format(identifier))
 
+    if conn.execute("SELECT to_regclass('public.billing_header_signoffs')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON billing_header_signoffs TO {}").format(identifier))
+
 
 def _provision_chase_worker_role(conn, settings: Settings) -> None:
     """Create the practice-bound scheduler login without API/identity authority."""

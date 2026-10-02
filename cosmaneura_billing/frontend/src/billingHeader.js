@@ -75,6 +75,36 @@ export function readBillingHeader(view, encounter) {
           && text(c.label, 150) && JSON.stringify(c.before)?.length <= 10000 && JSON.stringify(c.after)?.length <= 10000));
     }
   }
+  if (view.signoff != null) {
+    const receipt = view.signoff;
+    require(uuid(receipt.id) && uuid(receipt.reviewId) && receipt.headerId === h.headerId
+      && receipt.headerRevision === view.revisionNumber && same(receipt.expectedSource, pin)
+      && actorValid(receipt.actor) && ["coder", "admin"].includes(receipt.actor.role)
+      && receipt.status === "recorded" && timeValid(receipt.createdAt)
+      && /^[a-f0-9]{64}$/.test(receipt.recommendationDigest)
+      && list(receipt.humanProposalDecisions, 40) && list(receipt.codeDecisions, 500)
+      && text(receipt.reviewerNote, 4000, true));
+    const proposals = new Set(headerProposals(view).map((row) => row.id));
+    require(receipt.humanProposalDecisions.length === proposals.size);
+    for (const decision of receipt.humanProposalDecisions) {
+      require(proposals.delete(decision.id) && ["accept", "reject"].includes(decision.decision)
+        && text(decision.reason, 1000));
+    }
+    require(receipt.codeDecisions.every((d) => ["EM", "ICD10", "PROCEDURE", "MODIFIER"].includes(d.kind)
+      && ["accept", "modify", "reject", "add"].includes(d.action)
+      && (d.engine_code === null || text(d.engine_code, 32))
+      && (d.final_code === null || text(d.final_code, 32)) && text(d.note, 4000, true)
+      && (d.action === "add" ? d.engine_code === null && d.final_code !== null
+        : d.engine_code !== null && (d.action === "reject" ? d.final_code === null
+          : d.final_code !== null && (d.action === "accept" ? d.final_code === d.engine_code : d.final_code !== d.engine_code)))));
+    validateBaselineDecisions(view, receipt.codeDecisions, receipt.baselineDecisions ?? []);
+  }
+  if (view.previousSignoff != null) {
+    const prior = view.previousSignoff;
+    require(!view.signoff && uuid(prior.reviewId) && actorValid(prior.actor)
+      && timeValid(prior.createdAt) && Number.isInteger(prior.headerRevision)
+      && prior.headerRevision >= 0 && prior.headerRevision < view.revisionNumber);
+  }
   return view;
 }
 
@@ -88,4 +118,86 @@ export function headerDraft(view) {
 
 export function fieldAuthor(view, path) {
   return [...(view.revision?.history || [])].reverse().find((r) => r.changes.some((c) => c.path === path))?.actor;
+}
+
+export const headerSourceKey = (encounter) => canonical([encounter.encounterId, encounter.headerSource]);
+
+export function headerProposals(view) {
+  const code = ({id, kind, code, label, evidenceIds}) => ({id, kind, code, label, evidenceIds: [...evidenceIds].sort()});
+  const original = new Map(view.header.suggestions.map((row) => [row.id, code(row)]));
+  const proposed = new Map(headerDraft(view).codes.map((row) => [row.id, code(row)]));
+  return [...new Set([...original.keys(), ...proposed.keys()])]
+    .filter((id) => !same(original.get(id), proposed.get(id)))
+    .map((id) => ({id, original: original.get(id) || null, proposed: proposed.get(id) || null}));
+}
+
+export function missingHeaderBaseline(view, decisions) {
+  require(list(decisions, 500));
+  const current = new Set(decisions.filter((d) => d.action !== "add")
+    .map((d) => canonical([d.kind, d.engine_code])));
+  return view.header.suggestions.filter((row) => !current.has(canonical([row.kind, row.code])));
+}
+
+function validateBaselineDecisions(view, decisions, choices) {
+  const missing = new Map(missingHeaderBaseline(view, decisions).map((row) => [row.id, row]));
+  const final = new Set(decisions.filter((d) => d.action !== "reject")
+    .map((d) => canonical([d.kind, d.final_code])));
+  require(list(choices, 20) && choices.length === missing.size);
+  for (const choice of choices) {
+    const row = missing.get(choice.id);
+    require(row && ["retain", "reject"].includes(choice.decision) && text(choice.reason, 1000)
+      && final.has(canonical([row.kind, row.code])) === (choice.decision === "retain"));
+    missing.delete(choice.id);
+  }
+}
+
+export function headerReviewRequest(view, feedback, decisions, acknowledged, baselineDecisions = []) {
+  require(view && acknowledged === true && !view.signoff
+    && feedback.encounter_id === view.header.expectedSource.encounterId
+    && feedback.encounter_version === view.header.expectedSource.encounterVersion);
+  const proposals = new Set(headerProposals(view).map((row) => row.id));
+  require(list(decisions, 40) && decisions.length === proposals.size);
+  for (const choice of decisions) require(proposals.delete(choice.id)
+    && ["accept", "reject"].includes(choice.decision) && text(choice.reason, 1000));
+  validateBaselineDecisions(view, feedback.decisions, baselineDecisions);
+  return structuredClone({encounterId: feedback.encounter_id, expectedSource: view.header.expectedSource,
+    headerId: view.header.headerId, expectedRevision: view.revisionNumber, feedback,
+    acknowledged, humanProposalDecisions: decisions, baselineDecisions});
+}
+
+export function exportBillingHeader(view) {
+  const h = view.header, draft = headerDraft(view), receipt = view.signoff;
+  const rows = ["BILLING HEADER", `Encounter: ${h.expectedSource.encounterId}`,
+    `Source version: ${h.expectedSource.encounterVersion} | Header revision: ${view.revisionNumber}`,
+    `Header ID: ${h.headerId}`, `Generated: ${h.generatedAt}`,
+    receipt ? `Coder review recorded: ${receipt.reviewId} by ${receipt.actor.name} at ${receipt.createdAt}`
+      : "Coder review pending — unreviewed header",
+    "Advisory billing information; clinical note unchanged; no claim submitted.", "", "VISIT FACTS"];
+  for (const fact of h.facts) {
+    const edited = Boolean(fieldAuthor(view, `facts.${fact.key}`));
+    rows.push(`${fact.label}: ${draft.facts[fact.key] || "Unspecified"} (${edited ? "human entry — verify source" : fact.status.replaceAll("_", " ")})${fact.evidenceIds.length ? ` [${fact.evidenceIds.join(", ")}]` : ""}`);
+    if (edited) rows.push(`  Original: ${fact.value || "Not documented"}`);
+  }
+  rows.push("", "ORIGINAL PIPELINE SUGGESTIONS — retain original evidence");
+  for (const code of h.suggestions) rows.push(`${code.kind} ${code.code}: ${code.label} [${code.evidenceIds.join(", ")}]`, `  ${code.basis}`);
+  if (view.revision) {
+    rows.push("", "CURRENT CODE PROPOSALS — human edits are not engine validation");
+    for (const code of draft.codes) rows.push(`${code.kind} ${code.code}: ${code.label} [${code.evidenceIds.join(", ")}]`);
+    for (const code of h.suggestions.filter((s) => !draft.codes.some((c) => c.id === s.id))) rows.push(`Removal proposed: ${code.kind} ${code.code}`);
+    if (draft.note) rows.push(`Reviewer note: ${draft.note}`);
+  }
+  if (receipt) {
+    rows.push("", "RECORDED CODER OUTCOMES", `Recommendation digest: ${receipt.recommendationDigest}`);
+    for (const d of receipt.codeDecisions) rows.push(`${d.kind} ${d.engine_code || "Human addition"}: ${d.action} → ${d.final_code || "Removed"}${d.note ? ` — ${d.note}` : ""}`);
+    for (const d of receipt.humanProposalDecisions) rows.push(`Header proposal ${d.id}: ${d.decision} — ${d.reason}`);
+    for (const d of receipt.baselineDecisions || []) {
+      const original = h.suggestions.find((row) => row.id === d.id);
+      rows.push(`Earlier suggestion ${original.kind} ${original.code}: ${d.decision} — ${d.reason}`);
+    }
+    if (receipt.reviewerNote) rows.push(receipt.reviewerNote);
+  }
+  rows.push("", "DOCUMENTATION / POLICY REVIEW", ...h.flags.map((f) => f.message), h.policy.message,
+    "", "SOURCE EVIDENCE — Unicode code-point coordinates");
+  for (const e of h.evidence) rows.push(`[${e.id}] ${e.source}, ${e.sourceId}, version ${e.sourceVersion}, ${e.start}–${e.end}`, e.text);
+  return rows.join("\n");
 }

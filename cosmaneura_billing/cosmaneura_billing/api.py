@@ -1009,8 +1009,8 @@ def completeness(request: Request, req: CompletenessRequest) -> dict[str, Any]:
     return report.to_dict(pos=req.placeOfService)
 
 
-@router.post("/api/feedback")
-def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
+def _validated_feedback(request: Request, fb: FeedbackModel):
+    """Build an authenticated recommendation-bound review without persisting it."""
     principal = _require_roles(request, "Coder", "Admin")
     stored = _get_stored_encounter(request, fb.encounter_id)
     signing_key = _request_review_signing_key(request)
@@ -1047,7 +1047,6 @@ def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
         None if em_decision is None or em_decision.action == "reject"
         else em_decision.final_code
     )
-    store = _request_feedback_store(request)
     record = EncounterFeedback(
         encounter_id=fb.encounter_id, coder_id=principal.user_id,
         coder_tenant_id=principal.tenant_id, review_id=str(fb.review_id),
@@ -1058,6 +1057,13 @@ def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
         decisions=[coder_feedback.CodeDecision(**d.model_dump()) for d in fb.decisions],
         time_spent_seconds=fb.time_spent_seconds, overall_note=fb.overall_note,
     )
+    return stored, record, review_context
+
+
+@router.post("/api/feedback")
+def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
+    stored, record, _review_context = _validated_feedback(request, fb)
+    store = _request_feedback_store(request)
     try:
         if (
             isinstance(store, PostgresFeedbackStore)

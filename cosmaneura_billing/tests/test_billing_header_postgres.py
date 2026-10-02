@@ -38,7 +38,8 @@ def schema():
         paths = Path(__file__).resolve().parents[1] / "migrations"
         for table, filename in (("chase_items", "002_chase_persistence.up.sql"),
                                 ("encounters", "003_pilot_persistence.up.sql"),
-                                ("billing_headers", "011_billing_headers.up.sql")):
+                                ("billing_headers", "011_billing_headers.up.sql"),
+                                ("billing_header_signoffs", "013_billing_header_signoffs.up.sql")):
             if connection.execute("SELECT to_regclass(%s)", ("public." + table,)).fetchone()[0] is None:
                 connection.execute((paths / filename).read_text(), prepare=False)
 
@@ -260,7 +261,7 @@ def test_pg_restricted_login_cannot_switch_practice_or_rewrite_history(setup):
         connection.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(ident))
         connection.execute(sql.SQL("GRANT SELECT,UPDATE ON encounters TO {}").format(ident))
         connection.execute(sql.SQL("GRANT INSERT ON access_audit_attempts,access_audit_completions TO {}").format(ident))
-        connection.execute(sql.SQL("GRANT SELECT,INSERT ON billing_headers,billing_header_revisions,billing_header_operations TO {}").format(ident))
+        connection.execute(sql.SQL("GRANT SELECT,INSERT ON billing_headers,billing_header_revisions,billing_header_operations,billing_header_signoffs TO {}").format(ident))
         connection.execute(sql.SQL("GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text),cosmaneura_billing_header_editor_allowed(uuid,uuid,text) TO {}").format(ident))
     limited_dsn = make_conninfo(**{**conninfo_to_dict(DSN), "user": role})
     limited_context = PostgresContext(limited_dsn, practice_id=context.practice_id)

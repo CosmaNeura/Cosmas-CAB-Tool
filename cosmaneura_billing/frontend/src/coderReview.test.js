@@ -23,6 +23,21 @@ test("every engine recommendation begins explicitly unreviewed", () => {
   assert.equal(validateCoderDraft(engine, draft.decisions, []).valid, false);
 });
 
+test("manual E/M recovery uses the existing one-decision contract and never auto-adds", () => {
+  const current = {...engine, em: null, dx: []};
+  const addition = {id: "manual-em", kind: "EM", code: "99213",
+    rationale: "Reviewed earlier E/M", evidence: "Synthetic documented MDM"};
+  assert.equal(validateCoderDraft(current, {}, []).valid, false);
+  assert.equal(validateCoderDraft(current, {}, [], {allowEmpty: true}).valid, true);
+  assert.equal(validateCoderDraft(current, {}, [addition]).valid, true);
+  const payload = buildFeedbackPayload({engine: current, decisions: {}, additions: [addition], reviewId: "review", seconds: 1});
+  assert.equal(payload.engine_em, null);
+  assert.equal(payload.final_em, "99213");
+  assert.deepEqual(payload.decisions.map((d) => [d.kind, d.action, d.engine_code]), [["EM", "add", null]]);
+  assert.equal(validateCoderDraft(engine, initialCoderDraft(engine).decisions, [addition]).valid, false);
+  assert.equal(validateCoderDraft(current, {}, [addition, {...addition, id: "second"}]).valid, false);
+});
+
 test("evidence-free codes are removed from the actionable coder view", () => {
   const reviewable = reviewableCoderView({
     ...engine,

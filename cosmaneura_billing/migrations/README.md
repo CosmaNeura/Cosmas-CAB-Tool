@@ -86,6 +86,14 @@ an encounter note or accept billing codes. The available migration set is
 `001`–`009` plus `011`; `010` communications is independent and absent here.
 Recovery leaves these expand structures dormant rather than dropping history.
 
+`013_billing_header_signoffs` binds an explicit Coder/Admin review to the current
+source and saved header revision. Feedback, receipt and successful access audit
+commit atomically. A subsequent header edit invalidates current signoff while
+preserving its history. This rung depends on `003` and `011` only; the actual
+available set is `001`–`009` plus `011` and `013`. `010`/`012` communications are
+absent. Keep the expand table dormant on rollback; the down migration refuses
+to remove existing review evidence. No clinical note, claim or EHR is written.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).

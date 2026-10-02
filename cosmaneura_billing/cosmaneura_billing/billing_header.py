@@ -25,7 +25,8 @@ class BillingHeaderError(ValueError):
                 "operation_conflict": 409, "header_not_found": 404,
                 "not_authorized": 403, "invalid_header": 422, "invalid_edit": 422,
                 "audit_required": 503, "history_limit": 409, "store_invalid": 503,
-                "generation_unavailable": 503, "header_unavailable": 404}
+                "generation_unavailable": 503, "header_unavailable": 404,
+                "invalid_signoff": 422, "signoff_unavailable": 503, "review_conflict": 409}
 
     def __init__(self, code="invalid_header"):
         self.code = code if code in self.STATUSES else "invalid_header"
