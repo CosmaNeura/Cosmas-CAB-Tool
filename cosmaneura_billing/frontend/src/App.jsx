@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ShieldCheck, Stethoscope, ClipboardCheck, CreditCard, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import ProviderHeaderLaunch from "./ProviderHeaderLaunch.jsx";
-import { canLaunchHeader, headerLaunchRequest } from "./providerHeaderLaunch.js";
+import { canLaunchHeader, canPreviewHandoff, headerLaunchRequest } from "./providerHeaderLaunch.js";
 import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
@@ -86,6 +86,7 @@ function Workspace() {
   const [views, setViews] = useState([]);               // server-owned capabilities
   const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
   const [billingHeaderAvailable, setBillingHeaderAvailable] = useState(false);
+  const [handoffAvailable, setHandoffAvailable] = useState(false);
   const [manageChase, setManageChase] = useState(false); // Server-owned staff mutation capability
   const [health, setHealth] = useState(null);           // null = probing, false = offline
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
@@ -115,6 +116,7 @@ function Workspace() {
         setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
         setManageChase(session.capabilities?.manageChase === true);
         setBillingHeaderAvailable(canLaunchHeader(session));
+        setHandoffAvailable(canPreviewHandoff(session));
         setView((current) => (
           session.views.includes(current) ? current : session.defaultView
         ));
@@ -216,6 +218,7 @@ function Workspace() {
               </button>
             )}
           </nav>
+          {handoffAvailable && view === "provider" && <a href="/?view=handoff" className="text-sm font-medium text-slate-600 underline">Try a synthetic note handoff</a>}
           {coderReviewLocked && view === "coder" && <p role="status" className="text-xs font-medium text-amber-800">Resolve this frozen coder review before leaving. Unknown outcomes must use the exact retry.</p>}
         </div>
 

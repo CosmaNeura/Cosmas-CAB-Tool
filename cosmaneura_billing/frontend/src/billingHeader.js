@@ -68,9 +68,13 @@ export function readBillingHeader(view, encounter) {
     && text(h.generation?.inferenceMode, 80) && uuid(h.generation?.runId));
   if (Object.hasOwn(h.generation, "modelInputProof")) {
     const proof = h.generation.modelInputProof;
+    const providerProof = proof?.schemaVersion === "cab-model-input-proof.v2";
     require(proof && typeof proof === "object" && !Array.isArray(proof)
-      && same(Object.keys(proof).sort(), ["expiresAt", "policyId", "policySha256", "schemaVersion", "serviceSha256", "sourceSha256"])
-      && proof.schemaVersion === "cab-model-input-proof.v1" && pin.ingestionSource === "athena_staff_review_operational"
+      && same(Object.keys(proof).sort(), ["expiresAt", "policyId", "policySha256", "schemaVersion", "serviceSha256", "sourceSha256",
+        ...(providerProof ? ["sourceOperationId", "sourceAdmissionSha256"] : [])].sort())
+      && (providerProof ? pin.ingestionSource === "provider_completed_note" && h.generation.inferenceMode === "azure_openai"
+        && uuid(proof.sourceOperationId) && typeof proof.sourceAdmissionSha256 === "string" && /^[a-f0-9]{64}$/.test(proof.sourceAdmissionSha256)
+        : proof.schemaVersion === "cab-model-input-proof.v1" && pin.ingestionSource === "athena_staff_review_operational")
       && uuid(proof.policyId)
       && [proof.policySha256, proof.sourceSha256, proof.serviceSha256].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))
       && timeValid(proof.expiresAt) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(proof.expiresAt));
