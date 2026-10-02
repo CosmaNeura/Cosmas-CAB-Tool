@@ -33,7 +33,8 @@ test("evidence-free codes are removed from the actionable coder view", () => {
   assert.equal(reviewable.em, null);
   assert.deepEqual(reviewable.dx.map((row) => row.code), ["R05.1"]);
   assert.deepEqual(reviewable.withheld.map((row) => row.code), ["Z80.0"]);
-  assert.equal(reviewable.contractViolations, 3);
+  assert.equal(reviewable.contractViolations, 2);
+  assert.equal(reviewable.suppressedExclusions, 1);
 });
 
 test("a reasoned rejected exclusion without evidence is suppressed, not made actionable", () => {
@@ -189,4 +190,38 @@ test("serialized note, decision-count, code-length, and timer boundaries fail cl
   };
   const payload = buildFeedbackPayload({ engine, decisions: validDecisions, additions: [], reviewId: "review-2", seconds: 99_999 });
   assert.equal(payload.time_spent_seconds, 86_400);
+});
+
+
+test("reasoned unsupported holds do not block a normal mixed supported review", () => {
+  const dx = [...engine.dx, ...[["I10", "Hypertension is controlled."], ["E11.9", "Type 2 diabetes is stable."]].map(([code, text]) => ({
+    kind: "ICD10", code, status: "captured", why: text, evidence: text, evidenceSpans: [{ source: "signed_note", text }],
+  }))];
+  for (const code of ["R05.1", "J18.9"]) {
+    const view = reviewableCoderView({ ...engine, degraded: false, dx, withheld: [{
+      id: "unsupported-extraction", kind: "ICD10", code, status: "held",
+      why: "The proposed quote was not found in the source; evidence was removed.", evidence: "", evidenceSpans: [],
+    }] });
+    assert.equal(view.contractViolations, 0);
+    assert.equal(view.suppressedExclusions, 1);
+    assert.deepEqual(view.withheld, []);
+    const initial = initialCoderDraft(view).decisions;
+    assert.equal(Object.keys(initial).length, 4);
+    const decisions = Object.fromEntries(Object.keys(initial).map((key) => [key, { action: "accept" }]));
+    assert.equal(validateCoderDraft(view, decisions, []).valid, true);
+    assert.equal(canPrepareCoderPreview(view), true);
+    const payload = buildFeedbackPayload({ engine: view, decisions, additions: [], reviewId: "mixed-review", seconds: 2 });
+    assert.deepEqual(payload.decisions.map((row) => row.engine_code), ["99214", "R05.1", "I10", "E11.9"]);
+  }
+});
+
+test("unsupported holds with missing reasons or malformed identity/disposition still fail", () => {
+  const held = { kind: "ICD10", code: "J18.9", status: "held", why: "No verified support.", evidenceSpans: [] };
+  for (const change of [{ why: " " }, { why: null }, { kind: "UNKNOWN" }, { code: "" }, { status: "captured" }]) {
+    const view = reviewableCoderView({ ...engine, degraded: false, withheld: [{ ...held, ...change }] });
+    assert.equal(view.contractViolations, 1);
+    assert.equal(view.suppressedExclusions, 0);
+    assert.deepEqual(view.withheld, []);
+    assert.equal(canPrepareCoderPreview(view), false);
+  }
 });

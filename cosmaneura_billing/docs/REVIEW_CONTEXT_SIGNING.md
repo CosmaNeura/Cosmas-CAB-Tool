@@ -19,3 +19,7 @@ the review to obtain a fresh token; stored feedback/history remains intact. A
 local ephemeral-key restart similarly requires reload. Key rotation deliberately
 invalidates outstanding tokens. Do not restore resource-ID-based signing as a
 recovery path.
+
+Compose requires this value in its explicit environment mapping; it has no
+public default. The existing disposable CI topology supplies a test-only key,
+which must never be copied to a deployed environment.

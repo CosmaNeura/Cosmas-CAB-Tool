@@ -26,8 +26,9 @@ patient outreach, Athena requests, model services, or real patient data.
   permitted for development/test. Missing keys fail closed.
 - Review context binds the exact source/result and actor; it is not clinical
   approval. Reject old v2 and forged, altered or cross-actor/case contexts.
-- Existing GitHub workflow bytes, infrastructure, schema and feature source
-  branch stay unchanged. No hosted configuration or data changes are included.
+- Forward the required key into Compose and supply a disposable test-only key
+  in the existing container check. No new Actions job or dispatch is added.
+  Hosted infrastructure, schema and feature source branch stay unchanged.
 
 ## Verification and recovery
 

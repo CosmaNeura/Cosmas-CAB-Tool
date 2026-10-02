@@ -42,7 +42,7 @@ export function reviewableCoderView(engine) {
   const excluded = engine.withheld || [];
   const completenessContractValid = hasCompletenessContract(engine);
   const permittedSuppression = (row) => (
-    (row?.status === "rejected" || (engine.degraded && row?.status === "held"))
+    ["held", "rejected"].includes(row?.status)
     && validKindAndCode(row)
     && clean(row.why)
     && !hasReviewEvidence(row)
