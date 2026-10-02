@@ -9,6 +9,7 @@ from cosmaneura_billing.agents.coding import CodingAgent
 from cosmaneura_billing.knowledge.icd10_ccsr import ICD10CCSR
 from cosmaneura_billing.llm import MockLLM
 from cosmaneura_billing.orchestrator import BillingOrchestrator
+from cosmaneura_billing.primary_diagnosis import INTENT
 from cosmaneura_billing.schemas import CodeKind, Disposition, VisitBundle
 from cosmaneura_billing.settings import Settings
 
@@ -55,6 +56,39 @@ def test_whole_clinical_meaning_maps_to_current_code(kb, concept, code):
 def test_no_partial_keyword_fallback(kb, concept):
     assert kb.resolve(concept)[0] is None
     assert kb.find_by_description(concept, limit=1) == []
+
+
+@pytest.mark.parametrize("concept,code", [("Hypertension", "I10"),
+    ("Type 2 diabetes mellitus", "E11.9")])
+def test_question_assertion_is_not_discardable_terminology(kb, concept, code):
+    for question in (concept + "?", concept + "？"):
+        assert kb.resolve(question)[0] is None
+        assert kb.resolve(question, quote=concept)[0] is None
+        assert kb.find_by_description(question) == []
+        assert kb.resolve(concept, quote=question)[0] is None
+        assert not kb.supports(code, question)
+
+
+@pytest.mark.parametrize("predicate", ["has never been diagnosed", "had never been diagnosed",
+    "was never diagnosed", "never diagnosed", "has not been diagnosed", "has not ever been diagnosed"])
+@pytest.mark.parametrize("concept,code", [("Hypertension", "I10"),
+    ("Type 2 diabetes mellitus", "E11.9")])
+def test_negative_diagnosis_predicate_cannot_support_an_affirmative_code(kb, concept, code, predicate):
+    quote = f"{concept} {predicate}."
+    assert kb.resolve(concept, quote=quote)[0] is None
+    assert not kb.supports(code, quote)
+
+
+@pytest.mark.parametrize("concept,quote,code", [
+    ("Hypertension", "Hypertension has been diagnosed.", "I10"),
+    ("Hypertension", "Hypertension is diagnosed. Is follow-up needed?", "I10"),
+    ("Type 2 diabetes mellitus", "Type 2 diabetes mellitus without complications.", "E11.9"),
+    ("Acute cystitis without hematuria", "Acute cystitis without hematuria.", "N30.00"),
+])
+def test_affirmative_assertions_and_negative_descriptor_attributes_remain_supported(kb, concept, quote, code):
+    hit, reason = kb.resolve(concept, quote=quote)
+    assert hit is not None, reason
+    assert hit.code == code
 
 
 @pytest.mark.parametrize("code,quote", [
@@ -138,6 +172,32 @@ class RecordedLLM(MockLLM):
 
     def complete_json(self, **kwargs):
         return next(self.extractions)
+
+
+@pytest.mark.parametrize("concept", ["Hypertension", "Type 2 diabetes mellitus"])
+@pytest.mark.parametrize("suffix", ["?", " has never been diagnosed."])
+@pytest.mark.parametrize("clip", [False, True])
+def test_assertion_hold_survives_full_pipeline_and_preserves_primary_intent(kb, concept, suffix, clip):
+    source = concept + suffix
+    quote = concept if clip else source
+    secondary = "Hypothyroidism is diagnosed."
+    bundle = VisitBundle("synthetic-assertion", 40, "F", "office_established", "11",
+                         signed_note=source + " " + secondary)
+    original_note = bundle.signed_note
+    llm = RecordedLLM([{}, {"diagnoses": [
+        {"concept": concept, "quote": quote, "primary": True},
+        {"concept": "Hypothyroidism", "quote": secondary, "primary": False},
+    ]}])
+    result = BillingOrchestrator(llm=llm, icd10=kb, settings=Settings(
+        preferences_enabled=False, azure_openai_enabled=False,
+        azure_language_enabled=False, azure_language_shadow_enabled=False)).process(bundle)
+    held = next(s for s in result.provider_card.declined_codes if s.kind == CodeKind.ICD10)
+    assert held.code == "(unresolved)" and held.disposition == Disposition.REVIEW
+    assert INTENT in held.notes and "terminology:clinical-terms.2026-10-02.v3" in held.notes
+    assert held.evidence[0].quote == quote and held.evidence[0].source == "signed_note"
+    assert result.biller_worksheet.primary_diagnosis is None
+    assert [s.code for s in result.biller_worksheet.diagnoses] == ["E03.9"]
+    assert bundle.signed_note == original_note
 
 
 @pytest.mark.parametrize("source", [

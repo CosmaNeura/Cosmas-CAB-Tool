@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-VERSION = "clinical-terms.2026-09-30.v2"
+VERSION = "clinical-terms.2026-10-02.v3"
 
 # Phrase-local aliases. Order matters: expand abbreviations before phrases.
 # These do not erase type, cause, laterality, phase, or named complications.
@@ -83,7 +83,8 @@ _NON_AFFIRMED = re.compile(r"\b(?:may have|might have|at risk for|at risk of|scr
 _ABBREVIATIONS = {"hx", "fhx", "pmh", "dr", "mr", "mrs", "ms", "vs", "etc"}
 _RELATION = re.compile(r"\b(?:due to|caused by|complicated by|secondary to|associated with)\b")
 _NEGATIVE_PREDICATE = re.compile(
-    r"\b(?:is|was|has|have|had) (?:now )?(?:resolved|unlikely|not present|not active|not diagnosed)\b"
+    r"\b(?:(?:is|was|has|have|had) (?:now )?(?:resolved|unlikely|not present|not active|not diagnosed)"
+    r"|(?:(?:has|have|had) )?(?:never|not(?: ever)?) (?:been )?diagnosed)\b"
 )
 _HEADING = re.compile(
     r"(?im)^\s*(?:family history|past medical history|fhx|pmhx|pmh|history|differential(?: diagnosis)?|"
@@ -191,7 +192,10 @@ def meaning_key(text: str) -> tuple[tuple[str, ...], frozenset[str]]:
 
 
 def uncertain(text: str) -> bool:
-    return bool(_UNCERTAIN.search(normalize(text)))
+    # Question punctuation is assertion context, not discardable terminology.
+    # NFKC in normalize also makes full-width question marks visible here.
+    normalized = normalize(text)
+    return "?" in normalized or bool(_UNCERTAIN.search(normalized))
 
 
 def supported_by_quote(description: str, quote: str, *, more_specific=()) -> bool:
