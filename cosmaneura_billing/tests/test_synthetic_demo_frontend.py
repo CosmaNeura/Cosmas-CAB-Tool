@@ -228,7 +228,7 @@ def test_server_capabilities_control_the_three_tabs_and_encounter_loading():
 def test_admin_only_server_capability_drives_digest_pinned_synthetic_seed():
     assert "setChaseDemoSeed(session.actions?.seedSyntheticChase || null)" in APP
     assert "demoSeed={chaseDemoSeed}" in APP
-    assert "demoSeed && (" in CHASE
+    assert "demoSeed && <details>" in CHASE
     assert "Admin only." in CHASE
     assert 'api("/api/chase/demo-seed"' in CHASE
     assert "body: { seedDigest: demoSeed.seedDigest }" in CHASE
