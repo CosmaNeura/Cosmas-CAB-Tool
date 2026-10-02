@@ -70,7 +70,7 @@ def test_real_worker_role_accepts_signed_reply_and_dark_batch_does_not_send(lane
         assert db.execute("SELECT count(*) AS n FROM chase_communication_dispatch_receipts").fetchone()["n"] == 0
 
 
-def test_worker_has_no_staff_or_clinical_authority_and_new_api_role_still_unmounted(lane, tmp_path):
+def test_worker_has_no_staff_or_clinical_authority_while_api_owns_staff_decisions(lane, tmp_path):
     callback, _, _ = services(lane, tmp_path)
     with callback.store._db() as db:
         for table in ("encounters", "users", "practice_memberships", "access_audit_attempts", "access_audit_completions", "coder_feedback"):
@@ -83,7 +83,7 @@ def test_worker_has_no_staff_or_clinical_authority_and_new_api_role_still_unmoun
     with psycopg.connect(DSN) as db:
         _provision_runtime_role(db, Settings(practice_id=lane.practice, database_url=DSN,
             database_runtime_role=api_role, database_runtime_password="synthetic-test-only"))
-        assert not db.execute("SELECT has_table_privilege(%s,'chase_communication_authorizations','INSERT')", (api_role,)).fetchone()[0]
+        assert db.execute("SELECT has_table_privilege(%s,'chase_communication_authorizations','INSERT')", (api_role,)).fetchone()[0]
 
 
 def test_callback_readiness_detects_lost_insert_authority(lane, tmp_path):
