@@ -1,0 +1,20 @@
+{
+  "schema_version": "cab.mcd-training-source.v1",
+  "pack_id": "cosmaneura-mcd-training-20260930-v1",
+  "allowed_use": "synthetic_staff_training",
+  "source_only": true,
+  "contains_real_patient_data": false,
+  "contains_deidentified_patient_data": false,
+  "inputs_sha256": "a2d334c64b8b0bf6607c3ac70539d105d482329c590d018bfebf5975614e6afc",
+  "original_manifest_sha256": "4d8408bf84a5d7b0a0ee2f7395084718a63b4cba701d0ff4db625d84149a504f",
+  "source_dataset": "Synthea April 2020 CSV sample only",
+  "source_url": "https://synthetichealth.github.io/synthea/",
+  "narrative_origin": "Newly authored clinical fiction over selected, date-shifted Synthea structured history; not provider-reviewed narratives.",
+  "completion_status": "Completed/signed wording is a fictional fixture convention. No actual clinician signed, reviewed or confirmed these notes.",
+  "fertility_case_ids": [
+    "SYN-CAB-20260930-10",
+    "SYN-CAB-20260930-11",
+    "SYN-CAB-20260930-12"
+  ],
+  "licensing": "The Synthea site describes generated data as free from cost/privacy/security restrictions. Synthea code is Apache-2.0; no separate sample-data license was found in the original source review. No blanket Apache-2.0 license is asserted for third-party data or terminologies."
+}

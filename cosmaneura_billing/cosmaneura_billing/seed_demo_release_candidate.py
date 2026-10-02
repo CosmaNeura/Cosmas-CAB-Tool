@@ -374,6 +374,13 @@ def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, objec
     # Artifact validation and all fixed digests are proven before constructing
     # a database context or opening a connection.
     prepared = prepare_synthetic_demo_seed()
+    return _seed_prepared_synthetic(settings, prepared, seed_id=SEED_ID)
+
+
+def _seed_prepared_synthetic(
+    settings: Settings, prepared: PreparedSyntheticDemoSeed, *, seed_id: str,
+) -> dict[str, object]:
+    """Persist an already verified fixed pack; no public payload admission."""
     tenant_id = _validate_postgres_binding_settings(settings)
     context = PostgresContext(
         settings.database_url,
@@ -429,7 +436,7 @@ def seed_synthetic_demo_release_candidate(settings: Settings) -> dict[str, objec
 
     case_count = len(prepared.cases)
     return {
-        "pack_id": SEED_ID,
+        "pack_id": seed_id,
         "case_count": case_count,
         "inserted_count": inserted_count,
         "replayed_count": case_count - inserted_count,
