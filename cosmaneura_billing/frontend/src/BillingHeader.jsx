@@ -1,0 +1,153 @@
+import React, { useEffect, useRef, useState } from "react";
+import { api } from "./api.js";
+import { fieldAuthor, headerDraft, readBillingHeader } from "./billingHeader.js";
+
+const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
+const input = "mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
+const BASE = "/api/encounters/header";
+const changeText = (value) => typeof value === "string" ? value || "Unspecified"
+  : value === null ? "None" : `${value.kind} ${value.code}: ${value.label} (${value.evidenceIds.length} evidence references)`;
+
+function Evidence({ids, header}) {
+  return <details className="mt-2 text-xs text-slate-600"><summary className="cursor-pointer">Source evidence</summary>
+    {ids.map((id) => { const e = header.evidence.find((row) => row.id === id); return <blockquote key={id} className="mt-2 border-l-2 border-slate-300 pl-3">
+      <span className="font-medium">{e.source} · version {e.sourceVersion}</span><p className="mt-1 whitespace-pre-wrap">{e.text}</p>
+    </blockquote>; })}
+  </details>;
+}
+
+export default function BillingHeader({encounter}) {
+  const [view, setView] = useState(null), [draft, setDraft] = useState(null);
+  const [reason, setReason] = useState(""), [error, setError] = useState("");
+  const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
+  const [retry, setRetry] = useState(null), [stale, setStale] = useState(false);
+  const [notice, setNotice] = useState("");
+  const pending = useRef({seq: 0, busy: false, controller: null});
+  const pin = encounter.headerSource;
+
+  useEffect(() => {
+    run();
+    return () => { pending.current.seq++; pending.current.controller?.abort(); };
+  }, []);
+
+  async function run(command = null) {
+    if (pending.current.busy) return;
+    const seq = ++pending.current.seq, controller = new AbortController();
+    pending.current = {seq, controller, busy: true};
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
+        body: command?.body || {encounterId: encounter.encounterId, expectedSource: pin}});
+      if (seq !== pending.current.seq) return;
+      const received = readBillingHeader(response.view, encounter);
+      if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
+      setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
+      if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
+        : "Header generated for review. No code has been accepted.");
+    } catch (failure) {
+      if (seq !== pending.current.seq || failure.name === "AbortError") return;
+      const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
+      setRetry(ambiguous ? command : null);
+      if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
+      setError(failure.status === 409
+        ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."
+        : failure.status === 422 ? "The header edit could not be validated. Check the code, evidence, and required reason."
+        : "The header could not be loaded or saved. No replacement result was substituted.");
+    } finally {
+      if (seq === pending.current.seq) { pending.current.busy = false; setBusy(false); }
+    }
+  }
+
+  function command(path, body = {}) {
+    run({path: BASE + path, body: {encounterId: encounter.encounterId, expectedSource: pin,
+      operationId: crypto.randomUUID(), ...body}});
+  }
+  function startEdit() { setDraft(headerDraft(view)); setReason(""); setNotice(""); }
+  function editCode(index, patch) {
+    setDraft((current) => ({...current, codes: current.codes.map((row, i) => i === index ? {...row, ...patch} : row)}));
+  }
+  const disabled = busy || !!retry || stale;
+  const h = view?.header;
+  const currentDraft = view ? headerDraft(view) : null;
+
+  return <section aria-label="Billing header" aria-busy={busy} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><h2 className="font-semibold text-slate-950">Billing header</h2><p className="mt-1 text-xs text-slate-600">Visit facts and code proposals for first review · clinical note unchanged</p></div>
+      {h && !draft && <button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>}
+      {!h && loaded && !stale && <button className={button} disabled={disabled} onClick={() => command("/generate")}>Generate billing header</button>}
+    </div>
+    {busy && <p role="status" className="mt-3 text-sm text-slate-600">{loaded ? "Saving or generating header…" : "Loading header…"}</p>}
+    {notice && <p role="status" className="mt-3 text-sm text-emerald-800">{notice}</p>}
+    {error && <div role="alert" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"><p>{error}</p>
+      {retry && <button className={`${button} mt-2`} disabled={busy} onClick={() => run(retry)}>Retry same request</button>}
+      {!retry && !stale && <button className={`${button} mt-2`} disabled={busy} onClick={() => run()}>Reload header</button>}
+    </div>}
+    {h && <>
+      <p className="mt-4 text-xs font-medium text-slate-600">Unreviewed · {h.generation.inferenceMode === "mock" ? "Offline synthetic engine" : "Billing engine"} · revision {view.revisionNumber}</p>
+      <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {h.facts.map((fact) => {
+          const value = currentDraft.facts[fact.key], author = fieldAuthor(view, `facts.${fact.key}`);
+          return <div key={fact.key} className="rounded-lg bg-slate-50 p-3">
+            <dt className="text-xs font-medium text-slate-500">{fact.label}</dt>
+            <dd className="mt-1 whitespace-pre-wrap text-sm">{value || "Not documented / unspecified"}</dd>
+            {author ? <p className="mt-1 text-xs text-violet-800">Human entry · {author.name} ({author.role})<br/>Original: {fact.value || "Not documented"}</p>
+              : <p className="mt-1 text-xs text-slate-500">{fact.status.replaceAll("_", " ")}</p>}
+            {fact.evidenceIds.length > 0 && <Evidence ids={fact.evidenceIds} header={h} />}
+          </div>;
+        })}
+      </dl>
+      <h3 className="mt-5 text-sm font-semibold">Original pipeline suggestions</h3>
+      {!h.suggestions.length && <p className="mt-2 text-sm text-slate-600">No evidence-supported codes were suggested.</p>}
+      <ul className="mt-2 grid gap-2 sm:grid-cols-2">{h.suggestions.map((code) => <li key={code.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+        <strong className="font-mono">{code.code}</strong> · {code.label}<p className="mt-1 text-xs text-slate-600">{code.basis}</p><Evidence ids={code.evidenceIds} header={h} />
+      </li>)}</ul>
+      {view.revision && <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
+        <h3 className="font-semibold">Current code proposals · require review</h3>
+        <p className="mt-1 text-xs">Edited codes remain separate from engine suggestions. Saving does not accept a code or complete coder signoff.</p>
+        <ul className="mt-2 space-y-2">{currentDraft.codes.map((code) => {const author = fieldAuthor(view, `codes.${code.id}`); return <li key={code.id}><code>{code.code}</code> · {code.label}
+          <p className="text-xs">{author ? `Human proposal · ${author.name} (${author.role})` : "Original pipeline suggestion retained"}</p><Evidence ids={code.evidenceIds} header={h} /></li>; })}</ul>
+        {h.suggestions.filter((s) => !currentDraft.codes.some((c) => c.id === s.id)).map((s) => <p key={s.id} className="mt-2 text-xs">Removal proposed: <code>{s.code}</code> · {s.label}</p>)}
+        {!currentDraft.codes.length && <p className="mt-2">No codes proposed in this revision.</p>}
+        {currentDraft.note && <p className="mt-2 whitespace-pre-wrap">Reviewer note: {currentDraft.note}</p>}
+      </div>}
+      {h.flags.length > 0 && <ul className="mt-4 list-disc space-y-1 rounded-lg bg-amber-50 py-3 pl-7 pr-3 text-xs text-amber-900">{h.flags.map((f) => <li key={f.id}>{f.message}</li>)}</ul>}
+      <p className="mt-3 text-xs text-slate-500">{h.policy.message}</p>
+    </>}
+    {draft && <form className="mt-5 border-t border-slate-200 pt-4" onSubmit={(event) => {event.preventDefault(); if (!disabled && reason.trim()) command("/save", {
+      headerId: h.headerId, expectedRevision: view.revisionNumber, draft, reason,
+    });}}>
+      <h3 className="font-semibold">Edit review header</h3><p className="mt-1 text-xs text-slate-600">Blank fields stay unspecified. An edit does not establish clinical evidence or clear a documentation gap.</p>
+      <fieldset disabled={disabled} className="mt-3 grid gap-3 sm:grid-cols-2">
+        {Object.entries(draft.facts).map(([key, value]) => <label key={key} className="text-xs font-medium text-slate-700">{h?.facts.find((f) => f.key === key)?.label || key.replaceAll("_", " ")}
+          <input className={input} maxLength={600} value={value} onChange={(e) => setDraft({...draft, facts: {...draft.facts, [key]: e.target.value}})} /></label>)}
+      </fieldset>
+      <fieldset disabled={disabled} className="mt-4 space-y-3"><legend className="text-sm font-semibold">Code proposals</legend>
+        {draft.codes.map((code, index) => <div key={code.id} className="rounded-lg border border-slate-200 p-3">
+          <div className="grid gap-2 sm:grid-cols-[6rem_7rem_1fr_auto]">
+            <label className="text-xs">Kind<select className={input} value={code.kind} onChange={(e) => editCode(index, {kind: e.target.value})}><option>EM</option><option>ICD10</option></select></label>
+            <label className="text-xs">Code<input className={input} maxLength={15} required value={code.code} onChange={(e) => editCode(index, {code: e.target.value.toUpperCase()})} /></label>
+            <label className="text-xs">Short label<input className={input} maxLength={150} required value={code.label} onChange={(e) => editCode(index, {label: e.target.value})} /></label>
+            <button type="button" className={`${button} self-end`} onClick={() => setDraft({...draft, codes: draft.codes.filter((_, i) => i !== index)})}>Remove proposal</button>
+          </div>
+          <details className="mt-3 text-xs"><summary className="cursor-pointer">Source evidence ({code.evidenceIds.length} selected; required)</summary>
+            {h?.evidence.map((e) => <label key={e.id} className="mt-2 flex items-start gap-2"><input type="checkbox" checked={code.evidenceIds.includes(e.id)} onChange={(event) => editCode(index, {evidenceIds: event.target.checked ? [...code.evidenceIds, e.id] : code.evidenceIds.filter((id) => id !== e.id)})} /><span>{e.source}: {e.text}</span></label>)}
+          </details>
+        </div>)}
+        <button type="button" className={button} disabled={draft.codes.length >= 20} onClick={() => setDraft({...draft, codes: [...draft.codes, {id: `human-${crypto.randomUUID()}`, kind: "ICD10", code: "", label: "", evidenceIds: []}]})}>Add code proposal</button>
+      </fieldset>
+      <label className="mt-4 block text-xs font-medium">Reviewer note (optional)<textarea className={input} maxLength={2000} disabled={disabled} value={draft.note} onChange={(e) => setDraft({...draft, note: e.target.value})} /></label>
+      <label className="mt-3 block text-xs font-medium">Reason for edit (required)<input className={input} required maxLength={600} disabled={disabled} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+      <div className="mt-3 flex flex-wrap gap-2"><button type="submit" className={`${button} bg-slate-950 text-white`} disabled={disabled || !reason.trim()}>Save header edits</button>
+        <button type="button" className={button} disabled={busy || !!retry} onClick={() => {setDraft(null); setReason("");}}>Cancel edits</button>
+        <button type="button" className={button} disabled={disabled} onClick={() => setDraft(headerDraft({...view, revision: null}))}>Reset editor to generated values</button>
+      </div>
+    </form>}
+    {view?.revision && <details className="mt-5 border-t border-slate-200 pt-3 text-xs"><summary className="cursor-pointer font-medium">Revision history ({view.revisionNumber})</summary>
+      <ol className="mt-3 space-y-3">{[...view.revision.history].reverse().map((revision) => <li key={revision.id} className="rounded-lg bg-slate-50 p-3">
+        <p className="font-medium">Revision {revision.number} · {revision.actor.name} ({revision.actor.role}) · {new Date(revision.createdAt).toLocaleString()}</p>
+        <p className="mt-1">Reason: {revision.reason}</p>
+        <ul className="mt-2 space-y-1">{revision.changes.map((change) => <li key={change.path}><strong>{change.label}</strong>: <span className="whitespace-pre-wrap">{changeText(change.before)} → {changeText(change.after)}</span></li>)}</ul>
+      </li>)}</ol>
+    </details>}
+  </section>;
+}

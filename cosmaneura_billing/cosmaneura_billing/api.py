@@ -786,6 +786,8 @@ def session_capabilities(request: Request) -> dict[str, Any]:
                 "caseCount": len(seed.cases),
             },
         }
+    if _request_settings(request).billing_header_enabled and "provider" in views:
+        capabilities["capabilities"]["billingHeader"] = True
     return capabilities
 
 
@@ -815,6 +817,8 @@ def readiness(request: Request):
         request.app.state.access_audit_store.healthcheck()
         request.app.state.encounter_store.healthcheck()
         request.app.state.feedback_store.healthcheck()
+        if request.app.state.billing_header_store is not None:
+            request.app.state.billing_header_store.healthcheck()
         membership_store = request.app.state.membership_store
         if membership_store is not None:
             membership_store.healthcheck()
@@ -884,12 +888,16 @@ def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
     _require_view(request, "provider")
     stored = _get_stored_encounter(request, req.encounterId)
     b = stored.bundle
+    header_source = {}
+    if _request_settings(request).billing_header_enabled:
+        from .billing_header import source_snapshot
+        header_source = {"headerSource": source_snapshot(stored)}
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
             "encounterVersion": stored.version,
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,
             "transcript": b.transcript, "signedNote": b.signed_note,
             "placeOfService": b.place_of_service,
-            **_encounter_data_policy(stored)}
+            **_encounter_data_policy(stored), **header_source}
 
 
 @router.post("/api/encounters/billing")
@@ -2026,6 +2034,8 @@ async def _lifespan(application: FastAPI):
         application.state.access_audit_store.healthcheck()
         application.state.encounter_store.healthcheck()
         application.state.feedback_store.healthcheck()
+        if application.state.billing_header_store is not None:
+            application.state.billing_header_store.healthcheck()
         if application.state.membership_store is not None:
             application.state.membership_store.healthcheck()
         orchestrator = get_orchestrator(
@@ -2135,6 +2145,8 @@ def create_app(
     application.state.encounter_store = selected_encounters
     application.state.feedback_store = selected_feedback
     application.state.membership_store = selected_memberships
+    from .billing_header_routes import configure_header, router as header_router
+    configure_header(application, config, selected_encounters)
     application.state.atomic_feedback_audit = bool(
         postgres
         and selected_feedback is postgres.feedback
@@ -2194,6 +2206,7 @@ def create_app(
         deployed_https=config.environment in {"staging", "production"},
     )
     application.include_router(router)
+    application.include_router(header_router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):
         return JSONResponse(
