@@ -226,7 +226,7 @@ def test_stored_billing_matches_contract(client):
     assert em["correctedFrom"] == "99213"
     assert em["disposition"] == "captured"
     assert em["evidence"] and {"source", "quote"} <= set(em["evidence"][0])
-    assert any(c["code"].startswith("Z80") and c["disposition"] == "rejected"
+    assert any(c["code"] == "(unresolved)" and c["disposition"] == "rejected"
                for c in j["declined"])
     assert j["requiresSignoff"] is True
     assert all({"action", "code", "detail"} <= set(a) for a in j["audit"])
@@ -259,9 +259,8 @@ def test_coder_view_contract(client):
     assert {"source", "text", "loc"} <= set(cv["em"]["evidenceSpans"][0])
     assert [d["code"] for d in cv["dx"]] == ["K62.5", "K59.00", "R19.7"]
     assert all(d["kind"] == "ICD10" and d["evidenceSpans"] for d in cv["dx"])
-    statuses = {w["code"]: w["status"] for w in cv["withheld"]}
-    assert statuses["Z80.0"] == "rejected"
-    assert any(s == "held" for s in statuses.values())
+    assert {w["code"] for w in cv["withheld"]} == {"(unresolved)"}
+    assert {w["status"] for w in cv["withheld"]} == {"rejected", "held"}
     assert all(w["why"] for w in cv["withheld"])
     assert all(w["kind"] in {"EM", "ICD10", "PROCEDURE", "MODIFIER"}
                for w in cv["withheld"])

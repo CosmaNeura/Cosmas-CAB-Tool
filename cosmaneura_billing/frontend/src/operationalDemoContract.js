@@ -1,3 +1,5 @@
+import { validDiagnosisSequencing } from "./diagnosisSequencing.js";
+
 const PIPELINE_STAGES = [
   "CodingAgent", "DocumentationIntegrityAgent",
   "ComplianceGuardrailAgent", "DenialRiskAgent",
@@ -35,6 +37,7 @@ function hasDormantSuggestedCodePosture(payload) {
 
 export function visibleSuggestedCodes(payload, documents) {
   if (!hasDormantSuggestedCodePosture(payload) || payload.degraded) return [];
+  if (Object.hasOwn(payload, "diagnosis_sequencing") && !validDiagnosisSequencing(payload.diagnosis_sequencing)) return [];
   return (Array.isArray(payload.codes) ? payload.codes : []).filter((row) => (
     typeof row?.code === "string" && row.code.trim() && row.status === "suggested"
     && row.selectable === true && row.copy_text === row.code

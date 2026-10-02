@@ -75,11 +75,13 @@ def test_missing_and_invalid_evidence_fail_closed():
 
 def test_held_and_removed_are_reasoned_noncopyable_decisions():
     result, payload = _build()
-    reviews = {row["code"]: row for row in payload["review_items"]}
-    assert reviews["E66.8"]["status"] == "held"
-    assert reviews["E66.8"]["action"] == "provider_review_required"
-    assert reviews["Z80.0"]["status"] == "removed"
-    assert reviews["Z80.0"]["action"] == "do_not_use"
+    reviews = {row["description"]: row for row in payload["review_items"]}
+    assert reviews["Obesity"]["status"] == "held"
+    assert reviews["Obesity"]["action"] == "provider_review_required"
+    denied = reviews["Family history of malignant neoplasm of digestive organs"]
+    assert denied["status"] == "removed"
+    assert denied["action"] == "do_not_use"
+    assert all(row["code"] == "(unresolved)" for row in reviews.values())
     assert all(row["status_reason"] and row["copy_text"] is None for row in reviews.values())
     assert not ({"E66.8", "Z80.0"} & set(payload["copy_all"].split()))
 

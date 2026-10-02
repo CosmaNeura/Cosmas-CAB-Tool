@@ -115,15 +115,23 @@ def test_suppression_holds_never_drops():
     assert any("HOLD" in a and "declined K59.00 3x" in a for a in audit)
 
 
-def test_refinement_stays_in_family_and_keeps_evidence():
+def test_refinement_is_a_hold_and_keeps_original_code_and_evidence():
     kb = ICD10CCSR()
     prefs = Preferences(refine={"R197": Refinement("R19.7", "R19.4", 3, "you")})
     s = _sugg("R19.7", "Diarrhea, unspecified")
     audit = apply_preferences([s], prefs, icd10=kb)
-    assert s.code == "R19.4"
+    assert s.code == "R19.7"
     assert s.evidence            # original evidence preserved
-    assert "preference_refined" in s.notes
-    assert any("REFINE" in a for a in audit)
+    assert any(n.startswith("preference_hold") for n in s.notes)
+    assert any("HOLD" in a for a in audit)
+
+
+def test_learned_same_family_cannot_add_a_diabetes_complication():
+    prefs = Preferences(refine={"E119": Refinement("E11.9", "E11.621", 3, "you")})
+    s = _sugg("E11.9", "Type 2 diabetes mellitus without complications")
+    apply_preferences([s], prefs, icd10=ICD10CCSR())
+    assert s.code == "E11.9"
+    assert any(n.startswith("preference_hold") for n in s.notes)
 
 
 def test_refinement_to_inactive_code_is_skipped():

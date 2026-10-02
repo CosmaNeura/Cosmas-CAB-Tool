@@ -31,16 +31,17 @@ def test_primary_diagnosis_is_rectal_hemorrhage(result):
 def test_contradicted_family_history_never_billed(result):
     captured = {s.code for s in result.provider_card.captured_codes}
     assert not any(c.startswith("Z80") for c in captured)
-    declined = {s.code: s.disposition for s in result.provider_card.declined_codes}
-    z80 = next((d for c, d in declined.items() if c.startswith("Z80")), None)
-    assert z80 == Disposition.REJECTED
+    denied = next(s for s in result.provider_card.declined_codes if "Family history" in s.label)
+    assert denied.disposition == Disposition.REJECTED
+    assert denied.code == "(unresolved)"  # no code assigned to an unsupported concept
 
 
 def test_unaddressed_obesity_held_not_billed(result):
     captured = {s.code for s in result.provider_card.captured_codes}
     assert not any(c.startswith("E66") for c in captured)
-    held = [s for s in result.provider_card.declined_codes if s.code.startswith("E66")]
+    held = [s for s in result.provider_card.declined_codes if s.label == "Obesity"]
     assert held and held[0].disposition == Disposition.REVIEW
+    assert held[0].code == "(unresolved)"  # a weight alone cannot establish obesity
 
 
 def test_every_captured_code_has_evidence(result):

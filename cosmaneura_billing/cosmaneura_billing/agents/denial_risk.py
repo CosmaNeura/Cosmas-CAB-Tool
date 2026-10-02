@@ -6,14 +6,16 @@ gets a denial_risk rating and, where relevant, a concrete fix.
 
 If real CMS NCCI edits are loaded (see knowledge/ncci.py) they are consulted for
 procedure-to-procedure bundling and per-day unit limits; otherwise the agent
-falls back to the modifier-25 heuristic below. If the current-FY ICD-10-CM set
-is available (knowledge/icd10_ccsr.py overlay) every captured diagnosis is
-checked for current validity; if the POS table is available (knowledge/pos.py)
+falls back to the modifier-25 heuristic below. Every captured diagnosis must
+be affirmatively billable in the current-FY ICD-10-CM overlay; missing current
+data holds the diagnosis for review. If the POS table is available (knowledge/pos.py)
 telehealth encounters are checked for modifier/POS consistency.
 """
 from __future__ import annotations
 
 from ..schemas import CodeKind, CodeSuggestion, Disposition
+from ..icd10_validity import billability
+from ..primary_diagnosis import resolve_primary
 
 _UNSPECIFIED_HINTS = ("unspecified", "other ", "not specified")
 
@@ -32,7 +34,36 @@ class DenialRiskAgent:
         encounter_type: str = "",
     ) -> tuple[list[CodeSuggestion], list[str]]:
         flags: list[str] = []
+        # Quote verification cannot make a retired/category/unknown code
+        # billable. Apply this final hold before computing diagnosis support or
+        # coverage so a held diagnosis cannot still justify another service.
+        for s in suggestions:
+            if s.kind != CodeKind.ICD10 or s.disposition != Disposition.CAPTURED:
+                continue
+            active = billability(s.code, icd10)
+            if active is True:
+                continue
+            if active is False:
+                reason = ("Not a billable code in the current FY ICD-10-CM set "
+                          "(absent or a non-billable category). Held for coding review; "
+                          "select a supported current code before use.")
+                marker = "icd10_current_fy_hold: invalid_or_nonbillable"
+            else:
+                reason = ("Current FY ICD-10-CM billability could not be verified. "
+                          "Held for coding review; restore a verified current catalogue "
+                          "and rerun before use.")
+                marker = "icd10_current_fy_hold: catalogue_unavailable"
+            s.disposition = Disposition.REVIEW
+            s.necessity_supported = False
+            s.denial_risk = "high"
+            s.rationale = reason
+            s.notes.append(marker)
+            flags.append(f"{s.code} ({s.label}): {reason}")
+
         captured = [s for s in suggestions if s.disposition == Disposition.CAPTURED]
+        sequencing = resolve_primary(suggestions)
+        if sequencing.public["requires_review"]:
+            flags.append(sequencing.public["message"])
 
         has_em = any(s.kind == CodeKind.EM for s in captured)
         has_dx = any(s.kind == CodeKind.ICD10 for s in captured)
@@ -47,15 +78,6 @@ class DenialRiskAgent:
                                  "(type, acuity, cause, or site) where known to support a more specific code.")
                 else:
                     s.denial_risk = "low"
-                # current-FY validity: a deleted or header-level code is a
-                # near-certain claim rejection.
-                if icd10 is not None and getattr(icd10, "has_current_fy", False):
-                    if icd10.is_active(s.code) is False:
-                        s.denial_risk = "high"
-                        s.notes.append("not billable in current FY ICD-10-CM code set")
-                        flags.append(f"{s.code} ({s.label}) is not a billable code in the current "
-                                     "FY ICD-10-CM set (deleted, replaced, or a non-billable "
-                                     "category code) - recode before submitting.")
             if s.kind == CodeKind.EM:
                 s.denial_risk = "low" if has_dx else "high"
 
@@ -126,10 +148,14 @@ class DenialRiskAgent:
         # data. Applies to PROCEDURES only: office-visit E/M codes are not
         # governed by LCD diagnosis lists, so matching them against articles
         # would produce false medical-necessity flags.
-        if coverage is not None and getattr(coverage, "loaded", False) and has_dx:
-            dx = [s for s in captured if s.kind == CodeKind.ICD10]
-            primary = next((s for s in dx if "primary_candidate" in s.notes), dx[0])
+        if coverage is not None and getattr(coverage, "loaded", False):
+            primary = sequencing.primary
             for s in [c for c in captured if c.kind == CodeKind.PROCEDURE]:
+                if primary is None:
+                    note = "coverage: not evaluated because primary diagnosis sequencing is unresolved"
+                    s.notes.append(note)
+                    flags.append("Procedure coverage was not evaluated: resolve primary diagnosis sequencing in review.")
+                    continue
                 res = coverage.supports(s.code, primary.code)
                 if res.status in ("not_supported", "not_covered"):
                     s.denial_risk = "high"

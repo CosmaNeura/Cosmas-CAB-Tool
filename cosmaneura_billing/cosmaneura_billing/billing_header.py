@@ -233,11 +233,14 @@ def validate_generated(generated, stored):
         _references(line["evidenceIds"], evidence_ids, 1)
     seen = set()
     for flag in sequence(generated["flags"], 30):
-        closed(flag, ("id", "message"))
+        require(type(flag) is dict)
+        closed(flag, ("id", "message", "evidenceIds") if "evidenceIds" in flag else ("id", "message"))
         identifier(flag["id"])
         require(flag["id"] not in seen)
         seen.add(flag["id"])
         text(flag["message"], 700)
+        if "evidenceIds" in flag:
+            _references(flag["evidenceIds"], evidence_ids, 1)
     policy = closed(generated["policy"], ("status", "message"))
     require(policy["status"] == "not_verified")
     text(policy["message"], 700)

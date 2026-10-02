@@ -28,9 +28,11 @@ import gzip
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from ..settings import Settings, SettingsError
+from .diagnosis_terms import concept_signature, meaning_key, supported_by_quote, uncertain
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _FULL_CSV = _DATA_DIR / "icd10cm_ccsr_full.csv.gz"
@@ -64,6 +66,17 @@ def _format_icd10(raw: str) -> str:
     return raw
 
 
+@lru_cache(maxsize=4)
+def _description_index(entries: tuple[tuple[str, str], ...]) -> dict:
+    """Share the immutable terminology index across encounter orchestrators."""
+    index: dict = {}
+    for raw, description in entries:
+        key = meaning_key(description)
+        if key:
+            index.setdefault(key, []).append(raw)
+    return {key: tuple(raws) for key, raws in index.items()}
+
+
 class ICD10CCSR:
     def __init__(self, csv_path: str | os.PathLike | None = None,
                  current_csv: str | os.PathLike | None = None,
@@ -79,6 +92,8 @@ class ICD10CCSR:
         cur = _FY_CURRENT_CSV if current_csv is None else current_csv
         if cur and Path(cur).exists():
             self._load_current(Path(cur))
+        self._terminology_index: dict | None = None
+        self._more_specific: dict = {}
 
     def _load_current(self, path: Path) -> None:
         opener = gzip.open if str(path).endswith(".gz") else open
@@ -114,11 +129,13 @@ class ICD10CCSR:
     def get(self, code: str) -> ICD10Code | None:
         raw = code.replace(".", "").strip().upper()
         hit = self._by_raw.get(raw)
-        if hit is None and raw in self._current:
-            # in the current FY set but newer than the CCSR map
+        if raw in self._current:
+            # Current CMS descriptions govern meaning. CCSR remains a category
+            # overlay and must not restore an obsolete descriptor.
             _, desc = self._current[raw]
             return ICD10Code(code=_format_icd10(raw), raw=raw, description=desc,
-                             ccsr_category="", ccsr_description="")
+                             ccsr_category=hit.ccsr_category if hit else "",
+                             ccsr_description=hit.ccsr_description if hit else "")
         return hit
 
     @property
@@ -136,17 +153,55 @@ class ICD10CCSR:
         entry = self._current.get(code.replace(".", "").strip().upper())
         return bool(entry and entry[0])
 
+    def billable_entries(self) -> tuple[ICD10Code, ...]:
+        """Current local catalog for explicit human browsing; no inferred match."""
+        return tuple(self.get(raw) for raw, (billable, _) in sorted(self._current.items()) if billable)
+
     def find_by_description(self, text: str, limit: int = 5) -> list[ICD10Code]:
-        """Lightweight keyword match against official descriptors (offline path)."""
-        terms = [t for t in re.split(r"[^a-z]+", text.lower()) if len(t) > 3]
-        scored: list[tuple[int, ICD10Code]] = []
-        for c in self._rows:
-            d = c.description.lower()
-            score = sum(1 for t in terms if t in d)
-            if score:
-                scored.append((score, c))
-        scored.sort(key=lambda x: (-x[0], len(x[1].description)))
-        return [c for _, c in scored[:limit]]
+        """Return a unique full-meaning match, never a ranked partial match.
+
+        Kept as a compatibility API for callers that only need terminology.
+        Coding callers must also check the source quote with ``resolve``.
+        A limit of one must not turn an ambiguous concept into a guessed code.
+        """
+        code, _ = self.resolve(text)
+        return [code] if code is not None and limit > 0 else []
+
+    def resolve(self, text: str, *, quote: str | None = None
+                ) -> tuple[ICD10Code | None, str]:
+        if not self.has_current_fy:
+            return None, "Current ICD-10-CM catalogue unavailable; coder mapping required."
+        if uncertain(text):
+            return None, "Diagnosis or defining attribute is uncertain; coder review required."
+        self._ensure_index()
+        hits = self._terminology_index.get(meaning_key(text), ())
+        if not hits:
+            return None, "No full-meaning ICD-10-CM terminology match; coder mapping required."
+        if len(hits) != 1:
+            return None, "Clinical terminology matches multiple codes; coder mapping required."
+        code = self.get(hits[0])
+        if quote is not None and not self.supports(code.code, quote):
+            return None, ("The source quote does not establish this diagnosis and its "
+                          "code-defining attributes; coder review required.")
+        return code, "Unique current ICD-10-CM terminology match."
+
+    def _ensure_index(self) -> None:
+        if self._terminology_index is None:
+            self._terminology_index = _description_index(tuple(
+                (raw, desc) for raw, (billable, desc) in self._current.items() if billable
+            ))
+
+    def supports(self, code: str, quote: str) -> bool:
+        """Support check for an existing candidate, including learned remaps."""
+        entry = self.get(code)
+        if entry is None or self.is_active(code) is not True:
+            return False
+        self._ensure_index()
+        key = concept_signature(entry.description)
+        if key not in self._more_specific:
+            signatures = (frozenset(positive) | negative for positive, negative in self._terminology_index)
+            self._more_specific[key] = tuple(other for other in signatures if key < other)
+        return supported_by_quote(entry.description, quote, more_specific=self._more_specific[key])
 
     def codes_in_category(self, ccsr_category: str) -> list[ICD10Code]:
         return [c for c in self._rows if c.ccsr_category == ccsr_category]

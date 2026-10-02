@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from .schemas import BillingResult, CodeKind, CodeSuggestion, Disposition, VisitBundle
+from .primary_diagnosis import result_primary
 
 _PIPELINE_STAGES = (
     "CodingAgent",
@@ -122,8 +123,8 @@ def build_suggested_codes_payload(
         "invalid_pipeline_state",
         "degraded_result",
     ), 0)
-    primary = result.biller_worksheet.primary_diagnosis
-    primary_code = primary.code if isinstance(primary, CodeSuggestion) else None
+    sequencing = result_primary(result)
+    primary_code = sequencing.primary.code if sequencing.primary else None
     captured = list(result.provider_card.captured_codes)
     declined_keys = {
         key for suggestion in result.provider_card.declined_codes
@@ -205,6 +206,7 @@ def build_suggested_codes_payload(
         },
         "provider_selected_em_code": bundle.submitted_em_code,
         "codes": codes,
+        "diagnosis_sequencing": sequencing.public,
         "review_items": review_items,
         "copy_all": " ".join(row["copy_text"] for row in codes),
         "withheld_counts": counts,

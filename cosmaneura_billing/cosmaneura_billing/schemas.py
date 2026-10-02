@@ -158,6 +158,8 @@ class BillerWorksheet:
     denial_flags: list[str] = field(default_factory=list)
     requires_provider_signoff: bool = False
     audit_trail: list[str] = field(default_factory=list)
+    # Optional on legacy results; current adapters recheck final suggestions.
+    diagnosis_sequencing: dict | None = None
 
 
 @dataclass

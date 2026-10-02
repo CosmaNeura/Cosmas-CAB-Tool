@@ -54,7 +54,8 @@ export function readBillingHeader(view, encounter) {
   require(list(h.suggestions, 20) && h.suggestions.every((line) => codeValid(line)
     && line.reviewStatus === "unreviewed" && text(line.basis, 700))
     && new Set(h.suggestions.map((s) => s.id)).size === h.suggestions.length);
-  require(list(h.flags, 30) && h.flags.every((f) => id(f.id) && text(f.message, 700))
+  require(list(h.flags, 30) && h.flags.every((f) => id(f.id) && text(f.message, 700)
+    && (!Object.hasOwn(f, "evidenceIds") || refs(f.evidenceIds)))
     && h.policy?.status === "not_verified" && text(h.policy.message, 700)
     && text(h.generation?.inferenceMode, 80) && uuid(h.generation?.runId));
   require(Number.isInteger(view.revisionNumber) && view.revisionNumber >= 0 && view.revisionNumber <= 100);
@@ -196,7 +197,8 @@ export function exportBillingHeader(view) {
     }
     if (receipt.reviewerNote) rows.push(receipt.reviewerNote);
   }
-  rows.push("", "DOCUMENTATION / POLICY REVIEW", ...h.flags.map((f) => f.message), h.policy.message,
+  rows.push("", "DOCUMENTATION / POLICY REVIEW", ...h.flags.map((f) =>
+    `${f.message}${f.evidenceIds?.length ? ` [${f.evidenceIds.join(", ")}]` : ""}`), h.policy.message,
     "", "SOURCE EVIDENCE — Unicode code-point coordinates");
   for (const e of h.evidence) rows.push(`[${e.id}] ${e.source}, ${e.sourceId}, version ${e.sourceVersion}, ${e.start}–${e.end}`, e.text);
   return rows.join("\n");
