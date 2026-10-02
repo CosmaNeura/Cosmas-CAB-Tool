@@ -104,8 +104,22 @@ def test_coder_review_rejects_stale_or_untrusted_responses_and_freezes_exact_ret
     assert "response.dataClass !== listed.dataClass" in CODER
     assert "engine.encounterId !== encounterId" in CODER
     assert "engine?.encounterId === encounterId" in CODER
-    assert "pendingPayload.current = buildFeedbackPayload" in CODER
-    assert "const payload = pendingPayload.current" in CODER
+    save_review = CODER.split("const saveReview = async () => {", 1)[1].split(
+        "const reloadAfterDefinitiveFailure", 1
+    )[0]
+    first_save, replay = save_review.split("const payload = pendingPayload.current;", 1)
+    assert first_save.index("if (!pendingPayload.current)") < first_save.index(
+        "const candidate = buildFeedbackPayload"
+    ) < first_save.index("pendingHeaderRequest.current = headerReviewRequest(headerView, candidate")
+    assert first_save.index("pendingPayload.current = candidate") < first_save.index("setFrozen(true)")
+    assert "buildFeedbackPayload" not in replay and "headerReviewRequest(" not in replay
+    assert "const composed = pendingHeaderRequest.current" in replay
+    assert 'composed ? "/api/encounters/header/signoff" : "/api/feedback"' in replay
+    assert "body: composed || payload" in replay
+    assert "readBillingHeader(response.view, headerEncounter)" in replay
+    assert "verified.header.headerId !== composed.headerId" in replay
+    assert "verified.revisionNumber !== composed.expectedRevision" in replay
+    assert "JSON.stringify(response.headerSignoff) !== JSON.stringify(verified.signoff)" in replay
     assert "requestId !== saveRequest.current" in CODER
     assert "response.reviewId !== payload.review_id" in CODER
     assert "setFrozen(true)" in CODER
@@ -129,10 +143,15 @@ def test_coder_copy_describes_feedback_and_prepared_preview_without_transmission
     assert not any(term in CODER for term in forbidden)
     assert "Prepared draft — not transmitted" in CODER
     assert "Save review and prepare preview" in CODER
-    assert "This action writes coder feedback only" in CODER
+    assert 'This action records coder feedback{headerEnabled ? " and a header review receipt" : ""}' in CODER
+    assert "The clinical note remains unchanged." in CODER
+    assert "Nothing is written to Athena or an EHR, and no claim is transmitted." in CODER
     assert "No claim, EHR update, Athena write" in CODER
-    assert "server-owned versioned packet is a separate future slice" in CODER
-    assert "JSON.stringify" not in CODER
+    assert "This human-readable preview is assembled from the coder’s decisions." in CODER
+    assert "These coder decisions are bound to header revision" in CODER
+    # Receipt-integrity comparison is permitted; raw request/receipt JSON is not UI.
+    receipt_comparison = "JSON.stringify(response.headerSignoff) !== JSON.stringify(verified.signoff)"
+    assert "JSON.stringify" not in CODER.replace(receipt_comparison, "")
     assert "reviewContext}</" not in CODER
     assert "prior review receipt remains confirmed" in CODER_LOGIC
 
