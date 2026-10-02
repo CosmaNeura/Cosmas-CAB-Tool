@@ -91,9 +91,15 @@ commit atomically. A subsequent header edit invalidates current signoff while
 preserving its history. This rung depends on `003` and `011` only. Keep the expand table dormant on rollback; the down migration refuses
 to remove existing review evidence. No clinical note, claim or EHR is written.
 
+## Combined local integration
+
+The combined candidate includes the exact canonical `001`–`023` chain.
+No live database or setting was changed. The following sections
+retain each independent schema slice’s dependency rationale and rehearsal scope.
+
 ## Dormant SMS storage expansion
 
-The available set is now `001`–`013` and `015`–`018`. The locked runner
+The SMS schema slice originally contained `001`–`013` and `015`–`018`. The locked runner
 supports this deliberate gap: Athena-specific `014` is not a communications
 dependency. The six communications rungs retain their canonical numbering
 and exact SQL bytes:
@@ -120,7 +126,39 @@ checksums, no-op replay, restricted-role denial and retained-evidence recovery
 refusal. It uses cached PostgreSQL 16/pgvector and no service calls.
 Ordinary recovery leaves these expand structures dormant. The canonical down
 scripts refuse retained evidence; they are not a messaging reset or routine
-rollback. Do not renumber or backfill the absent Athena rung.
+rollback. The combined candidate preserves the original canonical numbering.
+## Dormant Athena schema integration
+
+The Athena schema slice originally contained `001`–`009`, `011`, `013`,
+`014`, and `019`–`023`. It did not require the separate SMS rungs; they are
+present in this combined local candidate.
+
+`014_athena_staff_review` creates immutable practice-scoped review receipts,
+current BillingStaff/Admin authorization, same-transaction audit coupling and
+reviewed encounter source protection. `021_athena_staff_bindings` adds
+operator-owned connection/case mapping revisions, exact canonical fingerprints,
+current case-patient binding and no fallback from a revoked newest revision.
+`022_athena_configured_review` binds configured receipts to those mappings and
+preserves history without permitting receipt downgrade.
+
+`023_athena_read_admission` adds an empty operator-owned registry binding exact
+scope, runtime login, database, deployment/storage references and validity.
+Its receipt guard rechecks admission at persistence and keeps operational source
+provenance distinct. Registration metadata does not activate reads or models.
+
+Canonical `019_provider_note_handoff` and `020_provider_source_admission` are
+required dormant dependencies: they supply the shared canonical JSON function
+and protect the provider source label retained by `023`. Their receiver,
+immutable source/receipt guards and empty admission registry remain intact.
+An ordinary encounter writer cannot manufacture `provider_completed_note`.
+
+These files are exact preserved migrations; this slice adds no API grants,
+operator registrations, source admission, transport or application setting.
+The existing runtime provisioner grants none of the new tables/functions.
+The local restricted-role proof grants only its own disposable test role the
+narrow capabilities under test; that is not deployment provisioning.
+Retain expand structures and evidence during code rollback; destructive
+rollback is not the recovery path.
 
 ## Requirements
 
