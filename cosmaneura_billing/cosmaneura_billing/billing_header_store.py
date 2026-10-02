@@ -50,6 +50,9 @@ class _Store(SignoffStoreMixin):
         domain.require(record is not None, "store_invalid")
         rows = unit.revisions(record["headerId"])
         domain.require(all(row["number"] == index + 1 for index, row in enumerate(rows)), "store_invalid")
+        if rows:
+            from .billing_header_mapping import validate_mappings
+            validate_mappings(record["header"], rows[-1]["draft"]["codes"], current=False)
         result = domain.view(record["header"], rows)
         receipt = unit.signoff_receipt(header_id=record["headerId"])
         signed = domain.detached(receipt["receipt"]) if receipt else None

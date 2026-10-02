@@ -33,6 +33,14 @@ class HeaderSave(HeaderGenerate):
     reason: str = Field(min_length=1, max_length=600)
 
 
+class HeaderCatalog(HeaderRead):
+    headerId: str = Field(min_length=36, max_length=36)
+    expectedRevision: int = Field(ge=0, le=100)
+    candidateId: str = Field(min_length=1, max_length=160)
+    query: str = Field(min_length=2, max_length=80)
+    offset: int = Field(default=0, ge=0, le=1_000_000)
+
+
 class HeaderSignoff(HeaderRead):
     headerId: str = Field(min_length=36, max_length=36)
     expectedRevision: int = Field(ge=0, le=100)
@@ -145,6 +153,23 @@ def save_header(request: Request, req: HeaderSave):
         if isinstance(store, PostgresBillingHeaderStore):
             request.state.audit_completion_committed = True
         return {"view": view, "created": created}
+    except BillingHeaderError as exc:
+        raise _safe(exc) from None
+
+
+@router.post("/api/encounters/header/diagnosis-catalog")
+def diagnosis_catalog(request: Request, req: HeaderCatalog):
+    from .billing_header import require
+    from .billing_header_mapping import search_catalog
+    try:
+        stored, store, _actor = _context(request, req.encounterId)
+        check_source(stored, req.expectedSource)
+        current = store.latest(req.encounterId, expected_source=req.expectedSource)
+        require(current is not None and current["header"]["headerId"] == req.headerId, "header_not_found")
+        require(current["revisionNumber"] == req.expectedRevision, "revision_conflict")
+        result = search_catalog(current["header"], req.candidateId, req.query, req.offset)
+        return {"headerId": req.headerId, "revision": req.expectedRevision,
+                "expectedSource": req.expectedSource, **result}
     except BillingHeaderError as exc:
         raise _safe(exc) from None
 

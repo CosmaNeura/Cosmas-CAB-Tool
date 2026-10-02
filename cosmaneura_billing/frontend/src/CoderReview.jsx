@@ -12,6 +12,7 @@ import {
 } from "./coderReview.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import {mappingAddition} from "./diagnosisMapping.js";
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
 import { primaryBadge } from "./diagnosisSequencing.js";
 import { diagnosisOrderDecisionId, headerDecisionIds, headerProposals, headerReviewRequest,
@@ -551,6 +552,12 @@ export default function CoderReview({
                     <option value="">Choose a decision</option><option value="accept">Accept human proposal</option><option value="reject">Reject human proposal</option>
                   </select>
                 </label>
+                {proposal.proposed?.mapping && <button type="button" className="rounded-lg border border-violet-300 px-3 py-2 text-sm sm:col-span-2"
+                  disabled={additions.some((a) => a.kind === "ICD10" && a.code === proposal.proposed.code)}
+                  onClick={() => {
+                    try {setAdditions((current) => [...current, mappingAddition(headerView, proposal.proposed, globalThis.crypto.randomUUID())]);}
+                    catch {setSaveError("Review the mapping evidence manually before adding this code.");}
+                  }}>Use mapped {proposal.proposed.code} in coder review</button>}
                 <label className="grid gap-1 text-xs font-medium">Header proposal {index + 1} reason
                   <input className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm" maxLength={1000} value={headerChoices[proposal.id]?.reason || ""} onChange={(event) => {setHeaderAcknowledged(false); setHeaderChoices((current) => ({...current, [proposal.id]: {...current[proposal.id], reason: event.target.value}}));}} />
                 </label>
