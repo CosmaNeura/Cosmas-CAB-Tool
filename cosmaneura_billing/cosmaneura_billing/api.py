@@ -794,6 +794,8 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         }
     if _request_settings(request).billing_header_enabled and "provider" in views:
         capabilities["capabilities"]["billingHeader"] = True
+    if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
+        capabilities["capabilities"]["athenaReview"] = True
     return capabilities
 
 
@@ -825,6 +827,8 @@ def readiness(request: Request):
         request.app.state.feedback_store.healthcheck()
         if request.app.state.billing_header_store is not None:
             request.app.state.billing_header_store.healthcheck()
+        if request.app.state.athena_review_service is not None:
+            request.app.state.athena_review_service.store.healthcheck()
         membership_store = request.app.state.membership_store
         if membership_store is not None:
             membership_store.healthcheck()
@@ -1468,9 +1472,13 @@ def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="chase task was not found")
     if hasattr(store, "audit_resource_id"):
         _set_audit_resource(request, store.audit_resource_id(req.chaseId))
-    return _chase_task_json(
+    result = _chase_task_json(
         item, _request_settings(request), principal=principal,
     )
+    if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
+        result["athenaReview"] = {"available": True, "mode": _request_settings(request).athena_review_mode,
+                                 "billingAvailable": False}
+    return result
 
 
 @router.post("/api/chase/demo-seed")
@@ -2041,9 +2049,8 @@ async def _lifespan(application: FastAPI):
     application.state.startup_error = None
     try:
         settings = application.state.settings
-        # Build the durable worklist boundary at startup as well. In production
-        # this is where a missing Postgres configuration fails closed.
-        application.state.chase_context = _build_chase_context(settings)
+        # Athena and staff actions share the same composed worklist for the
+        # entire app lifetime, including local lifespan re-entry.
         # Force one database round trip so readiness also proves the durable
         # chase schema exists; a configured-but-unreachable store is not ready.
         application.state.chase_context["store"].healthcheck()
@@ -2055,6 +2062,8 @@ async def _lifespan(application: FastAPI):
         application.state.feedback_store.healthcheck()
         if application.state.billing_header_store is not None:
             application.state.billing_header_store.healthcheck()
+        if application.state.athena_review_service is not None:
+            application.state.athena_review_service.store.healthcheck()
         if application.state.membership_store is not None:
             application.state.membership_store.healthcheck()
         orchestrator = get_orchestrator(
@@ -2097,7 +2106,6 @@ async def _lifespan(application: FastAPI):
                 # never expose an SDK exception or deployment credential.
                 pass
         application.state.orchestrator = None
-        application.state.chase_context = None
 
 
 def create_app(
@@ -2159,13 +2167,22 @@ def create_app(
     application.state.ready = False
     application.state.startup_error = None
     application.state.orchestrator = None
-    application.state.chase_context = None
+    application.state.chase_context = _build_chase_context(config)
     application.state.access_audit_store = audit_store
     application.state.encounter_store = selected_encounters
     application.state.feedback_store = selected_feedback
     application.state.membership_store = selected_memberships
     from .billing_header_routes import configure_header, router as header_router
     configure_header(application, config, selected_encounters)
+    from .athena_review_routes import configure_athena, router as athena_router
+    configure_athena(application, config, application.state.chase_context, selected_encounters)
+    # Keep billing imports unavailable until their model-input boundary is
+    # integrated. Reuse the reviewed handlers without changing the core router.
+    athena_contact_router = APIRouter(routes=[
+        route for route in athena_router.routes
+        if route.path in {"/api/athena/card-chase", "/api/athena/card-chase/read",
+                          "/api/athena/card-chase/apply"}
+    ])
     application.state.atomic_feedback_audit = bool(
         postgres
         and selected_feedback is postgres.feedback
@@ -2226,6 +2243,7 @@ def create_app(
     )
     application.include_router(router)
     application.include_router(header_router)
+    application.include_router(athena_contact_router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):
         return JSONResponse(
