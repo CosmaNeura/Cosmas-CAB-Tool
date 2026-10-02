@@ -460,3 +460,45 @@ test("expanded reader retains all 320 exact references and rejects overflow", ()
   view.header.evidence.push({...view.header.evidence[0], id: "overflow"});
   assert.throws(() => readBillingHeader(view, encounter));
 });
+
+test("copy attaches current source context without changing immutable header or editable draft", () => {
+  const {encounter,view}=fixture();
+  encounter.headerSource.ingestionSource="provider_completed_note";
+  view.header.expectedSource=structuredClone(encounter.headerSource);
+  encounter.sourceVisitContext={schemaVersion:"cab.source-visit-context.v1",expectedSource:structuredClone(encounter.headerSource),
+    origin:"provider_manifest",sourceSha256:"c".repeat(64),serviceDate:"2026-09-29",noteStatus:"completed",statusMeaning:"provider_attested"};
+  const original=JSON.stringify(view),draft=headerDraft(view);
+  const exported=exportBillingHeader(view,encounter);
+  assert.match(exported,/Date of service: 2026-09-29/);assert.match(exported,/Completed \(provider-confirmed\)/);
+  assert.match(exported,/upstream signature not independently verified/);
+  assert.equal(JSON.stringify(view),original);assert.deepEqual(headerDraft(view),draft);
+  encounter.sourceVisitContext.expectedSource.encounterVersion=2;
+  assert.match(exportBillingHeader(view,encounter),/Date of service: Unavailable from source/);
+  assert.doesNotMatch(exportBillingHeader(view,encounter),/Date of service: 2026-09-29/);
+  delete encounter.sourceVisitContext;
+  assert.match(exportBillingHeader(view,encounter),/Note status: Unavailable from source/);
+});
+
+test("optional model-input proof is closed historical metadata, not generation permission", () => {
+  const {encounter, view} = fixture();
+  encounter.headerSource.ingestionSource = "athena_staff_review_operational";
+  view.header.expectedSource = structuredClone(encounter.headerSource);
+  encounter.inferencePolicy = {allowed:false, reason:"operational_source_model_not_approved"};
+  assert.equal(readBillingHeader(view, encounter), view); // Older saved headers lack the additive proof.
+  const proof = {schemaVersion:"cab-model-input-proof.v1", policyId:"33333333-3333-4333-8333-333333333333",
+    policySha256:"a".repeat(64), sourceSha256:"b".repeat(64), serviceSha256:"c".repeat(64), expiresAt:"2020-01-01T00:00:00Z"};
+  view.header.generation.modelInputProof = proof;
+  assert.equal(readBillingHeader(view, encounter), view); // Expired authority still describes past generation.
+  assert.deepEqual(encounter.inferencePolicy, {allowed:false, reason:"operational_source_model_not_approved"});
+  assert.equal(Object.hasOwn(headerDraft(view), "modelInputProof"), false);
+  for (const bad of [null, {}, [], {...proof, policyId:"bad"}, {...proof, policySha256:"not-a-hash"},
+    {...proof, sourceSha256:null}, {...proof, serviceSha256:"A".repeat(64)}, {...proof, expiresAt:"2020"},
+    {...proof, expiresAt:"invalid"}, {...proof, schemaVersion:"future"}, {...proof, allowed:true}]) {
+    view.header.generation.modelInputProof = bad;
+    assert.throws(() => readBillingHeader(view, encounter));
+  }
+  view.header.generation.modelInputProof = proof;
+  encounter.headerSource.ingestionSource = "local_synthetic_demo";
+  view.header.expectedSource = structuredClone(encounter.headerSource);
+  assert.throws(() => readBillingHeader(view, encounter));
+});

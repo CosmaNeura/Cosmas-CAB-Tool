@@ -767,9 +767,20 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         # Authentication already rejects principals without an allowed app
         # role. Keep this defensive branch fail-closed if that contract drifts.
         raise HTTPException(status_code=403, detail="access is not permitted")
+    settings = _request_settings(request)
     capabilities: dict[str, Any] = {
         "views": views,
         "defaultView": views[0],
+        # Global configuration only; each send still needs its own policy,
+        # contact, consent and staff authorization checks. No sender metadata.
+        "patientOutreachEnabled": bool(
+            settings.chase_scheduler_enabled
+            and settings.patient_messaging_enabled
+            and settings.patient_messaging_operationally_activated
+            and (settings.chase_transport == "acs_email" or (
+                settings.chase_transport == "twilio" and settings.communications_enabled
+            ))
+        ),
         "capabilities": {
             # This is deliberately independent from the ability to see the
             # worklist. A Coder can inspect all three pilot tabs, but only a
@@ -838,6 +849,9 @@ def readiness(request: Request):
                     raise RuntimeError("provider model source reader unavailable")
         if request.app.state.billing_header_store is not None:
             request.app.state.billing_header_store.healthcheck()
+        if _request_settings(request).communications_enabled:
+            from .chase.communications.runtime import check_schema
+            check_schema(_request_settings(request))
         if request.app.state.provider_handoff_store is not None:
             request.app.state.provider_handoff_store.healthcheck()
         if request.app.state.athena_review_service is not None:
@@ -1357,6 +1371,7 @@ def _chase_task_json(
 ) -> dict[str, Any]:
     """One audited contact task without copying operational destinations."""
     from .chase import State
+    from .chase.activity import build_activity
     from .chase.synthetic_demo import synthetic_case_for
 
     synthetic = synthetic_case_for(item)
@@ -1406,6 +1421,7 @@ def _chase_task_json(
             "Open the approved patient record in the practice source system. The contact "
             "destination is not copied into this application."
         )
+    activity = build_activity(item.attempts)
     return {
         "chaseId": item.chase_id,
         "patientLabel": (
@@ -1415,12 +1431,13 @@ def _chase_task_json(
         "state": item.state.value,
         "assigned": bool(item.assignee),
         "touches": item.touches,
-        "staffMinutes": item.staff_minutes,
+        "staffMinutes": activity["staffMinutes"] if activity is not None else None,
         "open": item.is_open,
         "hasPendingTask": item.pending_task is not None,
         "allowedActions": allowed_actions,
         "instruction": instruction,
         "contact": contact,
+        "activity": activity,
         "systemOfRecord": {
             "name": "Practice source system",
             "deepLinkConfigured": False,
@@ -1508,9 +1525,23 @@ def chase_worklist(
         assignee=req.assignee,
         needs_person=req.needsPerson,
     )
+    projected = [_chase_row_json(item) for item in rows]
+    config = _request_settings(request)
+    communications_available = config.communications_enabled and _request_principal(request).has_any_role(("Admin", "BillingStaff"))
+    if communications_available:
+        from .chase.communications.runtime import dispatcher_from_settings
+        from .chase.communications.event_review import CommunicationsEventReview
+        from .chase.communications.store import CommunicationsError
+        try:
+            counts = CommunicationsEventReview(dispatcher_from_settings(config)).counts([r["chaseId"] for r in projected])
+        except CommunicationsError as exc:
+            raise HTTPException(exc.status, exc.code) from None
+        for row in projected:
+            row["communicationReview"] = counts[row["chaseId"]]
     return {
         "counts": ctx["store"].counts(),
-        "rows": [_chase_row_json(item) for item in rows],
+        "rows": projected,
+        **({"communications": {"available": True, "mode": "durable"}} if communications_available else {}),
         "policy": policy_view,
         "outbound": _chase_outbound_status(_request_settings(request)),
     }
@@ -1529,10 +1560,39 @@ def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
     result = _chase_task_json(
         item, _request_settings(request), principal=principal,
     )
+    if _request_settings(request).communications_enabled and principal.has_any_role(("Admin", "BillingStaff")):
+        result["communications"] = {"available": True, "mode": "durable"}
     if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
         result["athenaReview"] = {"available": True, "mode": _request_settings(request).athena_review_mode,
                                  "billingAvailable": True}
     return result
+
+
+@router.post("/api/chase/communications")
+async def chase_communications(request: Request):
+    if _request_settings(request).communications_enabled:
+        from .chase.communications.runtime import CaseRequest, read
+        return await _operational_communications_request(request, CaseRequest, read)
+    raise HTTPException(404, "communications_unavailable")
+
+
+@router.post("/api/chase/communications/action")
+async def chase_communications_action(request: Request):
+    if _request_settings(request).communications_enabled:
+        from .chase.communications.runtime import PrepareRequest, prepare
+        return await _operational_communications_request(request, PrepareRequest, prepare)
+    raise HTTPException(404, "communications_unavailable")
+
+
+async def _operational_communications_request(request, model, handler):
+    import asyncio
+    from pydantic import ValidationError
+    try:
+        body = await request.json()
+        req = model.model_validate(body)
+    except (ValueError, ValidationError):
+        raise HTTPException(422, "invalid_communications_request") from None
+    return await asyncio.to_thread(handler, request, req)
 
 
 @router.post("/api/chase/demo-seed")
@@ -2116,6 +2176,9 @@ async def _lifespan(application: FastAPI):
         application.state.feedback_store.healthcheck()
         if application.state.billing_header_store is not None:
             application.state.billing_header_store.healthcheck()
+        if settings.communications_enabled:
+            from .chase.communications.runtime import check_schema
+            check_schema(settings)
         if application.state.provider_handoff_store is not None:
             application.state.provider_handoff_store.healthcheck()
         if application.state.athena_review_service is not None:
@@ -2294,6 +2357,8 @@ def create_app(
         SecurityHeadersMiddleware,
         deployed_https=config.environment in {"staging", "production"},
     )
+    from .chase.communications.runtime import router as communications_router
+    application.include_router(communications_router)
     application.include_router(router)
     application.include_router(header_router)
     application.include_router(handoff_router)

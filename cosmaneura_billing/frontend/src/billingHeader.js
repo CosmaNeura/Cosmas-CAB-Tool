@@ -1,4 +1,5 @@
 // Validate the whole header against the currently displayed source before render.
+import { sourceVisitContextText } from "./sourceVisitContext.js";
 import { dataReviewText, readDataReview } from "./mdmDataReview.js";
 import { clinicalReviewText, readClinicalReview } from "./mdmClinicalReview.js";
 import { validMapping, validMappingOutcomes, mappingReviewText } from "./diagnosisMapping.js";
@@ -65,6 +66,16 @@ export function readBillingHeader(view, encounter) {
     && (!Object.hasOwn(f, "evidenceIds") || refs(f.evidenceIds)))
     && h.policy?.status === "not_verified" && text(h.policy.message, 700)
     && text(h.generation?.inferenceMode, 80) && uuid(h.generation?.runId));
+  if (Object.hasOwn(h.generation, "modelInputProof")) {
+    const proof = h.generation.modelInputProof;
+    require(proof && typeof proof === "object" && !Array.isArray(proof)
+      && same(Object.keys(proof).sort(), ["expiresAt", "policyId", "policySha256", "schemaVersion", "serviceSha256", "sourceSha256"])
+      && proof.schemaVersion === "cab-model-input-proof.v1" && pin.ingestionSource === "athena_staff_review_operational"
+      && uuid(proof.policyId)
+      && [proof.policySha256, proof.sourceSha256, proof.serviceSha256].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))
+      && timeValid(proof.expiresAt) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(proof.expiresAt));
+    // Historical traceability only. Expiry does not prevent saved-header review.
+  }
   if (Object.hasOwn(h, "dataReview")) { require(h.dataReview != null); readDataReview(h.dataReview, encounter); }
   if (Object.hasOwn(h, "clinicalReview")) { require(h.clinicalReview != null); readClinicalReview(h.clinicalReview, encounter); }
   require(Number.isInteger(view.revisionNumber) && view.revisionNumber >= 0 && view.revisionNumber <= 100);
@@ -256,6 +267,7 @@ export function exportBillingHeader(view, encounter) {
   const h = view.header, draft = headerDraft(view), receipt = view.signoff;
   const rows = ["BILLING HEADER", `Encounter: ${h.expectedSource.encounterId}`,
     `Source version: ${h.expectedSource.encounterVersion} | Header revision: ${view.revisionNumber}`,
+    sourceVisitContextText(encounter?.sourceVisitContext, h.expectedSource),
     `Header ID: ${h.headerId}`, `Generated: ${h.generatedAt}`,
     receipt ? `Coder review recorded: ${receipt.reviewId} by ${receipt.actor.name} at ${receipt.createdAt}`
       : "Coder review pending — unreviewed header",
