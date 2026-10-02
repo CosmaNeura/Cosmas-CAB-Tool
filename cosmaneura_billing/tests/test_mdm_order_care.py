@@ -163,7 +163,7 @@ def test_unchanged_sources_keep_problem_holds_and_levels_with_separate_encounter
     assert em.necessity_supported and "em_pathway:total_time" in em.notes
     assert "individual problem linkage remains unresolved" in em.rationale
     assert all(e["status"] == "held" for e in em.clinical_review["problems"]["events"])
-    assert em.clinical_review["risk"]["rule_version"].endswith(".v3")
+    assert em.clinical_review["risk"]["rule_version"] == "office-mdm-risk.2026-09-30.v4"
     assert sorted(s.code for s in result.provider_card.captured_codes if s.kind == CodeKind.ICD10) == case["baselineCapturedDiagnoses"]
     assert llm.calls == ["extract_clinical_facts", "propose_diagnoses"]
     assert asdict(bundle) == case["source"] and case == before
