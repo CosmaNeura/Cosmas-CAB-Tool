@@ -509,6 +509,20 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
         "/api/chase/task", json={"chaseId": chase_id}, headers=billing_staff,
     )
     assert coder_task.status_code == staff_task.status_code == 200
+    assert coder_task.json()["activity"] == staff_task.json()["activity"]
+    assert coder_task.json()["activity"]["totalAttempts"] == 0
+    assert client.post(
+        "/api/chase/task", json={"chaseId": chase_id}, headers=admin,
+    ).json()["activity"] == coder_task.json()["activity"]
+    for denied_headers in (provider, provider_with_extra_staff, _auth_headers(roles=("Unassigned",))):
+        denied = client.post(
+            "/api/chase/task", json={"chaseId": chase_id}, headers=denied_headers,
+        )
+        assert denied.status_code == 403
+        assert "activity" not in denied.json()
+    assert client.post(
+        "/api/chase/task", json={"chaseId": chase_id},
+    ).status_code == 401
     assert coder_task.json()["allowedActions"] == []
     assert "assign" in staff_task.json()["allowedActions"]
     # Multiple effective roles compose deliberately: Coder grants all views;

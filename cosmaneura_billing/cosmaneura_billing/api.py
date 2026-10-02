@@ -805,6 +805,8 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         }
     if _request_settings(request).billing_header_enabled and "provider" in views:
         capabilities["capabilities"]["billingHeader"] = True
+    if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
+        capabilities["capabilities"]["athenaReview"] = True
     return capabilities
 
 
@@ -839,6 +841,8 @@ def readiness(request: Request):
         if _request_settings(request).communications_enabled:
             from .chase.communications.runtime import check_schema
             check_schema(_request_settings(request))
+        if request.app.state.athena_review_service is not None:
+            request.app.state.athena_review_service.store.healthcheck()
         membership_store = request.app.state.membership_store
         if membership_store is not None:
             membership_store.healthcheck()
@@ -1310,6 +1314,7 @@ def _chase_task_json(
 ) -> dict[str, Any]:
     """One audited contact task without copying operational destinations."""
     from .chase import State
+    from .chase.activity import build_activity
     from .chase.synthetic_demo import synthetic_case_for
 
     synthetic = synthetic_case_for(item)
@@ -1359,6 +1364,7 @@ def _chase_task_json(
             "Open the approved patient record in the practice source system. The contact "
             "destination is not copied into this application."
         )
+    activity = build_activity(item.attempts)
     return {
         "chaseId": item.chase_id,
         "patientLabel": (
@@ -1368,12 +1374,13 @@ def _chase_task_json(
         "state": item.state.value,
         "assigned": bool(item.assignee),
         "touches": item.touches,
-        "staffMinutes": item.staff_minutes,
+        "staffMinutes": activity["staffMinutes"] if activity is not None else None,
         "open": item.is_open,
         "hasPendingTask": item.pending_task is not None,
         "allowedActions": allowed_actions,
         "instruction": instruction,
         "contact": contact,
+        "activity": activity,
         "systemOfRecord": {
             "name": "Practice source system",
             "deepLinkConfigured": False,
@@ -1498,6 +1505,9 @@ def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
     )
     if _request_settings(request).communications_enabled and principal.has_any_role(("Admin", "BillingStaff")):
         result["communications"] = {"available": True, "mode": "durable"}
+    if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
+        result["athenaReview"] = {"available": True, "mode": _request_settings(request).athena_review_mode,
+                                 "billingAvailable": False}
     return result
 
 
@@ -2096,9 +2106,8 @@ async def _lifespan(application: FastAPI):
     application.state.startup_error = None
     try:
         settings = application.state.settings
-        # Build the durable worklist boundary at startup as well. In production
-        # this is where a missing Postgres configuration fails closed.
-        application.state.chase_context = _build_chase_context(settings)
+        # Athena and staff actions share the same composed worklist for the
+        # entire app lifetime, including local lifespan re-entry.
         # Force one database round trip so readiness also proves the durable
         # chase schema exists; a configured-but-unreachable store is not ready.
         application.state.chase_context["store"].healthcheck()
@@ -2113,6 +2122,8 @@ async def _lifespan(application: FastAPI):
         if settings.communications_enabled:
             from .chase.communications.runtime import check_schema
             check_schema(settings)
+        if application.state.athena_review_service is not None:
+            application.state.athena_review_service.store.healthcheck()
         if application.state.membership_store is not None:
             application.state.membership_store.healthcheck()
         orchestrator = get_orchestrator(
@@ -2155,7 +2166,6 @@ async def _lifespan(application: FastAPI):
                 # never expose an SDK exception or deployment credential.
                 pass
         application.state.orchestrator = None
-        application.state.chase_context = None
 
 
 def create_app(
@@ -2217,13 +2227,22 @@ def create_app(
     application.state.ready = False
     application.state.startup_error = None
     application.state.orchestrator = None
-    application.state.chase_context = None
+    application.state.chase_context = _build_chase_context(config)
     application.state.access_audit_store = audit_store
     application.state.encounter_store = selected_encounters
     application.state.feedback_store = selected_feedback
     application.state.membership_store = selected_memberships
     from .billing_header_routes import configure_header, router as header_router
     configure_header(application, config, selected_encounters)
+    from .athena_review_routes import configure_athena, router as athena_router
+    configure_athena(application, config, application.state.chase_context, selected_encounters)
+    # Keep billing imports unavailable until their model-input boundary is
+    # integrated. Reuse the reviewed handlers without changing the core router.
+    athena_contact_router = APIRouter(routes=[
+        route for route in athena_router.routes
+        if route.path in {"/api/athena/card-chase", "/api/athena/card-chase/read",
+                          "/api/athena/card-chase/apply"}
+    ])
     application.state.atomic_feedback_audit = bool(
         postgres
         and selected_feedback is postgres.feedback
@@ -2286,6 +2305,7 @@ def create_app(
     application.include_router(communications_router)
     application.include_router(router)
     application.include_router(header_router)
+    application.include_router(athena_contact_router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):
         return JSONResponse(

@@ -312,6 +312,20 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
     if conn.execute("SELECT to_regclass('public.chase_communication_unassigned_sources')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT ON chase_communication_unassigned_sources TO {}").format(identifier))
 
+    if conn.execute("SELECT to_regclass('public.athena_case_review_events')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON athena_case_review_events TO {}").format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION cosmaneura_athena_reviewer_allowed(uuid,uuid,text) TO {}"
+        ).format(identifier))
+    if conn.execute("SELECT to_regclass('public.athena_staff_connections')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION cosmaneura_athena_staff_scope(uuid,uuid,text,text) TO {}"
+        ).format(identifier))
+    if conn.execute("SELECT to_regprocedure('public.cosmaneura_athena_read_admission(uuid,uuid,text,text,text,text)')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION public.cosmaneura_athena_read_admission(uuid,uuid,text,text,text,text) TO {}"
+        ).format(identifier))
+
 
 def _provision_chase_worker_role(conn, settings: Settings) -> None:
     """Create the practice-bound scheduler login without API/identity authority."""

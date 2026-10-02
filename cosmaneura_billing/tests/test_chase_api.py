@@ -1,4 +1,5 @@
 """The chase API surface: worklist, detection, staff actions, metrics."""
+from copy import deepcopy
 from uuid import uuid4
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from cosmaneura_billing import api
 from cosmaneura_billing.chase import State
+from cosmaneura_billing.chase.models import Attempt, Channel
 
 TODAY = "2026-08-17"
 
@@ -117,6 +119,77 @@ def test_worklist_exposes_the_policy_and_who_approved_it(client):
     assert performers["phone"] == "staff"
 
 
+def test_selected_case_activity_is_private_read_only_and_available_in_every_state(client, monkeypatch):
+    rows = _detect(client)["rows"]
+    chase_id, other_id = rows[0]["chase_id"], rows[1]["chase_id"]
+    item = _stage_phone_task(client, chase_id)
+    item.attempts = [Attempt(
+        channel=Channel.EMAIL, template_id="PRIVATE-TEMPLATE-CANARY",
+        at="2026-09-25T08:30:00-04:00", actor="PRIVATE-STAFF-CANARY",
+        outcome="PRIVATE-OUTCOME-CANARY", minutes_spent=1.25,
+        note="PRIVATE-NOTE-CANARY patient@example.invalid +1 202-555-0199",
+    )]
+
+    def no_outreach(*args, **kwargs):
+        pytest.fail("Reading activity must not run a cadence or transport")
+
+    runner = client.app.state.chase_context["runner"]
+    monkeypatch.setattr(runner, "advance", no_outreach)
+    monkeypatch.setattr(runner, "transport", no_outreach)
+    expected_entry = {
+        "at": "2026-09-25T12:30:00Z", "channel": "email", "performer": "staff",
+        "outcome": "unknown", "minutes": 1.25,
+    }
+    expected = {
+        "schemaVersion": "chase-activity.v1", "totalAttempts": 1,
+        "countsByChannel": {"phone": 0, "email": 1, "sms": 0, "portal": 0},
+        "staffMinutes": 1.25, "lastAttempt": expected_entry,
+        "history": [expected_entry], "truncated": False,
+    }
+    for state in State:
+        item.state = state
+        before = deepcopy(item)
+        response = client.post("/api/chase/task", json={"chaseId": chase_id})
+        assert response.status_code == 200
+        assert response.json()["activity"] == expected
+        assert "PRIVATE" not in response.text
+        assert "patient@example.invalid" not in response.text
+        assert "+1 202-555-0199" not in response.text
+        assert "patient_ref" not in response.text
+        assert item == before
+    # A pending task is not an attempt, and another case's history stays separate.
+    assert item.pending_task is not None
+    other = client.post("/api/chase/task", json={"chaseId": other_id}).json()
+    assert other["activity"]["totalAttempts"] == 0
+    worklist = client.post("/api/chase/worklist", json={}).json()
+    assert all("activity" not in row and "attempts" not in row for row in worklist["rows"])
+
+
+def test_bad_stored_activity_is_unavailable_instead_of_a_false_empty_history(client):
+    chase_id = _detect(client)["rows"][0]["chase_id"]
+    item = _item(client, chase_id)
+    item.attempts = [Attempt(Channel.PHONE, "phone.call", "PRIVATE-BAD-DATE-CANARY")]
+    response = client.post("/api/chase/task", json={"chaseId": chase_id})
+    assert response.status_code == 200
+    assert response.json()["activity"] is None
+    assert "PRIVATE" not in response.text
+
+
+@pytest.mark.parametrize("minutes", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_stored_minutes_do_not_break_selected_task_json(client, minutes):
+    chase_id = _detect(client)["rows"][0]["chase_id"]
+    item = _item(client, chase_id)
+    item.attempts = [Attempt(
+        Channel.PHONE, "phone.call", "2026-09-25T12:00:00Z",
+        minutes_spent=minutes,
+    )]
+    response = client.post("/api/chase/task", json={"chaseId": chase_id})
+    assert response.status_code == 200
+    assert response.json()["activity"] is None
+    assert response.json()["staffMinutes"] is None
+    assert "NaN" not in response.text and "Infinity" not in response.text
+
+
 def test_priority_orders_the_list(client):
     rows = _detect(client)["rows"]
     assert rows[0]["patient_ref"] == "API-1"      # appointment today
@@ -167,6 +240,10 @@ def test_staff_action_retry_is_exactly_once_and_conflicts_fail(client):
     assert replay.json()["touches"] == 1
     assert replay.json()["staffMinutes"] == 2.0
     assert conflict.status_code == 409
+    activity = client.post("/api/chase/task", json={"chaseId": chase_id}).json()["activity"]
+    assert activity["totalAttempts"] == 1
+    assert activity["countsByChannel"] == {"phone": 1, "email": 0, "sms": 0, "portal": 0}
+    assert activity["lastAttempt"]["outcome"] == "left_message"
 
 
 def test_caller_cannot_override_log_attempt_actor(client):

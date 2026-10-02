@@ -25,10 +25,16 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "011_billing_headers.up.sql",
         "012_chase_communications_dispatch.up.sql",
         "013_billing_header_signoffs.up.sql",
+        "014_athena_staff_review.up.sql",
         "015_chase_communications_cancellation.up.sql",
         "016_chase_communications_unknown_resolution.up.sql",
         "017_chase_communications_event_review.up.sql",
         "018_chase_unassigned_sms_review.up.sql",
+        "019_provider_note_handoff.up.sql",
+        "020_provider_source_admission.up.sql",
+        "021_athena_staff_bindings.up.sql",
+        "022_athena_configured_review.up.sql",
+        "023_athena_read_admission.up.sql",
     ]
 
 

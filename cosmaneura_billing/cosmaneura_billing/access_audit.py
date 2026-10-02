@@ -26,6 +26,11 @@ _ENCOUNTER_FIXED_ROUTES = {
     "/api/encounters/header/save": "billing_header.save",
     "/api/encounters/header/signoff": "billing_header.signoff",
 }
+_ATHENA_ROUTES = {
+    "/api/athena/card-chase": "athena.view",
+    "/api/athena/card-chase/read": "athena.refresh",
+    "/api/athena/card-chase/apply": "athena.apply",
+}
 _CHASE_POLICY_MUTATIONS = frozenset({
     "/api/chase/policy/create",
     "/api/chase/policy/approve",
@@ -129,6 +134,8 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
                 "/api/chase/communications/review-unassigned-text",
                 "/api/chase/communications/policy/decision"}:
         return "chase.decide", path, ""
+    if path in _ATHENA_ROUTES:
+        return _ATHENA_ROUTES[path], path, ""
     if path == "/api/billing":
         return "encounter.compute", "/api/billing", ""
     if path == "/api/completeness":
