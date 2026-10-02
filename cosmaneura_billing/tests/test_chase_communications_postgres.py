@@ -36,7 +36,16 @@ def schema():
         for name, table in [("002_chase_persistence", "chase_items"),
                             ("003_pilot_persistence", "practices"),
                             ("004_chase_delivery_runtime", "chase_contact_snapshots"),
-                            ("010_chase_communications", "chase_communication_events")]:
+                            ("010_chase_communications", "chase_communication_events"),
+                            ("012_chase_communications_dispatch", "chase_communication_provider_events"),
+                            ("015_chase_communications_cancellation", "chase_communication_cancellations"),
+                            ("016_chase_communications_unknown_resolution", "chase_communication_unknown_resolutions"),
+                            ("017_chase_communications_event_review", "chase_communication_event_reviews"),
+                            ("018_chase_unassigned_sms_review", "chase_communication_unassigned_sources")]:
+            if name == "012_chase_communications_dispatch" and db.execute(
+                "SELECT to_regprocedure('cosmaneura_record_accepted_delivery_attempt(uuid)')"
+            ).fetchone()[0] is None:
+                db.execute((root / "005_accepted_delivery_attempt.up.sql").read_text(), prepare=False)
             if db.execute("SELECT to_regclass(%s)", ("public." + table,)).fetchone()[0] is None:
                 db.execute((root / (name + ".up.sql")).read_text(), prepare=False)
 
@@ -50,12 +59,14 @@ def new_lane():
     suffix = uuid4().hex
     practice, tenant, actor = "comms-" + suffix, str(uuid4()), str(uuid4())
     role, account = "comms_" + suffix[:20], "AC" + suffix
+    password = uuid4().hex  # Disposable role credential, never the owner password.
     with psycopg.connect(DSN) as db:
         db.execute("INSERT INTO practices(practice_id,entra_tenant_id) VALUES (%s,%s)", (practice, tenant))
         db.execute("INSERT INTO users(tenant_id,user_id) VALUES (%s,%s)", (tenant, actor))
         db.execute("""INSERT INTO practice_memberships(practice_id,tenant_id,user_id,roles)
             VALUES (%s,%s,%s,ARRAY['BillingStaff'])""", (practice, tenant, actor))
-        db.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS").format(sql.Identifier(role)))
+        db.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {}").format(
+            sql.Identifier(role), sql.Literal(password)))
         db.execute("INSERT INTO runtime_practice_bindings(role_name,practice_id) VALUES (%s,%s)", (role, practice))
         db.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
         db.execute(sql.SQL("GRANT SELECT,INSERT ON {} TO {}").format(
@@ -64,7 +75,7 @@ def new_lane():
         db.execute(sql.SQL("GRANT SELECT ON chase_items,chase_contact_snapshots,chase_contact_routes TO {}").format(sql.Identifier(role)))
         db.execute(sql.SQL("GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text),cosmaneura_staff_assignee_allowed(uuid,uuid) TO {}").format(sql.Identifier(role)))
     result = SimpleNamespace(practice=practice, tenant=tenant, actor=actor, role=role,
-        account=account, dsn=make_conninfo(DSN, user=role), case="case-a", snapshot=None)
+        account=account, dsn=make_conninfo(DSN, user=role, password=password), case="case-a", snapshot=None)
     result.store = PostgresCommunicationsStore(result.dsn, practice_id=practice)
     result.snapshot = seed_case(result)
     return result
