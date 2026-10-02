@@ -83,7 +83,9 @@ def _context(request, encounter_id):
         # the database/Entra path. Actor authority still comes from middleware.
         tenant = str(uuid5(NAMESPACE_URL, f"cab-local:{tenant}"))
         user = str(uuid5(NAMESPACE_URL, f"cab-local:{principal.user_id}"))
-    actor = HeaderActor(tenant, user, f"{role} {user[:8]}", role)
+    from .auth import CorePrincipal
+    actor = (principal.header_actor() if type(principal) is CorePrincipal
+             else HeaderActor(tenant, user, f"{role} {user[:8]}", role))
     return stored, store, actor
 
 

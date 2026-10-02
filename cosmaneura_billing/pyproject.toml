@@ -19,6 +19,8 @@ vector = ["numpy>=1.24"]
 corpus = ["pandas>=2.0", "pyarrow>=14"]
 # the demo/pilot API service (cosmaneura_billing.api)
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
+# Dedicated Core workload verifier; disabled until separately configured.
+core_bridge = ["pyjwt[crypto]>=2.13,<3", "azure-identity>=1.17,<2"]
 # durable chase / feedback persistence in the practice's PostgreSQL server
 postgres = ["psycopg[binary]>=3.2,<4"]
 # Live billing inference: official OpenAI SDK against Azure OpenAI, authenticated

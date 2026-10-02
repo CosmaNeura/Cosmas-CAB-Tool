@@ -223,6 +223,9 @@ class ModelInputScope:
                     and _digest(source.get("connection")) == _digest(_sources(p)[PROVIDER_SOURCE]))
                 _require(not self._settings.azure_openai_synthetic_only or source["connection"]["dataClass"] == "synthetic")
                 _require(self._provider_source is None or _digest(self._provider_source) == _digest(source))
+                if "coreOperationId" in source:
+                    from .core_bridge import assert_core_model_authority
+                    assert_core_model_authority(source, actor, stored)
                 self._provider_source = source
         except ModelAdmissionError:
             raise
@@ -242,6 +245,9 @@ class ModelInputScope:
     def _request(self, client):
         _require(self._active and self._client is client and client.max_retries == self._retries)
         _require(client._operational_transport_identity() == self._policy.document["azureOpenAI"])
+        if self._provider_source is not None and "coreOperationId" in self._provider_source:
+            from .core_bridge import require_core_generation
+            require_core_generation()
         self._check()
         self._calls += 1
         _require(self._calls <= 2 * (self._retries + 1))
@@ -250,9 +256,9 @@ class ModelInputScope:
 @contextmanager
 def operational_scope(policy, *, settings, stored, actor, context):
     """Only actual Postgres source/member authority may mint a request capability."""
-    from .billing_header import HeaderActor
+    from .billing_header import HeaderActor, CoreHeaderActor
     from .persistence import PostgresContext
-    _require(type(policy) is ModelDataPolicy and type(context) is PostgresContext and type(actor) is HeaderActor)
+    _require(type(policy) is ModelDataPolicy and type(context) is PostgresContext and type(actor) in (HeaderActor, CoreHeaderActor))
     scope = ModelInputScope(_SEAL, policy, settings, stored, actor, context)
     try:
         scope._check()

@@ -286,3 +286,93 @@ class EntraAuthMiddleware:
             )
             return
         await self.app(scope, receive, send)
+
+
+@dataclass(frozen=True, repr=False)
+class CoreWorkloadPolicy:
+    """New CAB audience/caller/role only; no existing user policy is inherited."""
+    tenant_id: str
+    audience: str
+    caller_id: str
+    role: str
+
+    def __post_init__(self):
+        if (str(UUID(self.tenant_id)) != self.tenant_id or str(UUID(self.caller_id)) != self.caller_id
+                or not self.audience or len(self.audience) > 200 or not self.role or len(self.role) > 100
+                or any(ord(c) < 33 or ord(c) > 126 for c in self.audience + self.role)):
+            raise ValueError("invalid Core workload policy")
+
+    @property
+    def issuer(self):
+        return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
+
+
+@dataclass(frozen=True, repr=False)
+class CoreWorkloadPrincipal:
+    tenant_id: str
+    caller_id: str
+    issuer: str
+    audience: str
+    role: str
+    expires_at: int
+
+
+class CoreWorkloadAuthenticator:
+    """Dedicated Entra app-only boundary; never translates a provider session.
+
+    Signing keys are injectable only at explicit local composition. The default
+    resolver uses a tenant-derived Microsoft endpoint, never token jku/x5u.
+    """
+    def __init__(self, policy: CoreWorkloadPolicy, *, signing_key=None):
+        if type(policy) is not CoreWorkloadPolicy:
+            raise ValueError("Core workload policy is required")
+        import jwt
+        self.policy = policy
+        self._keys = jwt.PyJWKClient(
+            f"https://login.microsoftonline.com/{policy.tenant_id}/discovery/v2.0/keys",
+            timeout=3, lifespan=300, cache_keys=False,
+        ) if signing_key is None else None
+        self._signing_key = signing_key
+
+    def authenticate(self, headers):
+        import jwt
+        try:
+            values = [v for k, v in headers if k.lower() == b"authorization"]
+            if len(values) != 1 or not 8 <= len(values[0]) <= 16384:
+                raise ValueError()
+            raw = values[0].decode("ascii")
+            if not raw.startswith("Bearer ") or any(c.isspace() for c in raw[7:]):
+                raise ValueError()
+            token = raw[7:]
+            header = jwt.get_unverified_header(token)
+            if (header.get("alg") != "RS256" or any(k in header for k in ("jku", "x5u", "jwk", "x5c", "crit"))
+                    or type(header.get("kid")) is not str or not 1 <= len(header["kid"]) <= 200):
+                raise ValueError()
+            key = self._signing_key(header["kid"]) if self._signing_key else self._keys.get_signing_key_from_jwt(token).key
+            p = self.policy
+            claims = jwt.decode(token, key, algorithms=["RS256"], audience=p.audience, issuer=p.issuer,
+                options={"require": ["exp", "iat", "nbf", "iss", "aud", "tid", "ver", "idtyp", "azp", "roles"],
+                         "strict_aud": True}, leeway=0)
+            if (claims.get("tid") != p.tenant_id or claims.get("ver") != "2.0" or claims.get("idtyp") != "app"
+                    or claims.get("azp") != p.caller_id or "scp" in claims
+                    or type(claims["roles"]) is not list or not 1 <= len(claims["roles"]) <= 20
+                    or any(type(r) is not str for r in claims["roles"]) or p.role not in claims["roles"]
+                    or any(type(claims[k]) is not int for k in ("exp", "iat", "nbf"))):
+                raise ValueError()
+            return CoreWorkloadPrincipal(p.tenant_id, p.caller_id, p.issuer, p.audience, p.role, claims["exp"])
+        except Exception:
+            raise PrincipalError("Core workload authentication failed") from None
+
+
+@dataclass(frozen=True, repr=False)
+class CorePrincipal(AuthPrincipal):
+    """An explicitly projected internal identity; user_id is not an Entra OID."""
+    issuer: str
+    subject: str
+    projection_id: str
+    mapping_version: int
+
+    def header_actor(self):
+        from .billing_header import CoreHeaderActor
+        return CoreHeaderActor(self.tenant_id, self.user_id, "Core provider", "Provider",
+                               self.issuer, self.subject, self.projection_id, self.mapping_version)
