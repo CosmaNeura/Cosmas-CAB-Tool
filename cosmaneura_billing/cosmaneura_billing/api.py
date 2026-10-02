@@ -984,7 +984,15 @@ def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
     header_source = {}
     if _request_settings(request).billing_header_enabled:
         from .billing_header import source_snapshot
-        header_source = {"headerSource": source_snapshot(stored)}
+        from .source_visit_context import read_source_visit_context
+        header_source = {
+            "headerSource": source_snapshot(stored),
+            "sourceVisitContext": read_source_visit_context(
+                stored, encounter_store=_request_encounter_store(request),
+                provider_store=getattr(request.app.state, "provider_handoff_store", None),
+                athena_store=getattr(getattr(request.app.state, "athena_review_service", None), "store", None),
+            ),
+        }
     return {"id": b.encounter_id, "encounterType": b.encounter_type,
             "encounterVersion": stored.version,
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,

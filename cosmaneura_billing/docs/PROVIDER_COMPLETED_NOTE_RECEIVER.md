@@ -5,7 +5,7 @@ It does not connect a provider host, write to an EHR, or infer on receipt.
 Completion is the authenticated provider's confirmation, not independently
 verified upstream signature status. The clinical note remains unchanged.
 
-Deploy the current sparse 18-rung migration set with the locked migration runner
+Deploy the current sparse 19-rung migration set with the locked migration runner
 and provision its restricted API role. Keep a stable
 `COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY` across durable replicas. Enable intake
 only with both `COSMANEURA_PROVIDER_HANDOFF_ENABLED=true` and
@@ -33,8 +33,9 @@ request identities; explicit null is rejected. Hashes cover exact UTF-8 document
 text, including CRLF. Request completion/version/source identifiers are required.
 
 Receipt generation is `not_started`. Its current headerSource pins the existing
-header endpoint. Provider Azure/model-source admission025 and proof integration
-remain deferred; intake approval cannot disclose the note to a model service.
+header endpoint. Provider model-source025 resolves accepted provenance; a separate closed
+model policy must match its connection/version/class before Azure use. Intake
+approval alone cannot disclose the note to a model service.
 Local fixed synthetic/offline tests exercise the full pipeline and editable
 header. Retain historical source, receipts and headers on rollback; disable intake
 and roll back application code instead of dropping migrations.

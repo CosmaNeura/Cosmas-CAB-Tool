@@ -321,6 +321,10 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
             "provider_source_bindings, provider_source_acceptances TO {}"
         ).format(identifier))
 
+    if conn.execute("SELECT to_regprocedure('public.cosmaneura_provider_model_source(uuid,uuid,text,text)')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION public.cosmaneura_provider_model_source(uuid,uuid,text,text) TO {}"
+        ).format(identifier))
     if conn.execute("SELECT to_regclass('public.athena_case_review_events')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT, INSERT ON athena_case_review_events TO {}").format(identifier))
         conn.execute(sql.SQL(

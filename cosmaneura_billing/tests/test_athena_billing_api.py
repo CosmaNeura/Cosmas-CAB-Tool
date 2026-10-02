@@ -65,7 +65,7 @@ def test_operational_source_denied_without_policy_under_both_synthetic_flag_valu
     assert f.fake.calls == []
 
 
-def test_provider_policy_requires_its_missing_canonical_reader_before_readiness(setup):
+def test_provider_policy_requires_canonical_reader_execute_before_readiness(setup):
     import json
     from cosmaneura_billing.model_admission import parse_policy
     f, client = setup
@@ -77,5 +77,9 @@ def test_provider_policy_requires_its_missing_canonical_reader_before_readiness(
     raw = json.dumps(document)
     client.app.state.model_data_policy = parse_policy(raw)
     client.app.state.settings = replace(f.settings, model_data_policy_json=raw)
+    import psycopg
+    from psycopg import sql
+    with psycopg.connect(f.owner.database_url) as db:
+        db.execute(sql.SQL("REVOKE EXECUTE ON FUNCTION public.cosmaneura_provider_model_source(uuid,uuid,text,text) FROM {}").format(sql.Identifier(f.owner.database_runtime_role)))
     assert client.get("/api/ready").status_code == 503
     assert f.fake.calls == []

@@ -16,8 +16,8 @@ DEPLOYMENT,STORAGE='synthetic-production-runtime','synthetic-local-storage'
 
 def prepare_schema(dsn):
     with psycopg.connect(dsn,autocommit=True) as db:
-        assert db.info.host=='127.0.0.1' and db.info.port==32800 and db.info.dbname.startswith('cab_athena_billing_admission_test_')
-        assert db.execute("SELECT count(*) FROM cosmaneura_schema_migrations").fetchone()[0] == 17
+        assert db.info.host=='127.0.0.1' and db.info.port==32800 and db.info.dbname.startswith(('cab_athena_billing_admission_test_', 'cab_provider_model_test_'))
+        assert db.execute("SELECT count(*) FROM cosmaneura_schema_migrations").fetchone()[0] == 19
         p=PACKAGE/'migrations/023_athena_read_admission.up.sql'
         for name,body in re.findall(r'CREATE(?: OR REPLACE)? FUNCTION public\.(\w+)\(.*?AS \$\$(.*?)\$\$;',p.read_text(),re.S):
             actual=db.execute("SELECT prosrc FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=%s",(name,)).fetchone()

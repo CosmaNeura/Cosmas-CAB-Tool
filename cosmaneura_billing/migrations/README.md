@@ -93,7 +93,7 @@ to remove existing review evidence. No clinical note, claim or EHR is written.
 
 ## Combined local integration
 
-The combined candidate includes the exact canonical `001`–`024` chain.
+The combined candidate includes the exact canonical `001`–`025` chain.
 The scoped API/worker/Athena grants are now available through the reviewed
 provisioner; no live database or setting was changed. The following sections
 retain each independent schema slice’s dependency rationale and rehearsal scope.
@@ -131,8 +131,9 @@ rollback. The combined candidate preserves the original canonical numbering.
 ## Dormant Athena schema integration
 
 The Athena schema slice originally contained `001`–`009`, `011`, `013`,
-`014`, and `019`–`023`. It did not require the separate SMS rungs; they are
-present in this combined local candidate.
+`014`, and `019`–`023`. The provider receiver/model slices add `024`–`025`.
+They do not require the separate SMS rungs; all are present in this combined
+local candidate.
 
 `014_athena_staff_review` creates immutable practice-scoped review receipts,
 current BillingStaff/Admin authorization, same-transaction audit coupling and
@@ -154,14 +155,18 @@ and owner-only admission CLI are now integrated behind
 `COSMANEURA_PROVIDER_HANDOFF_ENABLED` (default false), together with the header
 release control. Only registered exact operations enter storage. Canonical024
 adds optional serviceDate while preserving existing manifests and receipts.
-Provider model-source admission025 remains deferred. Immutable source/receipt
+Canonical025 provides a narrow source-proof reader for a separately configured
+provider model policy; the runtime gets EXECUTE only. The reader checks current
+source, latest admission and revocation without taking encounter/head locks.
+Immutable source/receipt
 guards and the empty admission registry remain intact.
 An ordinary encounter writer cannot manufacture `provider_completed_note`.
 
-These are exact preserved migrations. The runtime provisioner grants only the
-guarded provider writer and registry/receipt reads; private019 remains denied.
-Receiver readiness checks those privileges. Operator registrations and hosted
-activation are separate from this source integration.
+These files are exact preserved migrations. The runtime provisioner composes
+the scoped SMS/Athena grants with the guarded provider writer and registry/receipt
+reads; private019 remains denied. Receiver readiness checks those privileges.
+Operator registrations, source/model permissions, and hosted activation remain
+separate from this source integration.
 Retain expand structures and evidence during code rollback; destructive
 rollback is not the recovery path.
 
