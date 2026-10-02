@@ -518,7 +518,10 @@ def _safe_subject(value: object) -> str:
 
 def _historian_need_supported(text: str) -> bool:
     # Exact history words do not affirm that an independent historian was needed.
-    if ("?" in text or _BAD_ASSERTION.search(text) or _UNFINISHED.search(text)
+    # Past-tense patient inability is not a hypothetical clinician action.
+    current_inability = re.sub(r"\bpatient\s+could not\s+(recall|remember|provide|give)\b",
+                               r"patient was unable to \1", text, flags=re.I)
+    if ("?" in text or _BAD_ASSERTION.search(text) or _UNFINISHED.search(current_inability)
             or _HISTORICAL.search(text) or re.search(r"\b(?:if|unless|false|untrue)\b", text, re.I)):
         return False
     if re.search(
@@ -533,7 +536,7 @@ def _historian_need_supported(text: str) -> bool:
         r"\b(?:confirmatory|conflicting)\s+history\s+(?:(?:is|was)\s+)?(?:needed|required|necessary)\b|"
         r"\b(?:I|we)\s+(?:need|needed|require|required)\s+(?:confirmatory|conflicting)\s+history\b"
     )
-    for _, _, sentence in _sentences(text):
+    for _, _, sentence in _sentences(current_inability):
         for clause in re.split(r";|\bbut\b", sentence, flags=re.I):
             match = re.search(affirmative, clause, re.I)
             if match and not re.search(r"\b(?:no|not|never|without|denies|denied)\b", clause[:match.start()], re.I):
