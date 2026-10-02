@@ -10,6 +10,8 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 import cosmaneura_billing.athena_client as client
+import cosmaneura_billing.athena_card_chase as mapper
+from cosmaneura_billing.athena_staff_contract import AthenaStaffProfile, AthenaStaffScope
 from cosmaneura_billing.athena_card_chase import (
     MAPPING_VERSION,
     SCHEMA_VERSION,
@@ -436,3 +438,94 @@ def test_every_present_field_points_to_its_exact_source_observation():
                 original = original[int(part)] if isinstance(original, list) else original[part]
             assert type(field["value"]) is type(original)
             assert field["value"] == original
+
+
+
+def scoped_context(environment):
+    vendor_practice = "195900" if environment == "preview" else "777001"
+    scope = AthenaStaffScope(
+        AthenaStaffProfile(CONTEXT.server_practice_id, environment, vendor_practice, 1),
+        "invented-case", "invented-patient-ref", CONTEXT.source_patient_id, 1,
+    )
+    return replace(CONTEXT, scope=scope, vendor_practice_id=vendor_practice,
+                   synthetic_only=environment == "preview")
+
+
+def scoped_responses(context, available):
+    if not available:
+        return {"patient_response": None, "insurance_response": None}
+    identity = {"patientid": context.scope.source_patient_id,
+                "practiceid": context.scope.profile.vendor_practice_id}
+    return {
+        "patient_response": encoded([{**PATIENT[0], **identity}]),
+        "insurance_response": encoded({**identity, "insurances": [POLICY], "totalcount": 1}),
+    }
+
+
+@pytest.mark.parametrize("environment", ["preview", "production"])
+@pytest.mark.parametrize("available", [False, True], ids=["unavailable", "populated"])
+@pytest.mark.parametrize("field,value", [
+    ("server_practice_id", "other-practice"),
+    ("vendor_practice_id", "195901"),
+    ("source_patient_id", "60179"),
+])
+def test_supplied_scope_must_match_every_context_identity_before_reads(
+        environment, available, field, value, monkeypatch):
+    context = scoped_context(environment)
+    responses = scoped_responses(context, available)
+
+    def unexpected_decode(*args, **kwargs):
+        pytest.fail("Contradictory context reached optional response parsing")
+
+    monkeypatch.setattr(mapper, "decode_athena_card_read", unexpected_decode)
+    with pytest.raises(AthenaCardChaseError, match="^invalid_context$"):
+        map_athena_card_chase(context=replace(context, **{field: value}), **responses)
+
+
+@pytest.mark.parametrize("available", [False, True], ids=["unavailable", "populated"])
+@pytest.mark.parametrize("invalid_part", ["preview_vendor", "preview_patient", "profile"])
+def test_supplied_preview_scope_is_validated_even_without_responses(available, invalid_part):
+    context = scoped_context("preview")
+    responses = scoped_responses(context, available)
+    if invalid_part == "preview_vendor":
+        scope = replace(context.scope, profile=replace(context.scope.profile, vendor_practice_id="195901"))
+    elif invalid_part == "preview_patient":
+        scope = replace(context.scope, source_patient_id="60185")
+    else:
+        scope = replace(context.scope)
+        object.__setattr__(scope, "profile", None)
+    with pytest.raises(AthenaCardChaseError, match="^invalid_context$"):
+        map_athena_card_chase(context=replace(context, scope=scope), **responses)
+
+
+@pytest.mark.parametrize("environment", ["preview", "production"])
+@pytest.mark.parametrize("available", [False, True], ids=["unavailable", "populated"])
+def test_matching_scope_preserves_environment_and_optional_read_semantics(environment, available):
+    context = scoped_context(environment)
+    responses = scoped_responses(context, available)
+    result = map_athena_card_chase(context=context, **responses).to_review_dict()
+    production = environment == "production"
+    assert result["source"]["system"] == "athena_" + environment
+    assert result["source"]["syntheticOnly"] is not production
+    assert result["source"].get("dataClass") == ("operational" if production else None)
+    assert result["source"]["serverPracticeId"] == context.server_practice_id
+    assert result["source"]["vendorPracticeId"] == context.vendor_practice_id
+    assert result["source"]["patientId"] == context.source_patient_id
+    assert {read["state"] for read in result["reads"].values()} == {
+        "complete" if available else "unavailable"}
+    assert result["applied"] is False
+    assert result["contact"]["outreachAuthorized"] is False
+    if not production:
+        legacy = map_athena_card_chase(context=replace(context, scope=None), **responses)
+        assert result == legacy.to_review_dict()
+
+
+@pytest.mark.parametrize("environment", ["preview", "production"])
+@pytest.mark.parametrize("available", [False, True], ids=["unavailable", "populated"])
+def test_supplied_scope_cannot_reverse_environment_data_class(environment, available):
+    context = scoped_context(environment)
+    with pytest.raises(AthenaCardChaseError, match="^invalid_context$"):
+        map_athena_card_chase(
+            context=replace(context, synthetic_only=not context.synthetic_only),
+            **scoped_responses(context, available),
+        )

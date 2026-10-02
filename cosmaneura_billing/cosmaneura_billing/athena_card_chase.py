@@ -99,14 +99,20 @@ def _context(context: CardChaseReadContext) -> dict:
         raise AthenaCardChaseError("invalid_context")
     if context.scope is not None and type(context.scope) is not AthenaStaffScope:
         raise AthenaCardChaseError("invalid_context")
-    production = context.scope is not None and context.scope.profile.environment == "production"
-    if production:
+    production = False
+    if context.scope is not None:
         try:
-            build_athena_staff_read_url(context.scope,"patient")
-            if (context.synthetic_only is not False or context.scope.profile.server_practice_id != context.server_practice_id
+            build_athena_staff_read_url(context.scope, "patient")
+        except AthenaClientError:
+            raise AthenaCardChaseError("invalid_context") from None
+        if (context.scope.profile.server_practice_id != context.server_practice_id
                 or context.scope.profile.vendor_practice_id != context.vendor_practice_id
-                or context.scope.source_patient_id != context.source_patient_id): raise AthenaCardChaseError("invalid_context")
-        except AthenaClientError: raise AthenaCardChaseError("invalid_context") from None
+                or context.scope.source_patient_id != context.source_patient_id):
+            raise AthenaCardChaseError("invalid_context")
+        production = context.scope.profile.environment == "production"
+    if production:
+        if context.synthetic_only is not False:
+            raise AthenaCardChaseError("invalid_context")
     elif (context.synthetic_only is not True
             or context.vendor_practice_id != ATHENA_PREVIEW_PRACTICE_ID
             or not isinstance(context.source_patient_id, str)
