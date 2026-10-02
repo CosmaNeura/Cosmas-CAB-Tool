@@ -1,43 +1,21 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Check, X, Pencil, Plus, Clock, ChevronDown, Info, Send, RefreshCw } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle, Check, ChevronDown, Clock, FileCheck2, Info,
+  Pencil, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, X,
+} from "lucide-react";
+
 import { api } from "./api.js";
+import {
+  buildFeedbackPayload, canPrepareCoderPreview, capturedRecommendations, coderErrorMessage,
+  coderQueueState, excludedRecommendations, initialCoderDraft,
+  reviewableCoderView, UNREVIEWED, validateCoderDraft,
+} from "./coderReview.js";
+import ProviderQueue from "./ProviderQueue.jsx";
+import {
+  completenessLabel, isSyntheticDemoEncounter, sourceLabel,
+} from "./providerBilling.js";
 
-/*
-  Coder review & feedback, wired to the live engine:
-    POST /api/encounters/coder-view -> the pre-coded claim with evidence
-    POST /api/feedback              -> the coder's durable decisions
-  Offline (`live` false) it falls back to the demo claim so the flow stays
-  walkable.
-*/
-
-const FALLBACK_ENGINE = {
-  encounterId: "ENC-100237",
-  engineVersion: "offline-demo",
-  submittedEm: "99213",
-  coderId: "coder_A",
-  em: {
-    code: "99214", label: "Office visit, established · moderate MDM",
-    why: "Moderate MDM: an undiagnosed problem with uncertain prognosis (problems) plus the decision to refer for diagnostic colonoscopy (risk) meets 2 of 3 at the moderate level.",
-    evidence: "refer you for a colonoscopy to be safe",
-  },
-  dx: [
-    { id: "k625", code: "K62.5", label: "Hemorrhage of anus and rectum", primary: true,
-      why: "Documented hematochezia; mapped via CCSR to the rectal-hemorrhage code.", evidence: "When I eat spicy food, I poop blood" },
-    { id: "k5900", code: "K59.00", label: "Constipation, unspecified",
-      why: "Constipation documented in the HPI and addressed in the plan.", evidence: "Sometimes when I have constipation" },
-    { id: "r197", code: "R19.7", label: "Diarrhea, unspecified",
-      why: "Diarrhea documented in the history.", evidence: "I do have diarrhea often" },
-  ],
-  withheld: [
-    { id: "e668", code: "E66.8", label: "Other obesity", status: "held",
-      why: "BMI 37.6 is in the vitals but obesity isn't addressed in the plan — the engine HELD it.", evidence: "weigh 255 pounds" },
-    { id: "z800", code: "Z80.0", label: "Family history of digestive cancer", status: "rejected",
-      why: "The patient explicitly denied family history, so the engine REJECTED this as contradicted.", evidence: "I do not have a family history of colon cancer" },
-  ],
-};
-
-const EM_OPTIONS = ["99212", "99213", "99214", "99215"];
-const REASONS = {
+const REASONS = Object.freeze({
   EM: [
     ["em_doc_supports_higher_level", "Documentation supports a higher level"],
     ["em_doc_supports_lower_level", "Documentation supports a lower level"],
@@ -49,288 +27,456 @@ const REASONS = {
     ["dx_not_supported_by_doc", "Not supported by documentation"],
     ["dx_contradicted_by_doc", "Contradicted by documentation"],
     ["dx_needs_more_specific_code", "Needs a more specific code"],
-    ["dx_primary_secondary_swap", "Wrong primary/secondary"],
+    ["dx_primary_secondary_swap", "Wrong primary / secondary order"],
     ["other", "Other"],
   ],
-  ADD: [["dx_missed_by_engine", "Engine missed this code"]],
-};
+  PROCEDURE: [
+    ["procedure_bundling_ncci", "Procedure bundling concern"],
+    ["medical_necessity_coverage", "Medical necessity or coverage concern"],
+    ["other", "Other"],
+  ],
+  MODIFIER: [
+    ["modifier_required", "Modifier correction required"],
+    ["procedure_bundling_ncci", "Procedure bundling concern"],
+    ["other", "Other"],
+  ],
+});
 
-function Pill({ tone, children }) {
+const MANUAL_KINDS = Object.freeze([
+  ["ICD10", "ICD-10-CM"],
+  ["PROCEDURE", "Procedure"],
+  ["MODIFIER", "Modifier"],
+]);
+const NOOP = () => {};
+
+function Pill({ tone = "bg-slate-100 text-slate-700 ring-slate-200", children }) {
   return <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>{children}</span>;
 }
 
-function Why({ text, evidence, history }) {
-  const [open, setOpen] = useState(false);
+function ErrorNotice({ children }) {
+  return <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">{children}</div>;
+}
+
+function Why({ row }) {
+  const spans = (row.evidenceSpans || [
+    { source: "documentation", text: row.evidence, loc: null },
+  ]).filter((span) => span?.text?.trim());
   return (
-    <div className="mt-1">
-      {history && (
-        <p className="mb-1 inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-0.5 text-xs text-violet-700 ring-1 ring-inset ring-violet-200">
-          <Info size={11} /> {history}
-        </p>
-      )}
-      <div>
-        <button onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs text-sky-700 hover:underline">
-          <Info size={12} /> Why this code <ChevronDown size={12} className={open ? "rotate-180 transition" : "transition"} />
-        </button>
-        {open && (
-          <div className="mt-1 rounded-lg bg-sky-50 p-2.5 text-xs leading-relaxed text-slate-600">
-            {text}
-            {evidence && <div className="mt-1 italic text-slate-500">Documentation: “{evidence}”</div>}
+    <details className="group mt-2 rounded-lg border border-slate-200 bg-slate-50">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-sky-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+        <Info size={13} aria-hidden="true" />Why this code
+        <ChevronDown size={13} className="transition group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="space-y-2 border-t border-slate-200 px-3 py-2 text-xs leading-relaxed text-slate-700">
+        <p>{row.why || "No additional engine rationale was returned."}</p>
+        {spans.map((span, index) => (
+          <blockquote key={`${span.source}-${span.loc?.start ?? index}`} className="border-l-2 border-sky-200 pl-2 italic">
+            “{span.text}” <span className="not-italic text-slate-500">— {String(span.source || "documentation").replaceAll("_", " ")}{Number.isInteger(span.loc?.start) ? `, characters ${span.loc.start}–${span.loc.end}` : ""}</span>
+          </blockquote>
+        ))}
+        {row.history && <p className="rounded-md bg-violet-50 px-2 py-1 text-violet-800">Prior reviewer pattern: {row.history}</p>}
+      </div>
+    </details>
+  );
+}
+
+function DecisionButton({ active, tone, disabled, onClick, children }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={onClick}
+      className={`inline-flex min-h-10 items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50 ${active ? tone : "text-slate-600 hover:bg-slate-100"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ReasonSelect({ id, kind, value, disabled, invalid, describedBy, onChange, label }) {
+  return (
+    <label htmlFor={id} className="grid gap-1 text-xs font-medium text-slate-700">
+      {label}
+      <select id={id} required disabled={disabled} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-h-10 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800 disabled:bg-slate-100">
+        <option value="" disabled>Choose a reason</option>
+        {(REASONS[kind] || REASONS.ICD10).map(([reason, text]) => <option key={reason} value={reason}>{text}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function RowIssues({ id, issues }) {
+  if (!issues.length) return null;
+  return <ul id={id} className="mt-2 list-disc space-y-1 pl-5 text-xs text-rose-800">{issues.map((message) => <li key={message}>{message}</li>)}</ul>;
+}
+
+function CodeRow({ item, decision, disabled, issues, onChange }) {
+  const { key, kind, row } = item;
+  const prefix = `coder-${key.replaceAll(":", "-")}`;
+  const errorId = `${prefix}-errors`;
+  const invalid = issues.length > 0;
+  return (
+    <fieldset aria-describedby={invalid ? errorId : undefined} className="border-t border-slate-200 py-4">
+      <legend className="sr-only">Review {row.code}</legend>
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="font-mono text-sm font-semibold text-slate-950">{row.code}</code>
+            {row.primary && <Pill tone="bg-sky-50 text-sky-800 ring-sky-200">primary</Pill>}
+            <Pill tone={decision.action === UNREVIEWED ? "bg-amber-50 text-amber-800 ring-amber-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>{decision.action}</Pill>
           </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const seg = (active, tone) =>
-  `inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition ${active ? tone : "text-slate-500 hover:bg-slate-100"}`;
-
-function CodeRow({ row, kind, decision, set }) {
-  const a = decision.action;
-  return (
-    <div className="border-t border-slate-100 py-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <code className="w-16 font-mono text-sm text-slate-900">{a === "modify" && decision.final ? decision.final : row.code}</code>
-        <span className="flex-1 text-sm text-slate-700">{row.label}{row.primary && <span className="ml-2"><Pill tone="bg-sky-50 text-sky-700 ring-sky-200">primary</Pill></span>}</span>
-        <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-0.5">
-          <button onClick={() => set({ action: "accept", final: row.code, reason: null })} className={seg(a === "accept", "bg-emerald-100 text-emerald-700")}><Check size={13} />Accept</button>
-          <button onClick={() => set({ action: "modify", final: a === "modify" ? decision.final : row.code })} className={seg(a === "modify", "bg-amber-100 text-amber-700")}><Pencil size={13} />Edit</button>
-          <button onClick={() => set({ action: "reject", final: null })} className={seg(a === "reject", "bg-red-100 text-red-700")}><X size={13} />Reject</button>
+          <p className="mt-1 text-sm text-slate-700">{row.label}</p>
+          <Why row={row} />
+        </div>
+        <div role="group" aria-label={`Decision for ${row.code}`} aria-invalid={invalid || undefined} className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-50 p-1">
+          <DecisionButton active={decision.action === "accept"} tone="bg-emerald-100 text-emerald-800" disabled={disabled} onClick={() => onChange({ action: "accept", finalCode: row.code, reasonCode: "", rationale: "" })}><Check size={13} aria-hidden="true" />Accept</DecisionButton>
+          <DecisionButton active={decision.action === "modify"} tone="bg-amber-100 text-amber-900" disabled={disabled} onClick={() => onChange({ action: "modify", finalCode: "", reasonCode: "", rationale: "" })}><Pencil size={13} aria-hidden="true" />Edit</DecisionButton>
+          <DecisionButton active={decision.action === "reject"} tone="bg-rose-100 text-rose-900" disabled={disabled} onClick={() => onChange({ action: "reject", finalCode: "", reasonCode: "", rationale: "" })}><X size={13} aria-hidden="true" />Reject</DecisionButton>
         </div>
       </div>
-      <Why text={row.why} evidence={row.evidence} history={row.history} />
-      {a === "modify" && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 pl-16">
-          {kind === "EM" ? (
-            <select value={decision.final || row.code} onChange={(e) => set({ ...decision, action: "modify", final: e.target.value })}
-              className="rounded-md border border-slate-300 px-2 py-1 text-sm">
-              {EM_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          ) : (
-            <input value={decision.final || ""} onChange={(e) => set({ ...decision, action: "modify", final: e.target.value })}
-              placeholder="corrected code" className="w-32 rounded-md border border-slate-300 px-2 py-1 text-sm font-mono" />
-          )}
-          <ReasonSelect kind={kind} value={decision.reason} onChange={(r) => set({ ...decision, action: "modify", reason: r })} />
+      {decision.action === "modify" && (
+        <div className="mt-3 grid gap-3 rounded-xl bg-amber-50 p-3 md:grid-cols-2">
+          <label htmlFor={`${prefix}-code`} className="grid gap-1 text-xs font-medium text-amber-950">Corrected code
+            <input id={`${prefix}-code`} required maxLength={32} disabled={disabled} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} value={decision.finalCode} onChange={(event) => onChange({ ...decision, finalCode: event.target.value })} className="min-h-10 rounded-md border border-amber-300 bg-white px-2 py-1 font-mono text-sm text-slate-900" />
+          </label>
+          <ReasonSelect id={`${prefix}-reason`} kind={kind} value={decision.reasonCode} disabled={disabled} invalid={invalid} describedBy={invalid ? errorId : undefined} onChange={(reasonCode) => onChange({ ...decision, reasonCode })} label="Edit reason" />
+          <label htmlFor={`${prefix}-rationale`} className="grid gap-1 text-xs font-medium text-amber-950 md:col-span-2">Coder rationale
+            <textarea id={`${prefix}-rationale`} required maxLength={3900} disabled={disabled} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} value={decision.rationale} onChange={(event) => onChange({ ...decision, rationale: event.target.value })} rows={2} className="rounded-md border border-amber-300 bg-white px-2 py-1 text-sm text-slate-900" />
+          </label>
         </div>
       )}
-      {a === "reject" && (
-        <div className="mt-2 pl-16">
-          <ReasonSelect kind={kind} value={decision.reason} onChange={(r) => set({ ...decision, action: "reject", reason: r })} />
+      {decision.action === "reject" && (
+        <div className="mt-3 grid gap-3 rounded-xl bg-rose-50 p-3 md:grid-cols-2">
+          <ReasonSelect id={`${prefix}-reason`} kind={kind} value={decision.reasonCode} disabled={disabled} invalid={invalid} describedBy={invalid ? errorId : undefined} onChange={(reasonCode) => onChange({ ...decision, reasonCode })} label="Rejection reason" />
+          <label htmlFor={`${prefix}-rationale`} className="grid gap-1 text-xs font-medium text-rose-950">Coder rationale
+            <textarea id={`${prefix}-rationale`} required maxLength={3900} disabled={disabled} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} value={decision.rationale} onChange={(event) => onChange({ ...decision, rationale: event.target.value })} rows={2} className="rounded-md border border-rose-300 bg-white px-2 py-1 text-sm text-slate-900" />
+          </label>
         </div>
       )}
-    </div>
+      <RowIssues id={errorId} issues={issues} />
+    </fieldset>
   );
 }
 
-function ReasonSelect({ kind, value, onChange }) {
+function ExcludedRow({ item, disabled, added, onStartManualAddition }) {
+  const { row } = item;
+  const canAdd = row.kind !== "EM";
   return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700">
-      <option value="" disabled>reason…</option>
-      {(REASONS[kind] || REASONS.ICD10).map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-    </select>
+    <article className="border-t border-slate-200 py-4">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2"><code className="font-mono text-sm font-semibold text-slate-950">{row.code}</code><Pill tone={row.status === "held" ? "bg-amber-50 text-amber-800 ring-amber-200" : "bg-rose-50 text-rose-800 ring-rose-200"}>engine {row.status}</Pill><Pill>read-only exclusion</Pill></div>
+          <p className="mt-1 text-sm text-slate-700">{row.label}</p>
+          <Why row={row} />
+        </div>
+        {canAdd && <button type="button" disabled={disabled || added} onClick={onStartManualAddition} className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"><Plus size={14} aria-hidden="true" />{added ? "Manual review started" : "Review as manual addition"}</button>}
+      </div>
+      <p className="mt-2 text-xs text-slate-600">This held/removed row is not converted into feedback automatically. Adding it requires a separate human-authored rationale and evidence record below.</p>
+    </article>
   );
 }
 
-export default function CoderReview({ encounterId, live }) {
+function PreparedPreview({ payload, engine, receipt, onRetry, saving }) {
+  if (!payload) return null;
+  const prepared = canPrepareCoderPreview(engine);
+  return (
+    <section className="rounded-2xl border border-violet-200 bg-violet-50 p-5 shadow-sm" aria-labelledby="prepared-preview-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 id="prepared-preview-heading" className="flex items-center gap-2 font-semibold text-violet-950"><FileCheck2 size={18} aria-hidden="true" />{prepared ? "Prepared draft — not transmitted" : "Coder decisions — completeness unresolved"}</h2><p className="mt-1 text-sm text-violet-900">{prepared ? "This human-readable preview is assembled from the coder’s decisions." : "These decisions can be recorded for review. Documentation completeness has not passed, so no prepared draft is produced."} The feedback endpoint records the review; a server-owned versioned packet is a separate future slice.</p></div>
+        <Pill tone="bg-white text-violet-900 ring-violet-300">{prepared ? "prepared_not_transmitted" : "Completeness unresolved"}</Pill>
+      </div>
+      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        <div><dt className="text-xs uppercase tracking-wide text-violet-700">Encounter</dt><dd className="mt-1 font-mono">{payload.encounter_id}</dd></div>
+        <div><dt className="text-xs uppercase tracking-wide text-violet-700">Encounter version</dt><dd className="mt-1">{payload.encounter_version}</dd></div>
+        <div><dt className="text-xs uppercase tracking-wide text-violet-700">Engine</dt><dd className="mt-1 break-words font-mono text-xs">{engine.engineVersion || "Not reported"}</dd></div>
+        <div><dt className="text-xs uppercase tracking-wide text-violet-700">Review ID</dt><dd className="mt-1 break-all font-mono text-xs">{payload.review_id}</dd></div>
+        <div><dt className="text-xs uppercase tracking-wide text-violet-700">Review time</dt><dd className="mt-1">{payload.time_spent_seconds}s</dd></div>
+        <div><dt className="text-xs uppercase tracking-wide text-violet-700">Completeness</dt><dd className="mt-1">{completenessLabel(engine.completeness)}</dd></div>
+      </dl>
+      <h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-violet-800">Human decisions</h3>
+      <ul className="mt-2 space-y-2 text-sm text-violet-950">
+        {payload.decisions.map((decision, index) => (
+          <li key={`${decision.kind}-${decision.engine_code || "added"}-${decision.final_code || "removed"}-${index}`} className="rounded-lg bg-white/70 px-3 py-2">
+            <strong>{decision.engine_code == null ? "Human-added" : "Engine suggestion"}</strong> · {decision.kind} · <code className="font-mono">{decision.engine_code || decision.final_code}</code> · {decision.action}{decision.final_code && decision.final_code !== decision.engine_code ? <> → <code className="font-mono">{decision.final_code}</code></> : null}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-4 text-sm font-semibold text-violet-950">No claim, EHR update, Athena write, clearinghouse request, or payer transmission occurred.</p>
+      {receipt && (
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950" role="status" aria-live="polite">
+          <p className="flex items-center gap-2 font-semibold"><Check size={17} aria-hidden="true" />Review recorded · {receipt.replayed ? "exact replay confirmed" : "first write confirmed"}</p>
+          <p className="mt-1 text-sm">The server acknowledged review <code className="font-mono text-xs">{receipt.reviewId}</code>. This receipt confirms coder feedback only, not a submitted claim or a durable billing packet.</p>
+        </div>
+      )}
+      {receipt && <button type="button" disabled={saving} onClick={onRetry} className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-950 hover:bg-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-800 disabled:opacity-60"><RotateCcw size={15} aria-hidden="true" />{saving ? "Verifying…" : "Verify exact replay"}</button>}
+    </section>
+  );
+}
+
+export default function CoderReview({
+  encounterId, encounters = [], live, statuses = {}, onSelect = NOOP,
+  onStatusChange = NOOP, onNavigationLockChange = NOOP,
+}) {
   const [engine, setEngine] = useState(null);
-  const [dec, setDec] = useState({});
-  const [withheld, setWithheld] = useState({});
-  const [added, setAdded] = useState([]);
+  const [decisions, setDecisions] = useState({});
+  const [additions, setAdditions] = useState([]);
   const [seconds, setSeconds] = useState(0);
-  const [done, setDone] = useState(null);
-  const [error, setError] = useState(null);
+  const [receipt, setReceipt] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const [saveErrorStatus, setSaveErrorStatus] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [showValidation, setShowValidation] = useState(false);
+  const [frozen, setFrozen] = useState(false);
+  const loadRequest = useRef(0);
+  const saveRequest = useRef(0);
+  const saveAbort = useRef(null);
+  const savingRef = useRef(false);
   const reviewId = useRef(null);
   const pendingPayload = useRef(null);
+  const validationRef = useRef(null);
+  const receiptRef = useRef(null);
+  const activeLoadEncounter = useRef(null);
 
-  // load the pre-coded claim for this encounter
   useEffect(() => {
-    setEngine(null); setDone(null); setError(null); setAdded([]); setSeconds(0);
-    pendingPayload.current = null;
-    if (!encounterId) { reviewId.current = null; return; }
-    // P3 DATA SEAM: one stable retry key per loaded review draft. Keep it until
-    // the server acknowledges the submission so response loss cannot double
-    // count a preference signal.
-    reviewId.current = globalThis.crypto.randomUUID();
-    (async () => {
-      let eng = live ? null : FALLBACK_ENGINE;
-      if (live) {
-        try {
-          eng = await api("/api/encounters/coder-view", {
-            method: "POST",
-            body: { encounterId },
-          });
-        } catch (e) {
-          setError(`could not load coder view: ${e.message}`);
-        }
+    const requestId = ++loadRequest.current;
+    ++saveRequest.current;
+    saveAbort.current?.abort();
+    const controller = new AbortController();
+    setEngine(null); setDecisions({}); setAdditions([]); setSeconds(0);
+    setReceipt(null); setLoadError(null); setSaveError(null); setSaveErrorStatus(null);
+    setSaving(false); setShowValidation(false); setFrozen(false);
+    onNavigationLockChange(false);
+    savingRef.current = false;
+    pendingPayload.current = null; reviewId.current = null;
+    const cancelRequests = () => {
+      if (loadRequest.current === requestId) ++loadRequest.current;
+      controller.abort();
+      saveAbort.current?.abort();
+      ++saveRequest.current;
+      if (activeLoadEncounter.current === encounterId) {
+        onStatusChange(encounterId, { processingStatus: "Coder review canceled" });
+        activeLoadEncounter.current = null;
       }
-      if (!eng) return;
-      const init = {};
-      if (eng.em) init.em = { action: "accept", final: eng.em.code, reason: null };
-      (eng.dx || []).forEach((r) => { init[r.id] = { action: "accept", final: r.code, reason: null }; });
-      setDec(init);
-      setWithheld(Object.fromEntries((eng.withheld || []).map((w) => [w.id, { bill: false, reason: null }])));
-      setEngine(eng);
-    })();
-  }, [encounterId, live]);
-
-  useEffect(() => { const t = setInterval(() => setSeconds((s) => s + 1), 1000); return () => clearInterval(t); }, []);
-
-  if (!engine) {
-    if (!encounterId) return null;
-    // UI SEAM (P2): never turn an expired/denied session into a mock claim.
-    if (error) return <p>{error}</p>;
-    return (
-      <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
-        <RefreshCw size={16} className="animate-spin" /> Pre-coding encounter {encounterId}…
-      </div>
-    );
-  }
-
-  // UI SEAM (2026-08-17): the engine reports `degraded` when a run wasn't a real
-  // coding attempt — today that means the offline demo model doesn't cover this
-  // encounter. Without this the reviewer sees an empty claim and concludes the
-  // engine is broken. Deliberately unstyled beyond the minimum; restyle freely,
-  // but keep the reason visible whenever `engine.degraded` is set.
-  if (engine.degraded) {
-    return (
-      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-        <p className="text-sm font-medium text-amber-900">No codes proposed for this encounter</p>
-        <p className="mt-1 text-sm leading-relaxed text-amber-800">{engine.degraded.detail}</p>
-        <p className="mt-2 text-xs text-amber-700">
-          Encounter {engine.encounterId} · {engine.inferenceMode} mode
-          {engine.inferenceModel ? ` (${engine.inferenceModel})` : ""}
-        </p>
-        <p className="mt-2 text-xs text-amber-700">
-          No claim suggestions or feedback actions are shown for this degraded run.
-        </p>
-      </div>
-    );
-  }
-
-  const set = (key, val) => setDec((d) => ({ ...d, [key]: val }));
-  const captured = [
-    ...(engine.em ? [{ k: "EM", id: "em", row: engine.em }] : []),
-    ...(engine.dx || []).map((r) => ({ k: "ICD10", id: r.id, row: r })),
-  ];
-  const agreed = captured.filter(({ id }) => dec[id]?.action === "accept").length;
-
-  const submit = async () => {
-    if (pendingPayload.current) {
-      try {
-        const r = await api("/api/feedback", { method: "POST", body: pendingPayload.current });
-        setDone({ ...pendingPayload.current, _replayed: r.replayed });
-      } catch (e) {
-        setError(`feedback submit failed: ${e.message}`);
-      }
-      return;
-    }
-    const decisions = [];
-    if (engine.em) decisions.push({ kind: "EM", engine_code: engine.em.code, action: dec.em.action, final_code: dec.em.final, reason_code: dec.em.reason, note: "" });
-    (engine.dx || []).forEach((r) => { const d = dec[r.id]; decisions.push({ kind: "ICD10", engine_code: r.code, action: d.action, final_code: d.final, reason_code: d.reason, note: "" }); });
-    (engine.withheld || []).forEach((w) => {
-      const s = withheld[w.id];
-      if (s?.bill) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: w.code, reason_code: s.reason || "dx_missed_by_engine", note: `coder billed engine-${w.status} code` });
-      else decisions.push({ kind: "ICD10", engine_code: w.code, action: "reject", final_code: null, reason_code: "other", note: `confirmed not billed (engine ${w.status})` });
-    });
-    added.forEach((a) => { if (a.code) decisions.push({ kind: "ICD10", engine_code: null, action: "add", final_code: a.code, reason_code: "dx_missed_by_engine", note: a.note || "" }); });
-    const payload = {
-      review_id: reviewId.current, encounter_id: engine.encounterId,
-      review_context: engine.reviewContext,
-      encounter_version: engine.encounterVersion || 1,
-      submitted_em: engine.submittedEm, engine_em: engine.em?.code || null, final_em: dec.em?.final || null,
-      decisions, time_spent_seconds: seconds, overall_note: "",
     };
-    if (live) {
-      // Freeze the exact first payload. A response-lost retry must reuse both
-      // the UUID and timer value or the server correctly treats it as a conflict.
-      pendingPayload.current = payload;
+    if (!encounterId) return cancelRequests;
+    if (!live) {
+      setLoadError({ encounterId, message: "The coder service is unavailable. No browser fallback or canned result was loaded." });
+      onStatusChange(encounterId, { processingStatus: "Service unavailable", reviewState: "Needs review" });
+      return cancelRequests;
+    }
+    activeLoadEncounter.current = encounterId;
+    onStatusChange(encounterId, { processingStatus: "Loading coder review", reviewState: "Needs review" });
+    (async () => {
       try {
-        const r = await api("/api/feedback", { method: "POST", body: payload });
-        setDone({ ...payload, _replayed: r.replayed });
-      } catch (e) {
-        setError(`feedback submit failed: ${e.message}`);
+        const response = await api("/api/encounters/coder-view", {
+          method: "POST", body: { encounterId }, signal: controller.signal,
+        });
+        if (requestId !== loadRequest.current) return;
+        const listed = encounters.find((item) => item.id === encounterId);
+        if (response.encounterId !== encounterId) throw new Error("encounter-mismatch-response");
+        if (!listed || !isSyntheticDemoEncounter(response) || response.dataClass !== listed.dataClass) throw new Error("synthetic-boundary-response");
+        if (!Number.isInteger(response.encounterVersion) || !response.reviewContext || !response.completeness) throw new Error("incomplete-review-context");
+        const reviewable = reviewableCoderView(response);
+        if (reviewable.contractViolations > 0) throw new Error("evidence-contract-response");
+        const initial = initialCoderDraft(reviewable);
+        reviewId.current = globalThis.crypto.randomUUID();
+        setDecisions(initial.decisions);
+        setEngine(reviewable);
+        onStatusChange(encounterId, {
+          completenessState: completenessLabel(reviewable.completeness),
+          processingStatus: reviewable.degraded ? "Inference unavailable" : "Ready for coder decisions",
+          reviewState: reviewable.degraded ? "Awaiting provider clarification" : "Needs review",
+        });
+        activeLoadEncounter.current = null;
+      } catch (error) {
+        if (error?.name === "AbortError" || requestId !== loadRequest.current) return;
+        setLoadError({ encounterId, message: coderErrorMessage(error, "load") });
+        onStatusChange(encounterId, { processingStatus: "Coder load failed", reviewState: "Needs review" });
+        activeLoadEncounter.current = null;
       }
-    } else {
-      setDone(payload);
+    })();
+    return cancelRequests;
+  }, [encounterId, live, encounters, onStatusChange, onNavigationLockChange]);
+
+  useEffect(() => {
+    if (!engine || engine.degraded || receipt) return undefined;
+    const timer = globalThis.setInterval(() => setSeconds((value) => value + 1), 1000);
+    return () => globalThis.clearInterval(timer);
+  }, [engine, receipt]);
+
+  const validation = useMemo(
+    () => validateCoderDraft(engine, decisions, additions),
+    [engine, decisions, additions],
+  );
+  const queueState = coderQueueState({ engine, draftValid: validation.valid, saved: Boolean(receipt) });
+
+  useEffect(() => {
+    if (encounterId && engine?.encounterId === encounterId) {
+      onStatusChange(encounterId, { reviewState: queueState });
+    }
+  }, [encounterId, engine, queueState, onStatusChange]);
+
+  useEffect(() => {
+    if (receipt) receiptRef.current?.focus();
+  }, [receipt]);
+
+  useEffect(() => {
+    if (!frozen || receipt) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    globalThis.addEventListener("beforeunload", warnBeforeUnload);
+    return () => globalThis.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [frozen, receipt]);
+
+  const captured = capturedRecommendations(engine);
+  const excluded = excludedRecommendations(engine);
+  const issuesFor = (key) => validation.issues.filter((item) => item.key === key).map((item) => item.message);
+  const updateDecision = (key, value) => setDecisions((current) => ({ ...current, [key]: value }));
+  const startManualAddition = (item) => setAdditions((current) => (
+    current.some((addition) => addition.sourceKey === item.key)
+      ? current
+      : [...current, {
+        id: globalThis.crypto.randomUUID(), sourceKey: item.key,
+        sourceDisposition: item.row.status, kind: item.row.kind,
+        code: item.row.code, rationale: "", evidence: "",
+      }]
+  ));
+
+  const draftPayload = engine && validation.valid && reviewId.current
+    ? buildFeedbackPayload({ engine, decisions, additions, reviewId: reviewId.current, seconds })
+    : null;
+  const visiblePayload = pendingPayload.current || draftPayload;
+
+  const saveReview = async () => {
+    if (!engine || savingRef.current) return;
+    const verifyingReplay = Boolean(receipt);
+    if (!pendingPayload.current) {
+      if (!validation.valid) {
+        setShowValidation(true);
+        globalThis.requestAnimationFrame(() => validationRef.current?.focus());
+        return;
+      }
+      pendingPayload.current = buildFeedbackPayload({
+        engine, decisions, additions, reviewId: reviewId.current, seconds,
+      });
+      setFrozen(true);
+      onNavigationLockChange(true);
+    }
+    const payload = pendingPayload.current;
+    const requestId = ++saveRequest.current;
+    const controller = new AbortController();
+    saveAbort.current?.abort();
+    saveAbort.current = controller;
+    savingRef.current = true;
+    setSaving(true); setSaveError(null); setSaveErrorStatus(null);
+    onStatusChange(encounterId, { processingStatus: "Saving coder review" });
+    try {
+      const response = await api("/api/feedback", { method: "POST", body: payload, signal: controller.signal });
+      if (requestId !== saveRequest.current || encounterId !== payload.encounter_id) return;
+      if (response.ok !== true || response.reviewId !== payload.review_id || typeof response.replayed !== "boolean") throw new Error("invalid-feedback-receipt");
+      setReceipt({ ...response, payload });
+      onNavigationLockChange(false);
+      onStatusChange(encounterId, { processingStatus: response.replayed ? "Exact replay confirmed" : "Review recorded", reviewState: coderQueueState({ engine, draftValid: true, saved: true }) });
+    } catch (error) {
+      if (error?.name === "AbortError" || requestId !== saveRequest.current) return;
+      setSaveError(coderErrorMessage(error, verifyingReplay ? "verify" : "save"));
+      setSaveErrorStatus(error?.status || null);
+      onStatusChange(encounterId, {
+        processingStatus: verifyingReplay ? "Replay verification unavailable" : "Save failed",
+        ...(verifyingReplay ? { reviewState: coderQueueState({ engine, draftValid: true, saved: true }) } : {}),
+      });
+      if (!verifyingReplay && error?.status === 422) {
+        pendingPayload.current = null;
+        setFrozen(false);
+        onNavigationLockChange(false);
+      }
+    } finally {
+      if (requestId === saveRequest.current) {
+        savingRef.current = false;
+        setSaving(false);
+      }
     }
   };
 
+  const reloadAfterDefinitiveFailure = () => {
+    pendingPayload.current = null;
+    setFrozen(false);
+    onNavigationLockChange(false);
+    globalThis.location.reload();
+  };
+
   return (
-    <div className="mx-auto max-w-3xl">
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-slate-900">Suggested claim · {engine.encounterId}</p>
-            <p className="text-xs text-slate-500">You're in control — the engine pre-coded this from the documentation. Review, correct, submit.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">
-              {engine.submittedEm && <>submitted <code className="font-mono">{engine.submittedEm}</code> · </>}
-              engine <code className="font-mono">{engine.em?.code || "—"}</code>
-            </span>
-            <Pill tone="bg-slate-100 text-slate-600 ring-slate-300"><Clock size={12} className="mr-1" />{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</Pill>
-          </div>
-        </div>
+    <div className="space-y-5">
+      <ProviderQueue encounters={encounters} selectedId={encounterId} statuses={statuses} onSelect={onSelect} selectionDisabled={frozen && !receipt} title="Coder work queue" description="Choose a visit, make an explicit decision for every recommendation, then record the review." />
 
-        {error && <p className="mt-3 rounded-lg bg-red-50 p-2.5 text-sm text-red-700">{error}</p>}
+      {!encounterId ? (
+        <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-7 text-center"><FileCheck2 size={26} className="mx-auto text-slate-500" aria-hidden="true" /><h2 className="mt-2 font-semibold text-slate-950">Choose an encounter for coder review</h2><p className="mt-1 text-sm text-slate-600">No recommendation is accepted until a coder makes an explicit decision.</p></section>
+      ) : loadError?.encounterId === encounterId ? <ErrorNotice>{loadError.message}</ErrorNotice> : !engine || engine.encounterId !== encounterId ? (
+        <p role="status" className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm"><RefreshCw size={16} className="animate-spin" aria-hidden="true" />Loading evidence-linked coder review…</p>
+      ) : engine.degraded ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950 shadow-sm"><div className="flex gap-3"><AlertTriangle size={20} className="mt-0.5 shrink-0" aria-hidden="true" /><div><h2 className="font-semibold">No codes proposed for this encounter</h2><p className="mt-1 text-sm">{engine.degraded.detail}</p><p className="mt-2 text-sm">No code recommendations, prepared draft, or feedback actions are shown. Route this encounter to manual review.</p></div></div></section>
+      ) : (
+        <>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="coder-review-heading">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><h1 id="coder-review-heading" className="text-lg font-semibold text-slate-950">Coder review · {engine.encounterId}</h1><p className="mt-1 text-sm text-slate-600">Review each evidence-linked recommendation. Saving records feedback. An on-screen prepared preview also requires a completeness pass; nothing is transmitted.</p></div>
+              <div className="flex flex-wrap items-center gap-2"><Pill><Clock size={12} className="mr-1" aria-hidden="true" />{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</Pill><Pill tone="bg-violet-50 text-violet-800 ring-violet-200">{sourceLabel(engine.dataClass)}</Pill><Pill>version {engine.encounterVersion}</Pill></div>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">Source E/M</p><p className="mt-1 font-mono text-lg font-semibold">{engine.submittedEm || "None"}</p></div>
+              <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">Engine E/M</p><p className="mt-1 font-mono text-lg font-semibold">{engine.em?.code || "None"}</p></div>
+              <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">Queue state</p><p className="mt-1 text-sm font-semibold">{queueState}</p></div>
+            </div>
+            <div className={`mt-4 rounded-xl border p-4 text-sm ${engine.completeness.complete !== true ? "border-rose-200 bg-rose-50 text-rose-900" : "border-slate-200 bg-slate-50 text-slate-700"}`}><strong>Documentation completeness:</strong> {completenessLabel(engine.completeness)}{engine.completeness.complete !== true ? " — you can record coder feedback; an explicit pass is required before a prepared state." : ""}</div>
+            {engine.suppressedExclusions > 0 && <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><ShieldCheck size={15} className="mr-1 inline" aria-hidden="true" />{engine.suppressedExclusions} engine candidate{engine.suppressedExclusions === 1 ? " is" : "s are"} not shown because no cited documentation evidence was returned. It cannot enter the prepared preview.</p>}
+          </section>
 
-        {engine.em && (
-          <>
-            <p className="mt-4 mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">E/M level</p>
-            <CodeRow row={engine.em} kind="EM" decision={dec.em} set={(v) => set("em", v)} />
-          </>
-        )}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="captured-heading"><h2 id="captured-heading" className="font-semibold text-slate-950">Engine suggestions</h2><p className="mt-1 text-sm text-slate-600">Each row starts unreviewed. Accept, edit, or reject it affirmatively.</p>{captured.length ? captured.map((item) => <CodeRow key={item.key} item={item} decision={decisions[item.key]} disabled={frozen} issues={showValidation ? issuesFor(item.key) : []} onChange={(value) => updateDecision(item.key, value)} />) : <p className="mt-3 text-sm text-slate-600">No evidence-supported engine suggestions are available.</p>}</section>
 
-        <p className="mt-4 mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">Diagnoses</p>
-        {(engine.dx || []).length === 0 && <p className="text-sm text-slate-400">no diagnoses proposed</p>}
-        {(engine.dx || []).map((r) => <CodeRow key={r.id} row={r} kind="ICD10" decision={dec[r.id]} set={(v) => set(r.id, v)} />)}
+          {excluded.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="excluded-heading"><h2 id="excluded-heading" className="font-semibold text-slate-950">Engine-held and removed candidates</h2><p className="mt-1 text-sm text-slate-600">These exclusions are read-only because the feedback contract has no “hold” action. A coder may start a separate manual addition, which still requires rationale and evidence.</p>{excluded.map((item) => <ExcludedRow key={item.key} item={item} disabled={frozen} added={additions.some((addition) => addition.sourceKey === item.key)} onStartManualAddition={() => startManualAddition(item)} />)}</section>}
 
-        {(engine.withheld || []).length > 0 && (
-          <>
-            <p className="mt-5 mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">Engine withheld these — your call</p>
-            {(engine.withheld || []).map((w) => (
-              <div key={w.id} className="border-t border-slate-100 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <code className="w-16 font-mono text-sm text-slate-900">{w.code}</code>
-                  <span className="flex-1 text-sm text-slate-700">{w.label}</span>
-                  <Pill tone={w.status === "held" ? "bg-amber-50 text-amber-700 ring-amber-200" : "bg-red-50 text-red-700 ring-red-200"}>{w.status}</Pill>
-                  <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-0.5">
-                    <button onClick={() => setWithheld((s) => ({ ...s, [w.id]: { ...s[w.id], bill: false } }))} className={seg(!withheld[w.id]?.bill, "bg-slate-200 text-slate-700")}>Don't bill</button>
-                    <button onClick={() => setWithheld((s) => ({ ...s, [w.id]: { ...s[w.id], bill: true } }))} className={seg(withheld[w.id]?.bill, "bg-emerald-100 text-emerald-700")}>Bill it</button>
-                  </div>
-                </div>
-                <Why text={w.why} evidence={w.evidence} history={w.history} />
-              </div>
-            ))}
-          </>
-        )}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="manual-heading">
+            <h2 id="manual-heading" className="font-semibold text-slate-950">Human-added codes</h2><p className="mt-1 text-sm text-slate-600">Every addition requires a rationale and a supporting synthetic documentation excerpt. It is stored in the feedback note until a server-owned evidence-span packet exists.</p>
+            <div className="mt-3 space-y-3">{additions.map((addition, index) => {
+              const key = `addition:${addition.id}`;
+              const rowIssues = showValidation ? issuesFor(key) : [];
+              const errorId = `${key}-errors`;
+              const invalid = rowIssues.length > 0;
+              const describedBy = invalid ? errorId : undefined;
+              return (
+                <fieldset key={addition.id} aria-describedby={describedBy} className="grid gap-3 rounded-xl border border-slate-200 p-4 md:grid-cols-2">
+                  <legend className="sr-only">Human-added code {index + 1}</legend>
+                  <label htmlFor={`${key}-kind`} className="grid gap-1 text-xs font-medium text-slate-700">Code type
+                    <select id={`${key}-kind`} disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.kind} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, kind: event.target.value } : item))} className="min-h-10 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">{MANUAL_KINDS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                  </label>
+                  <label htmlFor={`${key}-code`} className="grid gap-1 text-xs font-medium text-slate-700">Code
+                    <input id={`${key}-code`} required maxLength={32} disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.code} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, code: event.target.value } : item))} className="min-h-10 rounded-md border border-slate-300 px-2 py-1 font-mono text-sm" />
+                  </label>
+                  <label htmlFor={`${key}-rationale`} className="grid gap-1 text-xs font-medium text-slate-700 md:col-span-2">Rationale
+                    <textarea id={`${key}-rationale`} required maxLength={1900} disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.rationale} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, rationale: event.target.value } : item))} rows={2} className="rounded-md border border-slate-300 px-2 py-1 text-sm" />
+                  </label>
+                  <label htmlFor={`${key}-evidence`} className="grid gap-1 text-xs font-medium text-slate-700 md:col-span-2">Supporting documentation evidence
+                    <textarea id={`${key}-evidence`} required maxLength={1900} disabled={frozen} aria-invalid={invalid || undefined} aria-describedby={describedBy} value={addition.evidence} onChange={(event) => setAdditions((current) => current.map((item) => item.id === addition.id ? { ...item, evidence: event.target.value } : item))} rows={2} className="rounded-md border border-slate-300 px-2 py-1 text-sm" />
+                  </label>
+                  <button type="button" disabled={frozen} aria-label={`Remove human-added code ${index + 1}`} onClick={() => setAdditions((current) => current.filter((item) => item.id !== addition.id))} className="inline-flex min-h-10 w-fit items-center gap-1 rounded-lg px-2 text-sm text-rose-800 hover:bg-rose-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700 disabled:opacity-50"><X size={15} aria-hidden="true" />Remove</button>
+                  {invalid && <div className="md:col-span-2"><RowIssues id={errorId} issues={rowIssues} /></div>}
+                </fieldset>
+              );
+            })}</div>
+            <button type="button" disabled={frozen} onClick={() => setAdditions((current) => [...current, { id: globalThis.crypto.randomUUID(), sourceKey: null, kind: "ICD10", code: "", rationale: "", evidence: "" }])} className="mt-3 inline-flex min-h-10 items-center gap-1 rounded-lg px-2 text-sm font-medium text-sky-800 hover:bg-sky-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:opacity-50"><Plus size={15} aria-hidden="true" />Add code</button>
+          </section>
 
-        <p className="mt-5 mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">Add a code the engine missed</p>
-        {added.map((a, i) => (
-          <div key={i} className="mb-2 flex items-center gap-2">
-            <input value={a.code} onChange={(e) => setAdded((arr) => arr.map((x, j) => j === i ? { ...x, code: e.target.value } : x))} placeholder="ICD-10 code" className="w-32 rounded-md border border-slate-300 px-2 py-1 text-sm font-mono" />
-            <input value={a.note} onChange={(e) => setAdded((arr) => arr.map((x, j) => j === i ? { ...x, note: e.target.value } : x))} placeholder="why it was missed" className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm" />
-            <button onClick={() => setAdded((arr) => arr.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-500"><X size={16} /></button>
-          </div>
-        ))}
-        <button onClick={() => setAdded((arr) => [...arr, { code: "", note: "" }])} className="inline-flex items-center gap-1 text-sm text-sky-700 hover:underline"><Plus size={14} />Add code</button>
+          {showValidation && validation.issues.length > 0 && <div ref={validationRef} tabIndex={-1} role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 focus:outline-none"><p className="font-semibold">Complete the review before saving</p><ul className="mt-2 list-disc space-y-1 pl-5">{validation.issues.map((item, index) => <li key={`${item.key}-${index}`}>{item.message}</li>)}</ul></div>}
+          {saveError && <ErrorNotice>{saveError}{frozen && !receipt && (saveErrorStatus == null || saveErrorStatus >= 500) && <p className="mt-2 font-semibold">The server outcome is unknown. Keep this review open and use “Retry exact saved review.” Do not start a replacement review with a new ID.</p>}{frozen && !receipt && saveErrorStatus === 401 && <p className="mt-2"><a href="/.auth/login/aad?post_login_redirect_uri=/" target="_blank" rel="noreferrer" className="font-semibold underline underline-offset-2">Sign in again in a new tab</a>, then return here and retry the exact saved review.</p>}{frozen && !receipt && [403, 404, 409].includes(saveErrorStatus) && <button type="button" onClick={reloadAfterDefinitiveFailure} className="mt-3 flex min-h-10 items-center gap-2 rounded-lg border border-rose-300 bg-white px-3 py-2 font-medium hover:bg-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700"><RefreshCw size={15} aria-hidden="true" />{saveErrorStatus === 409 ? "Reload after confirmed conflict" : "Return to the refreshed workspace"}</button>}{saveErrorStatus === 409 && receipt && <p className="mt-2">Reload the encounter before starting another review.</p>}</ErrorNotice>}
 
-        <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-4">
-          <p className="text-xs text-slate-500">You accepted {agreed} of {captured.length} suggestions unchanged. Edits and rejections teach the engine.</p>
-          <button onClick={submit} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 active:scale-95"><Send size={15} />Submit &amp; next</button>
-        </div>
-      </div>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="save-heading"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 id="save-heading" className="font-semibold text-slate-950">Record coder review</h2><p className="mt-1 text-sm text-slate-600">The first save freezes the exact review ID and payload. An ambiguous failure retries that exact payload; controls remain locked.</p></div><button type="button" disabled={saving || Boolean(receipt)} onClick={saveReview} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-60"><Save size={16} aria-hidden="true" />{saving ? "Saving…" : frozen ? "Retry exact saved review" : canPrepareCoderPreview(engine) ? "Save review and prepare preview" : "Save coder review"}</button></div><p className="mt-3 text-xs text-slate-600">This action writes coder feedback only. It does not write to Athena or an EHR and does not transmit a claim to a clearinghouse or payer.</p></section>
 
-      {done && (
-        <div className="mt-5 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
-            <Check size={18} />
-            Feedback recorded{done._stored ? ` (${done._stored} in store)` : ""} — final E/M {done.final_em}, {done.decisions.length} decisions, {done.time_spent_seconds}s.
-          </div>
-          <p className="mt-2 text-xs text-slate-500">The tuning pipeline turns this into a gold row and a ranked rule/prompt backlog (see analyze_feedback.py).</p>
-          <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">{JSON.stringify(done, null, 2)}</pre>
-        </div>
+          <div ref={receiptRef} tabIndex={receipt ? -1 : undefined} className="focus:outline-none"><PreparedPreview payload={visiblePayload} engine={engine} receipt={receipt} onRetry={saveReview} saving={saving} /></div>
+        </>
       )}
     </div>
   );

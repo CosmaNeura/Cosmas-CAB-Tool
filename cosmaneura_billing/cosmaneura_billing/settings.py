@@ -474,6 +474,9 @@ class Settings:
 
     database_url: str = field(default="", repr=False, metadata={"secret": True})
     state_store: str = "local"
+    review_context_signing_key: str = field(
+        default="", repr=False, metadata={"secret": True}
+    )
     database_runtime_role: str = "cosmaneura_app"
     database_runtime_password: str = field(
         default="", repr=False, metadata={"secret": True}
@@ -718,6 +721,10 @@ class Settings:
             raise SettingsError("COSMANEURA_CHASE_STORE must be memory or postgres")
         if self.state_store not in _STATE_STORES:
             raise SettingsError("COSMANEURA_STATE_STORE must be local or postgres")
+        if (not isinstance(self.review_context_signing_key, str)
+                or (self.review_context_signing_key and not re.fullmatch(
+                    r"[!-~]{32,256}", self.review_context_signing_key))):
+            raise SettingsError("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY requires 32–256 ASCII secret characters")
         if self.chase_approval not in _APPROVAL_MODES:
             raise SettingsError(
                 "COSMANEURA_CHASE_APPROVAL must be per_policy or per_message"
@@ -1156,6 +1163,7 @@ class Settings:
             state_store=(
                 env.get("COSMANEURA_STATE_STORE") or "local"
             ).strip().lower(),
+            review_context_signing_key=env.get("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY", ""),
             database_runtime_role=(
                 env.get("COSMANEURA_DB_RUNTIME_ROLE") or "cosmaneura_app"
             ).strip(),

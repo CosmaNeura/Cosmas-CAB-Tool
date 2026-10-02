@@ -85,6 +85,8 @@ cp .env.example .env
 # Set distinct long owner/runtime passwords and their RFC 3986 percent-encoded
 # *_URL_PASSWORD forms, plus a synthetic practice ID, tenant UUID, and reviewed
 # synthetic bootstrap-admin UUID. Compose remains an auth-protected smoke stack.
+# Set COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY to a new random secret of at least
+# 32 ASCII characters; use the same value across API replicas.
 docker compose up --build --wait
 ```
 

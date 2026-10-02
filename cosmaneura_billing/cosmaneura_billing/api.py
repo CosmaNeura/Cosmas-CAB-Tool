@@ -8,7 +8,7 @@ Endpoints (shapes match the documented contracts in frontend/*.jsx):
   POST /api/encounters/detail             one encounter's documentation
   POST /api/encounters/billing            run the pipeline on a stored encounter
   POST /api/billing                       run the pipeline on posted documentation
-  POST /api/encounters/coder-view         pre-coded claim for the coder review UI
+  POST /api/encounters/coder-view         evidence-linked draft for coder review
   POST /api/feedback                      persist a coder's reviewed decisions
   GET  /api/feedback/summary              accuracy metrics + tuning backlog
   POST /api/chase/worklist                minimum-necessary insurance worklist
@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import secrets
 import json
 import os
 import re
@@ -84,10 +85,13 @@ def _review_context_binding(
     encoded_payload: str,
     principal: AuthPrincipal,
     encounter_version: int,
+    resource_id: str,
 ) -> bytes:
     return json.dumps(
         [
+            "cab-coder-review.v3",
             encoded_payload,
+            resource_id,
             principal.practice_id,
             principal.tenant_id,
             principal.user_id,
@@ -101,23 +105,30 @@ def _issue_review_context(
     stored,
     principal: AuthPrincipal,
     *,
+    signing_key: bytes,
     engine_version: str = _ENGINE_VERSION,
+    recommendation_manifest: tuple[tuple[str, str], ...],
 ) -> str:
-    """Bind a coder view to its server-owned engine and encounter version.
-
-    The random internal encounter UUID is never returned. It acts as a
-    per-encounter MAC key, so a browser can echo this context across replicas
-    but cannot mint a different engine version or actor binding.
-    """
+    """Bind the view with a server secret independent of exposed source IDs."""
+    if not isinstance(signing_key, bytes) or len(signing_key) < 32:
+        raise ValueError("review signing key unavailable")
     payload = json.dumps(
-        {"v": 1, "engineVersion": engine_version},
+        {
+            "v": 3,
+            "engineVersion": engine_version,
+            "submittedEm": stored.bundle.submitted_em_code,
+            "recommendationCount": len(recommendation_manifest),
+            "recommendationDigest": _recommendation_digest(
+                recommendation_manifest,
+            ),
+        },
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
     encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
     signature = hmac.new(
-        UUID(stored.resource_id).bytes,
-        _review_context_binding(encoded, principal, stored.version),
+        signing_key,
+        _review_context_binding(encoded, principal, stored.version, stored.resource_id),
         hashlib.sha256,
     ).hexdigest()
     return f"{encoded}.{signature}"
@@ -128,31 +139,81 @@ def _verify_review_context(
     stored,
     principal: AuthPrincipal,
     encounter_version: int,
-) -> str:
-    """Return the issued engine version or reject a forged/stale binding."""
-    if not isinstance(token, str) or len(token) > 1_024:
+    *,
+    signing_key: bytes,
+) -> dict[str, Any]:
+    """Return the signed review contract or reject a forged/stale binding."""
+    if (not isinstance(signing_key, bytes) or len(signing_key) < 32
+            or not isinstance(token, str) or len(token) > 1_024):
         raise ValueError("invalid review context")
     try:
         encoded, supplied = token.split(".", 1)
         if not encoded or len(supplied) != 64:
             raise ValueError("invalid review context")
         expected = hmac.new(
-            UUID(stored.resource_id).bytes,
-            _review_context_binding(encoded, principal, encounter_version),
+            signing_key,
+            _review_context_binding(encoded, principal, encounter_version, stored.resource_id),
             hashlib.sha256,
         ).hexdigest()
         if not hmac.compare_digest(supplied, expected):
             raise ValueError("invalid review context")
         padded = encoded + "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        if set(payload) != {"v", "engineVersion"} or payload["v"] != 1:
+        if set(payload) != {
+            "v", "engineVersion", "submittedEm", "recommendationCount",
+            "recommendationDigest",
+        } or type(payload["v"]) is not int or payload["v"] != 3:
             raise ValueError("invalid review context")
         engine_version = payload["engineVersion"]
         if not isinstance(engine_version, str) or not 1 <= len(engine_version) <= 256:
             raise ValueError("invalid review context")
-        return engine_version
+        submitted_em = payload["submittedEm"]
+        if submitted_em is not None and (
+            not isinstance(submitted_em, str) or not 1 <= len(submitted_em) <= 32
+        ):
+            raise ValueError("invalid review context")
+        if (
+            type(payload["recommendationCount"]) is not int
+            or not 0 <= payload["recommendationCount"] <= 500
+            or not isinstance(payload["recommendationDigest"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", payload["recommendationDigest"])
+        ):
+            raise ValueError("invalid review context")
+        return payload
     except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid review context") from exc
+
+
+def _recommendation_digest(
+    recommendation_manifest: tuple[tuple[str, str], ...],
+) -> str:
+    canonical = json.dumps(
+        sorted([list(item) for item in recommendation_manifest]),
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _coder_recommendation_manifest(view: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    rows = ([view["em"]] if view.get("em") else []) + list(view.get("dx") or [])
+    return tuple((row["kind"], row["code"]) for row in rows)
+
+
+def _feedback_matches_review_context(
+    decisions: list["DecisionModel"], context: dict[str, Any],
+) -> bool:
+    submitted = tuple(
+        (decision.kind, decision.engine_code)
+        for decision in decisions
+        if decision.action != "add"
+    )
+    return (
+        len(submitted) == context["recommendationCount"]
+        and hmac.compare_digest(
+            _recommendation_digest(submitted),
+            context["recommendationDigest"],
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -213,6 +274,13 @@ def _request_principal(request: Request) -> AuthPrincipal:
 
 def _request_feedback_store(request: Request):
     return request.app.state.feedback_store
+
+
+def _request_review_signing_key(request: Request) -> bytes:
+    key = request.app.state.review_context_signing_key
+    if not isinstance(key, bytes) or len(key) < 32:
+        raise HTTPException(503, "review_signing_unavailable")
+    return key
 
 
 def _request_encounter_store(request: Request):
@@ -360,19 +428,52 @@ def _coder_view_json(
 ) -> dict[str, Any]:
     card = result.provider_card
 
+    sources = {
+        "signed_note": bundle.signed_note,
+        "transcript": bundle.transcript,
+        "intake_text": bundle.intake_text,
+    }
+
     def row(s: CodeSuggestion) -> dict[str, Any]:
+        spans = []
+        for evidence in s.evidence:
+            source_text = sources.get(evidence.source, "")
+            start = source_text.find(evidence.quote) if evidence.quote else -1
+            spans.append({
+                "source": evidence.source,
+                "text": evidence.quote,
+                "loc": (
+                    {"start": start, "end": start + len(evidence.quote)}
+                    if start >= 0 else None
+                ),
+            })
         return {
             "id": re.sub(r"[^a-z0-9]", "", s.code.lower()) or "x",
+            "kind": _KIND.get(s.kind, str(s.kind)),
             "code": s.code, "label": s.label,
             "primary": "primary_candidate" in s.notes or None,
             "why": s.rationale,
             "evidence": s.evidence[0].quote if s.evidence else "",
+            "evidenceSpans": spans,
         }
 
     em = next((s for s in card.captured_codes if s.kind == CodeKind.EM), None)
     dx = [s for s in card.captured_codes if s.kind == CodeKind.ICD10]
     withheld = [{**row(s), "status": "rejected" if s.disposition == Disposition.REJECTED
                  else "held"} for s in card.declined_codes]
+    rulepack = applicable_rulepack(bundle.place_of_service, bundle.encounter_type)
+    completeness = (
+        check_note(bundle.signed_note, rulepack=rulepack).to_dict(
+            pos=bundle.place_of_service,
+        )
+        if rulepack is not None else {
+            "rulepack": None,
+            "complete": None,
+            "results": [],
+            "attestationBlock": None,
+            "detail": "No rule pack covers this encounter type yet.",
+        }
+    )
     return {
         "encounterId": bundle.encounter_id,
         "engineVersion": _ENGINE_VERSION,
@@ -381,6 +482,7 @@ def _coder_view_json(
         "em": row(em) if em else None,
         "dx": [row(s) for s in dx],
         "withheld": withheld,
+        "completeness": completeness,
         **result.inference,
         "degraded": _degraded_json(result),
     }
@@ -526,6 +628,16 @@ class DecisionModel(StrictRequest):
     ]] = None
     note: str = Field(default="", max_length=4_000)
 
+    @field_validator("engine_code", "final_code")
+    @classmethod
+    def normalize_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("code values cannot be blank")
+        return normalized
+
     @model_validator(mode="after")
     def validate_action_shape(self):
         valid = (
@@ -538,6 +650,19 @@ class DecisionModel(StrictRequest):
         )
         if not valid:
             raise ValueError("decision fields do not match the selected action")
+        if self.action == "accept" and self.final_code != self.engine_code:
+            raise ValueError("accepted decisions must preserve the engine code")
+        if self.action == "modify" and self.final_code == self.engine_code:
+            raise ValueError("modified decisions must change the engine code")
+        if self.action in {"modify", "reject", "add"}:
+            if self.reason_code is None:
+                raise ValueError("changed decisions require a controlled reason")
+            if not self.note.strip():
+                raise ValueError("changed decisions require a rationale")
+        if self.action == "add" and re.search(
+            r"(?:^|\n)Evidence:\s*\S", self.note, flags=re.IGNORECASE,
+        ) is None:
+            raise ValueError("human-added codes require supporting evidence")
         return self
 
 
@@ -552,6 +677,33 @@ class FeedbackModel(StrictRequest):
     decisions: list[DecisionModel] = Field(default_factory=list, max_length=500)
     time_spent_seconds: Optional[float] = Field(default=None, ge=0, le=86_400)
     overall_note: str = Field(default="", max_length=4_000)
+
+    @field_validator("submitted_em", "engine_em", "final_em")
+    @classmethod
+    def normalize_em_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("E/M code values cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_final_em(self):
+        em_decisions = [decision for decision in self.decisions if decision.kind == "EM"]
+        if len(em_decisions) > 1:
+            raise ValueError("a review may contain only one E/M decision")
+        if em_decisions:
+            decision = em_decisions[0]
+            expected_engine = None if decision.action == "add" else decision.engine_code
+            expected = None if decision.action == "reject" else decision.final_code
+            if self.engine_em is not None and self.engine_em != expected_engine:
+                raise ValueError("engine E/M must match the issued E/M decision")
+            if self.final_em != expected:
+                raise ValueError("final E/M must match the E/M decision")
+        elif self.engine_em is not None or self.final_em is not None:
+            raise ValueError("E/M summary fields require an E/M decision")
+        return self
 
 
 # --------------------------------------------------------------------------- #
@@ -652,6 +804,7 @@ def readiness(request: Request):
         not getattr(request.app.state, "ready", False)
         or chase_context is None
         or not datasets_loaded
+        or not getattr(request.app.state, "review_context_signing_key", None)
     ):
         return JSONResponse(status_code=503, content={"status": "warming"})
     try:
@@ -773,6 +926,7 @@ def bill_adhoc(request: Request, req: ProcessRequest) -> dict[str, Any]:
 @router.post("/api/encounters/coder-view")
 def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
     _require_view(request, "coder")
+    signing_key = _request_review_signing_key(request)
     stored = _get_stored_encounter(request, req.encounterId)
     _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
@@ -784,7 +938,10 @@ def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
     view = _coder_view_json(bundle, result, uid)
     view["encounterVersion"] = stored.version
     view["reviewContext"] = _issue_review_context(
-        stored, _request_principal(request),
+        stored,
+        _request_principal(request),
+        signing_key=signing_key,
+        recommendation_manifest=_coder_recommendation_manifest(view),
     )
     view.update(_encounter_data_policy(stored))
     # attach learned-history hints so the reviewer sees why a code was
@@ -848,21 +1005,48 @@ def completeness(request: Request, req: CompletenessRequest) -> dict[str, Any]:
 def submit_feedback(request: Request, fb: FeedbackModel) -> dict[str, Any]:
     principal = _require_roles(request, "Coder", "Admin")
     stored = _get_stored_encounter(request, fb.encounter_id)
+    signing_key = _request_review_signing_key(request)
     try:
-        engine_version = _verify_review_context(
+        review_context = _verify_review_context(
             fb.review_context, stored, principal, fb.encounter_version,
+            signing_key=signing_key,
         )
     except ValueError as exc:
         raise HTTPException(
             status_code=409, detail="review context is invalid; reload the review",
         ) from exc
+    if not _feedback_matches_review_context(fb.decisions, review_context):
+        raise HTTPException(
+            status_code=422,
+            detail="review decisions do not match the issued recommendations",
+        )
+    if (
+        fb.submitted_em is not None
+        and fb.submitted_em != review_context["submittedEm"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="submitted E/M does not match the issued review context",
+        )
+    em_decision = next(
+        (decision for decision in fb.decisions if decision.kind == "EM"), None,
+    )
+    engine_em = (
+        None if em_decision is None or em_decision.action == "add"
+        else em_decision.engine_code
+    )
+    final_em = (
+        None if em_decision is None or em_decision.action == "reject"
+        else em_decision.final_code
+    )
     store = _request_feedback_store(request)
     record = EncounterFeedback(
         encounter_id=fb.encounter_id, coder_id=principal.user_id,
         coder_tenant_id=principal.tenant_id, review_id=str(fb.review_id),
         encounter_version=fb.encounter_version,
-        engine_version=engine_version, submitted_em=fb.submitted_em,
-        engine_em=fb.engine_em, final_em=fb.final_em,
+        engine_version=review_context["engineVersion"],
+        submitted_em=review_context["submittedEm"],
+        engine_em=engine_em, final_em=final_em,
         decisions=[coder_feedback.CodeDecision(**d.model_dump()) for d in fb.decisions],
         time_spent_seconds=fb.time_spent_seconds, overall_note=fb.overall_note,
     )
@@ -1935,6 +2119,14 @@ def create_app(
         lifespan=_lifespan,
     )
     application.state.settings = config
+    # Local-only ephemeral keys invalidate reviews after restart. Durable or
+    # deployed runtimes require the same configured secret across all replicas.
+    application.state.review_context_signing_key = (
+        config.review_context_signing_key.encode("ascii")
+        if config.review_context_signing_key else
+        secrets.token_bytes(32) if config.state_store == "local"
+        and config.environment in {"development", "test"} else None
+    )
     application.state.ready = False
     application.state.startup_error = None
     application.state.orchestrator = None
