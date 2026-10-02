@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ShieldCheck, Stethoscope, ClipboardCheck, CreditCard, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
+import ProviderHeaderLaunch from "./ProviderHeaderLaunch.jsx";
+import { canLaunchHeader, headerLaunchRequest } from "./providerHeaderLaunch.js";
 import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
@@ -75,9 +77,15 @@ function SafetyBanner({ compact = false }) {
 }
 
 export default function App() {
+  const launch = headerLaunchRequest(window.location.search);
+  return launch ? <ProviderHeaderLaunch launch={launch} /> : <Workspace />;
+}
+
+function Workspace() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
   const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
+  const [billingHeaderAvailable, setBillingHeaderAvailable] = useState(false);
   const [manageChase, setManageChase] = useState(false); // Server-owned staff mutation capability
   const [health, setHealth] = useState(null);           // null = probing, false = offline
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
@@ -106,6 +114,7 @@ export default function App() {
         setViews(session.views);
         setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
         setManageChase(session.capabilities?.manageChase === true);
+        setBillingHeaderAvailable(canLaunchHeader(session));
         setView((current) => (
           session.views.includes(current) ? current : session.defaultView
         ));
@@ -221,6 +230,7 @@ export default function App() {
             live={Boolean(health)}
             demoSeed={chaseDemoSeed}
             manageChase={manageChase}
+            billingHeaderAvailable={billingHeaderAvailable}
           />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>

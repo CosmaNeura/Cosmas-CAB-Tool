@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import SourceVisitContext from "./SourceVisitContext.jsx";
 import MdmDataReview from "./MdmDataReview.jsx";
 import MdmClinicalReview from "./MdmClinicalReview.jsx";
 import DiagnosisMapping from "./DiagnosisMapping.jsx";
@@ -28,7 +29,7 @@ export default function BillingHeader(props) {
   return <HeaderContents key={headerSourceKey(props.encounter)} {...props} />;
 }
 
-function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0}) {
+function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true}) {
   const [view, setView] = useState(null), [draft, setDraft] = useState(null);
   const [reason, setReason] = useState(""), [error, setError] = useState("");
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
@@ -79,6 +80,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   }
 
   function command(path, body = {}) {
+    if (path === "/generate" && !generationAllowed) return;
     run({path: BASE + path, body: {encounterId: encounter.encounterId, expectedSource: pin,
       operationId: crypto.randomUUID(), ...body}});
   }
@@ -113,8 +115,13 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
       {h && !draft && <div className="flex flex-wrap gap-2"><button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>
         <button className={button} disabled={disabled} onClick={copyHeader}>Copy header with evidence</button>
         <button className={button} disabled={disabled} onClick={downloadHeader}>Download header text</button></div>}
-      {!h && loaded && !stale && <button className={button} disabled={disabled} onClick={() => command("/generate")}>Generate billing header</button>}
+      {!h && loaded && !stale && <button className={button} disabled={disabled || !generationAllowed} onClick={() => command("/generate")}>Generate billing header</button>}
     </div>
+    <SourceVisitContext value={encounter.sourceVisitContext} expectedSource={pin} />
+    {!generationAllowed && <div role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">
+      <p className="font-semibold">New coding generation awaits approval</p>
+      <p className="mt-1">The clinical note and any saved header remain available for review and editing. New generation requires approval to send the note to the coding model.</p>
+    </div>}
     {busy && <p role="status" className="mt-3 text-sm text-slate-600">{loaded ? "Saving or generating header…" : "Loading header…"}</p>}
     {notice && <p role="status" className="mt-3 text-sm text-emerald-800">{notice}</p>}
     {error && <div role="alert" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"><p>{error}</p>

@@ -55,7 +55,7 @@ test("staff explicitly attribute or leave unknown texts; uncertain saves retry e
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled();
   await expect(form.getByLabel("Existing case", { exact: true })).toBeDisabled();
   await panel.getByRole("button", { name: "Retry same text review" }).click();
-  await expect(panel.getByRole("status")).toContainText("Attributed to the selected case");
+  await expect(panel.getByRole("status").filter({hasText: "Attributed to the selected case"})).toContainText("Attributed to the selected case");
   expect(commands).toHaveLength(2); expect(commands[0]).toEqual(commands[1]);
   await expect(panel.getByRole("button", { name: "Unassigned texts · 1", exact: true })).toBeVisible();
   await panel.getByRole("listitem").filter({ hasText: "STOP" }).getByRole("button", { name: "Review text", exact: true }).click();
