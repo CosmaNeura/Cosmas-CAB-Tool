@@ -80,7 +80,7 @@ class _Store(SignoffStoreMixin):
         unit.audit(audit_completion, actor, action, record["headerId"])
 
     def create(self, encounter_id, *, expected_source, generated, actor, operation_id,
-               audit_completion=None):
+               audit_completion=None, before_insert=None):
         actor = _actor(actor)
         domain.uuid(operation_id)
         intent = self._intent("create", encounter_id, expected_source, actor)
@@ -98,6 +98,8 @@ class _Store(SignoffStoreMixin):
                 if created and generated is None:
                     return None, False  # Read-before-inference probe; no receipt or mutation.
                 if created:
+                    if before_insert is not None:
+                        before_insert(unit.conn, unit.stored)
                     header = domain.make_header(generated, unit.stored, actor, operation_id, self.clock())
                     record = {"headerId": header["headerId"], "header": header,
                               "sourceDigest": domain.digest(expected_source)}

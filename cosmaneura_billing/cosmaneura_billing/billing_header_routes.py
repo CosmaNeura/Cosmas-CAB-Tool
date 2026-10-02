@@ -118,19 +118,22 @@ def generate_header(request: Request, req: HeaderGenerate):
             if isinstance(store, PostgresBillingHeaderStore):
                 request.state.audit_completion_committed = True
             return {"view": existing, "created": False}
-        api._require_inference_input_allowed(request, stored=stored)
-        result = api._request_orchestrator(request).process(
-            stored.bundle, user_id=api._request_principal(request).user_id,
-            input_provenance=stored.source,
-        )
-        generated = generated_header(stored, result, engine_version=api._ENGINE_VERSION)
-        # Store reloads and compares the source under the write transaction.
-        view, created = store.create(
-            req.encounterId, expected_source=req.expectedSource, generated=generated,
-            actor=actor, operation_id=req.operationId,
-            audit_completion=(api._completion_event(request)
-                              if isinstance(store, PostgresBillingHeaderStore) else None),
-        )
+        with api._inference_scope(request, stored) as permit:
+            result = api._request_orchestrator(request).process(
+                stored.bundle, user_id=api._request_principal(request).user_id,
+                input_provenance=stored.source, **({"input_scope": permit} if permit else {}),
+            )
+            generated = generated_header(stored, result, engine_version=api._ENGINE_VERSION)
+            if permit:
+                generated["generation"]["modelInputProof"] = permit.proof
+            # Recheck operational model policy inside the existing source-locked write.
+            view, created = store.create(
+                req.encounterId, expected_source=req.expectedSource, generated=generated,
+                actor=actor, operation_id=req.operationId,
+                audit_completion=(api._completion_event(request)
+                                  if isinstance(store, PostgresBillingHeaderStore) else None),
+                **({"before_insert": permit.assert_persistable} if permit else {}),
+            )
         if isinstance(store, PostgresBillingHeaderStore):
             request.state.audit_completion_committed = True
         return {"view": view, "created": created}

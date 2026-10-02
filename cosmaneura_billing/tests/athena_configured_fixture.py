@@ -22,7 +22,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 def prepare_schema(dsn):
     with psycopg.connect(dsn, autocommit=True) as db:
         assert db.info.host == "127.0.0.1" and db.info.port == 32800
-        assert db.info.dbname.startswith("cab_athena_configured_api_test_")
+        assert db.info.dbname.startswith(("cab_athena_configured_api_test_", "cab_athena_billing_admission_test_"))
         # The locked runner applies the complete sparse chain before tests.
         assert db.execute("SELECT count(*) FROM cosmaneura_schema_migrations").fetchone()[0] == 17
         expected = {}

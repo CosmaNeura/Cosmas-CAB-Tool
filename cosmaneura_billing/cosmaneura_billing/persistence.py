@@ -40,11 +40,32 @@ class ReviewerNotAuthorized(PermissionError):
     """The feedback actor is not an active Coder or Admin membership."""
 
 
+PROVIDER_HANDOFF_SOURCE = "provider_completed_note"
 SYNTHETIC_DEMO_SOURCE = "synthetic_demo_release_candidate"
 ATHENA_PREVIEW_SYNTHETIC_SOURCE = "athena_preview_synthetic"
+ATHENA_REVIEW_PREVIEW_SOURCE = "athena_staff_review_preview_synthetic"
+ATHENA_REVIEW_MOCK_SOURCE = "athena_staff_review_mock"
+ATHENA_REVIEW_OPERATIONAL_SOURCE = "athena_staff_review_operational"
+LOCAL_SYNTHETIC_DEMO_SOURCE = "local_synthetic_demo"
 READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES = frozenset({
     SYNTHETIC_DEMO_SOURCE,
     ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    ATHENA_REVIEW_PREVIEW_SOURCE,
+    ATHENA_REVIEW_MOCK_SOURCE,
+    LOCAL_SYNTHETIC_DEMO_SOURCE,
+})
+# The local-only derivative is read-only for presentation and persistence but
+# is not an authorization token for a deployed model-input latch. Only sources
+# established through deployment-owned seed/import controls belong here.
+DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES = frozenset({
+    SYNTHETIC_DEMO_SOURCE,
+    ATHENA_PREVIEW_SYNTHETIC_SOURCE,
+    ATHENA_REVIEW_PREVIEW_SOURCE,
+})
+_MEMORY_SEEDABLE_SYNTHETIC_SOURCES = frozenset({
+    SYNTHETIC_DEMO_SOURCE,
+    LOCAL_SYNTHETIC_DEMO_SOURCE,
+    ATHENA_REVIEW_MOCK_SOURCE,
 })
 
 
@@ -82,18 +103,20 @@ class MemoryEncounterStore:
     ) -> StoredEncounter:
         if (
             source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
-            and source != SYNTHETIC_DEMO_SOURCE
+            and source not in _MEMORY_SEEDABLE_SYNTHETIC_SOURCES
         ):
             raise PersistenceUnavailable(
                 "reserved import provenance requires the source import store"
             )
         prior = self._items.get(bundle.encounter_id)
+        if source in {PROVIDER_HANDOFF_SOURCE,ATHENA_REVIEW_OPERATIONAL_SOURCE} or (prior and prior.source in {PROVIDER_HANDOFF_SOURCE,ATHENA_REVIEW_OPERATIONAL_SOURCE}):
+            raise PersistenceUnavailable("provider source requires scoped receiver")
         if (
             prior is not None
-            and prior.source == SYNTHETIC_DEMO_SOURCE
+            and prior.source in _MEMORY_SEEDABLE_SYNTHETIC_SOURCES
             and (
                 prior.bundle != bundle
-                or source not in {None, SYNTHETIC_DEMO_SOURCE}
+                or source not in {None, prior.source}
             )
         ):
             raise PersistenceUnavailable(
@@ -318,6 +341,8 @@ class PostgresEncounterStore:
         ingested_by_tenant_id: str | None = None,
         ingested_by_user_id: str | None = None,
     ) -> StoredEncounter:
+        if source in {PROVIDER_HANDOFF_SOURCE, ATHENA_REVIEW_OPERATIONAL_SOURCE}:
+            raise PersistenceUnavailable("provider source requires scoped receiver")
         if source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES:
             if source == SYNTHETIC_DEMO_SOURCE:
                 raise PersistenceUnavailable(
