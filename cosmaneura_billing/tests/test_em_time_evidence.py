@@ -5,6 +5,7 @@ import hashlib
 import pytest
 
 from cosmaneura_billing.em_time import qualify_em_time
+from cosmaneura_billing.corpus.mcd_training import load_mcd_training_pack
 from cosmaneura_billing.schemas import VisitBundle
 
 TOTAL = "Total time spent on the date of the encounter: 42 minutes."
@@ -222,4 +223,46 @@ def test_reported_note_total_cannot_fall_back_to_clinician_transcript():
     quote = "Total physician time today was 45 minutes."
     source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11",
         signed_note="Patient reports:\n\n" + quote, transcript="Physician: " + quote)
+    assert qualify_em_time(45, quote, source).attestation is None
+
+
+@pytest.mark.parametrize("index,minutes", tuple(enumerate((32, 23, 28, 22, 31, 19, 16, 34, 24, 44, 26, 33))))
+def test_unchanged_training_note_metadata_does_not_relabel_clinician_time(index, minutes):
+    # The loader validates the original pack hash; no note text is rewritten.
+    visit = load_mcd_training_pack()["cases"][index]["visit"]
+    source = VisitBundle(**visit)
+    quote = next(line for line in source.signed_note.splitlines() if line.startswith(("Time:", "Total ")))
+    q = qualify_em_time(minutes, quote, source).attestation
+    assert q is not None and q.minutes == minutes and q.source == "signed_note"
+    assert q.quote == source.signed_note[q.start:q.end]
+    assert quote.startswith(q.quote)
+    assert q.source_sha256 == hashlib.sha256(source.signed_note.encode()).hexdigest()
+    assert visit["signed_note"] == source.signed_note
+
+
+@pytest.mark.parametrize("metadata,value", [
+    ("Patient name", "Example name"), ("Patient ID", "Example-001"),
+    ("Patient demographics", "Age 40, sex F"), ("Patient age", "40"),
+    ("Patient sex", "F"), ("Physician name", "Example clinician"),
+    ("Fictional patient", "Example-001; age 40; sex F"),
+    ("Patient", "Example-001; age 40; sex F"),
+])
+def test_identity_metadata_is_neutral_without_a_synthetic_name_exception(metadata, value):
+    quote = "Total physician time today was 45 minutes."
+    text = metadata + ": " + value + "\n\n" + quote
+    source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11", signed_note=text)
+    assert qualify_em_time(45, quote, source).attestation is not None
+
+
+@pytest.mark.parametrize("reported", [
+    "Patient", "Patient reports", "Fictional patient reports", "Patient-reported history",
+    "Quoted patient", "Copied prior physician note", "Nursing notes", "Template example",
+    "Reported", "Reported history", "Nursing assessment", "Staff assessment",
+    "Quoted patient's statement", "Historical physician assessment",
+    "Patient-provided account", "Patient assessment", "Fictional patient",
+])
+def test_identity_metadata_or_assessment_cannot_reset_genuine_report_scope(reported):
+    quote = "Total physician time today was 45 minutes."
+    text = reported + ":\n\nPatient ID: Example identifier\n\nAssessment:\n\nTime:\n\n" + quote
+    source = VisitBundle("SYN-EM-TIME", 40, "F", "office_established", "11", signed_note=text)
     assert qualify_em_time(45, quote, source).attestation is None

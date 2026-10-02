@@ -96,12 +96,31 @@ def _contexts(text: str):
             yield start, end, text[start:end]
 
 
+def _excluded_owner_label(label: str, value: str) -> bool:
+    """Patient identity metadata is neutral; actual reporting scopes persist."""
+    # Keep every prior non-patient attribution marker, including unfamiliar
+    # nursing/quoted/historical section suffixes.
+    if re.search(r"\b(?:family|caregiver|reported|quotation|example|template|"
+        r"nurse|nursing|staff|assistant|outside|external|imported|copied|quoted|prior|previous|historical)\b", label, re.I):
+        return True
+    if not re.search(r"\b(?:patient|pt)\b", label, re.I):
+        return False
+    if re.fullmatch(r"(?:patient|pt)(?:'s)?\s+(?:name|id|identifier|mrn|age|sex|demographics)", label, re.I):
+        return False
+    # A complete bounded demographic record establishes metadata by its value,
+    # never by a synthetic label/name. A bare patient speech label still holds.
+    identity = re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _./-]{0,120};\s*age\s+\d{1,3};\s*sex\s+(?:F|M|X|female|male|other|unknown)[.]?", value.strip(), re.I)
+    metadata_label = re.fullmatch(r"(?:[A-Za-z][A-Za-z -]{0,30}\s+)?(?:patient|pt)", label, re.I)
+    return not (identity and metadata_label)
+
+
 def _owner_transitions(text: str):
     """Carry reported/template ownership past paragraphs and neutral headings."""
     for heading in re.finditer(r"(?:^[ \t]*|;[ \t]*)([A-Za-z][A-Za-z /'-]{0,60}):", text, re.M):
         label = heading[1].strip()
-        if re.search(r"\b(?:patient|pt|family|caregiver|reported|quotation|example|template|"
-            r"nurse|nursing|staff|assistant|outside|external|imported|copied|quoted|prior|previous|historical)\b", label, re.I):
+        line_end = text.find("\n", heading.end())
+        value = text[heading.end():line_end if line_end >= 0 else len(text)]
+        if _excluded_owner_label(label, value):
             yield heading.start(), True
         elif re.fullmatch(r"(?:current\s+)?(?:physician|qhp|provider|doctor|clinician)"
             r"(?:\s+(?:note|assessment(?: and plan)?|plan))?", label, re.I):
