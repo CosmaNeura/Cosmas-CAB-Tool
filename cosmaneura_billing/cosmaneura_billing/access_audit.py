@@ -16,6 +16,10 @@ from .security import client_ip, send_json
 from .settings import Settings
 
 _ENCOUNTER_FIXED_ROUTES = {
+    "/api/core/v1/completed-notes": "provider_handoff.accept",
+    "/api/core/v1/header/read": "billing_header.view",
+    "/api/core/v1/header/generate": "billing_header.compute",
+    "/api/core/v1/header/save": "billing_header.save",
     "/api/encounters/detail": "encounter.view",
     "/api/provider/encounters/handoff/fixtures": "provider_handoff.list",
     "/api/provider/encounters/handoff/fixture": "provider_handoff.fixture",

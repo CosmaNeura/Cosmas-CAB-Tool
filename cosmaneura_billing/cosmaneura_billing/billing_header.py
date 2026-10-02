@@ -151,6 +151,39 @@ class HeaderActor:
         return "HeaderActor(<redacted>)"
 
 
+@dataclass(frozen=True, repr=False)
+class CoreHeaderActor(HeaderActor):
+    issuer: str
+    subject: str
+    projection_id: str
+    mapping_version: int
+
+    def __post_init__(self):
+        super().__post_init__()
+        require(self.role == "Provider", "not_authorized")
+        text(self.issuer, 256); text(self.subject, 256)
+        uuid(self.projection_id); integer(self.mapping_version, 1, 1000000)
+
+    def to_api(self):
+        return {**super().to_api(), "identity": {"kind": "core", "issuer": self.issuer,
+            "subject": self.subject, "projectionId": self.projection_id,
+            "mappingVersion": self.mapping_version}}
+
+
+def validated_actor(actor):
+    from dataclasses import asdict
+    require(type(actor) in (HeaderActor, CoreHeaderActor), "not_authorized")
+    return type(actor)(**asdict(actor))
+
+
+def actor_for_principal(principal, role):
+    from .auth import CorePrincipal
+    if type(principal) is CorePrincipal:
+        require(role == "Provider", "not_authorized")
+        return principal.header_actor()
+    return HeaderActor(principal.tenant_id, principal.user_id, f"{role} {principal.user_id[:8]}", role)
+
+
 def source_documents(stored):
     """Stable local document identities; no claim of a vendor-issued note ID."""
     resource = uuid(stored.resource_id)

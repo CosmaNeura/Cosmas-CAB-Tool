@@ -212,7 +212,8 @@ class PostgresMembershipStore:
                         WHERE pm.practice_id = %s
                           AND pm.tenant_id = %s::uuid
                           AND pm.user_id = %s::uuid
-                          AND pm.active AND p.active AND u.active""",
+                          AND pm.active AND p.active AND u.active
+                          AND COALESCE(to_jsonb(u)->>'identity_kind','entra')='entra'""",
                     (
                         self.context.practice_id,
                         principal.tenant_id,

@@ -19,7 +19,7 @@ from .billing_header_signoff import MemoryHeaderFeedbackAdapter, SignoffStoreMix
 def _actor(actor):
     domain.require(isinstance(actor, domain.HeaderActor), "not_authorized")
     # Do not trust a dataclass constructed through an unvalidated Python seam.
-    return domain.HeaderActor(**asdict(actor))
+    return domain.validated_actor(actor)
 
 
 def _audit_check(event, practice, actor, resource, action, *, mandatory):
@@ -258,6 +258,10 @@ class PostgresBillingHeaderStore(_Store):
             unit = _PostgresUnit(self, connection, encounter_id)
             yield unit
 
+    def _locked_encounter(self, conn, encounter_id):
+        return conn.execute(PostgresEncounterStore._select() + " WHERE practice_id=%s AND external_id=%s FOR UPDATE",
+                            (self.practice_id, encounter_id)).fetchone()
+
     def healthcheck(self):
         with self.context.connection() as connection:
             row = connection.execute("""SELECT
@@ -277,10 +281,7 @@ class _PostgresUnit:
     def __init__(self, store, connection, encounter_id):
         self.store, self.conn, self.practice = store, connection, store.practice_id
         self.encounter_id = encounter_id
-        row = connection.execute(
-            PostgresEncounterStore._select() + " WHERE practice_id=%s AND external_id=%s FOR UPDATE",
-            (self.practice, encounter_id),
-        ).fetchone()
+        row = store._locked_encounter(connection, encounter_id)
         self.stored = PostgresEncounterStore._bundle(row) if row else None
 
     def current_source(self):

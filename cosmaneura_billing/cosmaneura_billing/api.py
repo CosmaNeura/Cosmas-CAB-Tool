@@ -958,8 +958,8 @@ def _inference_scope(request, stored):
     if (not isinstance(encounter_store, PostgresEncounterStore) or role is None
             or principal.practice_id != settings.practice_id):
         raise HTTPException(403, "operational_source_model_not_approved")
-    actor = HeaderActor(principal.tenant_id, principal.user_id,
-                        f"{role} {principal.user_id[:8]}", role)
+    from .billing_header import actor_for_principal
+    actor = actor_for_principal(principal, role)
     try:
         with operational_scope(request.app.state.model_data_policy, settings=settings,
                 stored=stored, actor=actor, context=encounter_store.context) as permit:
