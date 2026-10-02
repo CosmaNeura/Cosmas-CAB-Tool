@@ -265,6 +265,15 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
         "GRANT SELECT, UPDATE, DELETE ON chase_cadence_states TO {}"
     ).format(identifier))
 
+    if conn.execute("SELECT to_regclass('public.billing_headers')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT SELECT, INSERT ON billing_headers, billing_header_revisions, "
+            "billing_header_operations TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION cosmaneura_billing_header_editor_allowed(uuid,uuid,text) TO {}"
+        ).format(identifier))
+
 
 def _provision_chase_worker_role(conn, settings: Settings) -> None:
     """Create the practice-bound scheduler login without API/identity authority."""
