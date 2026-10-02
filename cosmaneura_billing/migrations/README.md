@@ -80,25 +80,60 @@ Card Chase UI, OAuth behavior, or network path.
 `011_billing_headers` adds immutable generated headers and attributed human
 revisions, source/version locks, idempotency receipts and mandatory atomic
 access-audit coupling. Only current Provider/Coder/Admin memberships may write.
-This integration adds the domain and store only; no API, UI or activation
-setting consumes them yet. Edits remain unreviewed proposals and never mutate
-an encounter note or accept billing codes. The available migration set is
-`001`–`009` plus `011`; `010` communications is independent and absent here.
+Edits remain unreviewed proposals and never mutate
+an encounter note or accept billing codes. This rung is independent of the
+communications schema.
 Recovery leaves these expand structures dormant rather than dropping history.
 
 `013_billing_header_signoffs` binds an explicit Coder/Admin review to the current
 source and saved header revision. Feedback, receipt and successful access audit
 commit atomically. A subsequent header edit invalidates current signoff while
-preserving its history. This rung depends on `003` and `011` only; the actual
-available set is `001`–`009` plus `011` and `013`. `010`/`012` communications are
-absent. Keep the expand table dormant on rollback; the down migration refuses
+preserving its history. This rung depends on `003` and `011` only. Keep the expand table dormant on rollback; the down migration refuses
 to remove existing review evidence. No clinical note, claim or EHR is written.
 
+## Combined local integration
+
+The combined candidate includes the exact canonical `001`–`025` chain.
+The scoped API/worker/Athena grants are now available through the reviewed
+provisioner; no live database or setting was changed. The following sections
+retain each independent schema slice’s dependency rationale and rehearsal scope.
+
+## Dormant SMS storage expansion
+
+The SMS schema slice originally contained `001`–`013` and `015`–`018`. The locked runner
+supports this deliberate gap: Athena-specific `014` is not a communications
+dependency. The six communications rungs retain their canonical numbering
+and exact SQL bytes:
+
+- `010`: practice-bound sender/contact bindings, prepared messages, inbound
+  events and permanent STOP suppression; depends on `003`/`004`.
+- `012`: separate policy, purpose consent, authorization, dispatch evidence
+  and provider receipts; depends on `010`.
+- `015`/`016`: cancellation-before-start and unresolved-send protections.
+- `017`/`018`: attributed event review and truly unassigned SMS review,
+  with append-only decisions and security-invoker source views.
+
+Apply these together before consuming the PostgreSQL communications store.
+All fifteen tables use forced practice RLS and always-enabled append-only
+guards. Canonical SQL retains historical voice values for compatibility;
+this does not enable calling. Application channel defaults remain SMS-only.
+The schema-only slice originally granted no access. The later reviewed SMS
+service/API slices add only their separate scoped worker and staff capabilities. No consumer, transport, dispatch,
+credential or hosted setting is activated by installing this schema.
+
+The local rehearsal upgrades the prior sparse baseline with the fixed twelve
+MCD synthetic notes present, verifies unchanged source rows, exact ledger
+checksums, no-op replay, restricted-role denial and retained-evidence recovery
+refusal. It uses cached PostgreSQL 16/pgvector and no service calls.
+Ordinary recovery leaves these expand structures dormant. The canonical down
+scripts refuse retained evidence; they are not a messaging reset or routine
+rollback. The combined candidate preserves the original canonical numbering.
 ## Dormant Athena schema integration
 
-The available ordered set is now `001`–`009`, `011`, `013`, `014`,
-and `019`–`025` (19 total); it is intentionally sparse. Communications migrations
-`010`, `012`, `015`–`018` are absent.
+The Athena schema slice originally contained `001`–`009`, `011`, `013`,
+`014`, and `019`–`023`. The provider receiver/model slices add `024`–`025`.
+They do not require the separate SMS rungs; all are present in this combined
+local candidate.
 
 `014_athena_staff_review` creates immutable practice-scoped review receipts,
 current BillingStaff/Admin authorization, same-transaction audit coupling and
@@ -127,10 +162,11 @@ Immutable source/receipt
 guards and the empty admission registry remain intact.
 An ordinary encounter writer cannot manufacture `provider_completed_note`.
 
-These are exact preserved migrations. The runtime provisioner grants only the
-guarded provider writer and registry/receipt reads; private019 remains denied.
-Receiver readiness checks those privileges. Operator registrations and hosted
-activation are separate from this source integration.
+These files are exact preserved migrations. The runtime provisioner composes
+the scoped SMS/Athena grants with the guarded provider writer and registry/receipt
+reads; private019 remains denied. Receiver readiness checks those privileges.
+Operator registrations, source/model permissions, and hosted activation remain
+separate from this source integration.
 Retain expand structures and evidence during code rollback; destructive
 rollback is not the recovery path.
 

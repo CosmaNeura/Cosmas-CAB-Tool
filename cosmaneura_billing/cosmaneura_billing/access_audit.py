@@ -133,6 +133,12 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "session.view", "/api/session", ""
     if path in _ENCOUNTER_FIXED_ROUTES:
         return _ENCOUNTER_FIXED_ROUTES[path], path, ""
+    if path in {"/api/chase/communications/bind", "/api/chase/communications/consent",
+                "/api/chase/communications/authorize", "/api/chase/communications/cancel",
+                "/api/chase/communications/resolve-unknown", "/api/chase/communications/review-event",
+                "/api/chase/communications/review-unassigned-text",
+                "/api/chase/communications/policy/decision"}:
+        return "chase.decide", path, ""
     if path in _ATHENA_ROUTES:
         return _ATHENA_ROUTES[path], path, ""
     if path == "/api/billing":
@@ -143,7 +149,9 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "encounter.decide", "/api/feedback", ""
     if path == "/api/feedback/summary":
         return "feedback.summary", "/api/feedback/summary", ""
-    if path in {"/api/chase/worklist", "/api/chase/metrics", "/api/chase/task"}:
+    if path in {"/api/chase/worklist", "/api/chase/metrics", "/api/chase/task", "/api/chase/communications", "/api/chase/communications/review-events",
+                "/api/chase/communications/unassigned-texts/count", "/api/chase/communications/unassigned-texts",
+                "/api/chase/communications/unassigned-text-cases"}:
         return "chase.view", path, ""
     if path in {"/api/chase/detect", "/api/chase/demo-seed"}:
         return "chase.decide", path, ""
@@ -151,7 +159,8 @@ def classify_access(method: str, path: str) -> tuple[str, str, str] | None:
         return "chase.policy.view", "/api/chase/policy/status", ""
     if path in _CHASE_POLICY_MUTATIONS:
         return "chase.policy.decide", path, ""
-    if path in {"/api/chase/release-message", "/api/chase/action"}:
+    if path in {"/api/chase/release-message", "/api/chase/action",
+                "/api/chase/communications/action"}:
         return "chase.decide", path, ""
     if path.startswith("/api/"):
         return "api.access", "unmatched_api_route", ""

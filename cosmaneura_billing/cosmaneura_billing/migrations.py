@@ -265,6 +265,15 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
         "GRANT SELECT, UPDATE, DELETE ON chase_cadence_states TO {}"
     ).format(identifier))
 
+    if conn.execute("SELECT to_regclass('public.chase_communication_senders')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT SELECT, INSERT ON chase_communication_senders, "
+            "chase_communication_bindings, chase_communication_operations, "
+            "chase_communication_events, chase_communication_suppressions TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT USAGE, SELECT ON SEQUENCE chase_communication_events_sequence_no_seq TO {}"
+        ).format(identifier))
     if conn.execute("SELECT to_regclass('public.billing_headers')").fetchone()[0]:
         conn.execute(sql.SQL(
             "GRANT SELECT, INSERT ON billing_headers, billing_header_revisions, "
@@ -276,6 +285,32 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
 
     if conn.execute("SELECT to_regclass('public.billing_header_signoffs')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT, INSERT ON billing_header_signoffs TO {}").format(identifier))
+
+    if conn.execute("SELECT to_regclass('public.chase_communication_policy_decisions')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT SELECT, INSERT ON chase_communication_policy_decisions, "
+            "chase_communication_consent_decisions, chase_communication_authorizations TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT SELECT ON chase_communication_dispatch_starts, "
+            "chase_communication_dispatch_receipts, chase_communication_provider_events, "
+            "chase_communication_dispatch_checks TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT USAGE, SELECT ON SEQUENCE chase_communication_policy_decisions_sequence_no_seq, "
+            "chase_communication_consent_decisions_sequence_no_seq TO {}"
+        ).format(identifier))
+
+
+    if conn.execute("SELECT to_regclass('public.chase_communication_cancellations')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON chase_communication_cancellations TO {}").format(identifier))
+    if conn.execute("SELECT to_regclass('public.chase_communication_unknown_resolutions')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON chase_communication_unknown_resolutions TO {}").format(identifier))
+    if conn.execute("SELECT to_regclass('public.chase_communication_event_reviews')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON chase_communication_event_reviews TO {}").format(identifier))
+        conn.execute(sql.SQL("GRANT SELECT ON chase_communication_review_sources TO {}").format(identifier))
+    if conn.execute("SELECT to_regclass('public.chase_communication_unassigned_sources')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT ON chase_communication_unassigned_sources TO {}").format(identifier))
 
     if conn.execute("SELECT to_regclass('public.provider_handoff_heads')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT ON provider_handoff_heads, provider_handoff_operations TO {}").format(identifier))
@@ -347,6 +382,36 @@ def _provision_chase_worker_role(conn, settings: Settings) -> None:
         "GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text), "
         "cosmaneura_record_accepted_delivery_attempt(uuid) TO {}"
     ).format(identifier))
+
+    if conn.execute("SELECT to_regclass('public.chase_communication_policy_decisions')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT SELECT ON chase_communication_senders, chase_communication_bindings, "
+            "chase_communication_operations, chase_communication_events, chase_communication_suppressions, "
+            "chase_communication_policy_decisions, chase_communication_consent_decisions, "
+            "chase_communication_authorizations, chase_communication_dispatch_starts, "
+            "chase_communication_dispatch_receipts, chase_communication_provider_events, "
+            "chase_communication_dispatch_checks, chase_attempts TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT INSERT ON chase_communication_dispatch_starts, chase_communication_dispatch_receipts, "
+            "chase_communication_provider_events, chase_communication_dispatch_checks TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT USAGE, SELECT ON SEQUENCE chase_communication_provider_events_sequence_no_seq, "
+            "chase_communication_dispatch_checks_sequence_no_seq TO {}"
+        ).format(identifier))
+        conn.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION cosmaneura_staff_assignee_allowed(uuid,uuid), "
+            "cosmaneura_chase_admin_allowed(uuid,uuid) TO {}"
+        ).format(identifier))
+
+
+    if conn.execute("SELECT to_regclass('public.chase_communication_cancellations')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT ON chase_communication_cancellations TO {}").format(identifier))
+    if conn.execute("SELECT to_regclass('public.chase_communication_unknown_resolutions')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT ON chase_communication_unknown_resolutions TO {}").format(identifier))
+    if conn.execute("SELECT to_regclass('public.chase_communication_event_reviews')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT ON chase_communication_event_reviews, chase_communication_review_sources TO {}").format(identifier))
 
 
 def _provision_athena_import_role(conn, settings: Settings) -> None:

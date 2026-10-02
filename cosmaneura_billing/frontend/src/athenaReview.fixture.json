@@ -1,0 +1,1384 @@
+{
+  "notice": "Invented mock output; not actual Athena values.",
+  "chaseId": "synthetic-case-one",
+  "source": {
+    "schemaVersion": "athena-case-review.v1",
+    "chaseId": "synthetic-case-one",
+    "revision": 1,
+    "reviewId": "39fb3eaa-72ad-4def-8736-50dc7b04379d",
+    "candidate": {
+      "applied": false,
+      "candidateId": "6ebec5acb9ac79b45e7d28410fc65c52f507b17100b10a02e9776a0232f7a2fc",
+      "contact": {
+        "candidates": [
+          {
+            "field": {
+              "name": "mobile_phone",
+              "parsedValue": null,
+              "source": {
+                "dataset": "patient",
+                "pointer": "/0/mobilephone",
+                "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+              },
+              "sourceType": "string",
+              "state": "present",
+              "value": "+12025550142"
+            },
+            "formatStatus": "plausible",
+            "kind": "mobile",
+            "ownership": "unverified",
+            "selected": false,
+            "usableForOutreach": false
+          },
+          {
+            "field": {
+              "name": "home_phone",
+              "parsedValue": null,
+              "source": {
+                "dataset": "patient",
+                "pointer": "/0/homephone",
+                "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+              },
+              "sourceType": "absent",
+              "state": "absent",
+              "value": null
+            },
+            "formatStatus": "absent",
+            "kind": "home",
+            "ownership": "unverified",
+            "selected": false,
+            "usableForOutreach": false
+          },
+          {
+            "field": {
+              "name": "email",
+              "parsedValue": null,
+              "source": {
+                "dataset": "patient",
+                "pointer": "/0/email",
+                "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+              },
+              "sourceType": "string",
+              "state": "present",
+              "value": "casey@example.invalid"
+            },
+            "formatStatus": "plausible",
+            "kind": "email",
+            "ownership": "unverified",
+            "selected": false,
+            "usableForOutreach": false
+          }
+        ],
+        "consentObservations": [
+          {
+            "name": "text_consent",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/consenttotext",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "unknown"
+          },
+          {
+            "name": "call_consent",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/consenttocall",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "billing_sms_preference",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/contactpreference_billing_sms",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "billing_phone_preference",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/contactpreference_billing_phone",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "billing_email_preference",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/contactpreference_billing_email",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          }
+        ],
+        "effectiveConsent": {
+          "email": "unknown",
+          "phone": "unknown",
+          "sms": "unknown"
+        },
+        "outreachAuthorized": false,
+        "phoneSelection": "unselected",
+        "requiredReview": [
+          "recipient_identity",
+          "channel_purpose_consent",
+          "suppression",
+          "direct_contract",
+          "staff_approval"
+        ]
+      },
+      "insurance": {
+        "cardImageAvailability": "unknown",
+        "policies": [
+          {
+            "accepted": false,
+            "candidateId": "b1fb8b0d53b793b4dd0ac2b04e9b1a9ef96aa323271d8fb559d909de9eb50e82",
+            "cardImageAvailability": "unknown",
+            "coverageEffectiveDate": null,
+            "currentCoverage": "unknown",
+            "eligibilityInterpretation": "source_snapshot_only",
+            "eligibilityVerifiedByCab": false,
+            "fields": [
+              {
+                "name": "policy_record_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insuranceid",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "55001"
+              },
+              {
+                "name": "package_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insurancepackageid",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "44001"
+              },
+              {
+                "name": "package_payer_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insurancepackagepayerid",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "category_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/ircid",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "member_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insuranceidnumber",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "DEMO-MEMBER-42"
+              },
+              {
+                "name": "insured_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insuredidnumber",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "group_number",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/policynumber",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "DEMO-GROUP-7"
+              },
+              {
+                "name": "category_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/ircname",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "plan_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insuranceplanname",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "Invented Harbor Plan"
+              },
+              {
+                "name": "plan_display_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insuranceplandisplayname",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "payer_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insurancepayername",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "subscriber_display_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insurancepolicyholder",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "subscriber_first_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insurancepolicyholderfirstname",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "Casey"
+              },
+              {
+                "name": "subscriber_last_name",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/insurancepolicyholderlastname",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "Example"
+              },
+              {
+                "name": "relationship",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/relationshiptoinsured",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "Self"
+              },
+              {
+                "name": "relationship_id",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/relationshiptoinsuredid",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "sequence",
+                "parsedValue": 1,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/sequencenumber",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "string",
+                "state": "present",
+                "value": "1"
+              },
+              {
+                "name": "issue_date",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/issuedate",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "policy_expiration_date",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/expirationdate",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "cancelled",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/cancelled",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "source_updated_at",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/lastupdated",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "package_expiration_date",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/packageexpirationdate",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "eligibility_status",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/eligibilitystatus",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "eligibility_checked_at",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/eligibilitylastchecked",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "eligibility_message",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/eligibilitymessage",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              },
+              {
+                "name": "eligibility_reason",
+                "parsedValue": null,
+                "source": {
+                  "dataset": "insurance",
+                  "pointer": "/insurances/0/eligibilityreason",
+                  "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+                },
+                "sourceType": "absent",
+                "state": "absent",
+                "value": null
+              }
+            ],
+            "issues": [],
+            "memberIdState": "review_required",
+            "sequence": 1,
+            "sourceIndex": 0,
+            "sourceVersion": null,
+            "subscriberPatientMatch": "unverified",
+            "subscriberState": "review_required"
+          }
+        ],
+        "state": "complete"
+      },
+      "mappingVersion": "athena-card-chase-map.2026-09-29",
+      "patient": {
+        "fields": [
+          {
+            "name": "first_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/firstname",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "Casey"
+          },
+          {
+            "name": "last_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/lastname",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "Example"
+          },
+          {
+            "name": "birth_date",
+            "parsedValue": "2000-01-02",
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/dob",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "01/02/2000"
+          },
+          {
+            "name": "registration_department_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/departmentid",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "1"
+          },
+          {
+            "name": "current_department_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/primarydepartmentid",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "mobile_phone",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/mobilephone",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "+12025550142"
+          },
+          {
+            "name": "home_phone",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/homephone",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "email",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/email",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "casey@example.invalid"
+          },
+          {
+            "name": "email_exists",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/emailexistsyn",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "text_consent",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/consenttotext",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "unknown"
+          },
+          {
+            "name": "call_consent",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/consenttocall",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "billing_sms_preference",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/contactpreference_billing_sms",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "billing_phone_preference",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/contactpreference_billing_phone",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "billing_email_preference",
+            "parsedValue": null,
+            "source": {
+              "dataset": "patient",
+              "pointer": "/0/contactpreference_billing_email",
+              "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          }
+        ]
+      },
+      "reads": {
+        "insurance": {
+          "recordCount": 1,
+          "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3",
+          "state": "complete",
+          "totalCount": 1,
+          "truncated": false,
+          "pageHashes": [
+            "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+          ]
+        },
+        "patient": {
+          "recordCount": 1,
+          "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1",
+          "state": "complete",
+          "totalCount": null,
+          "truncated": false
+        }
+      },
+      "reviewIssues": [],
+      "schemaVersion": "athena-card-chase-review.v1",
+      "source": {
+        "batchId": "39fb3eaa-72ad-4def-8736-50dc7b04379d",
+        "observedAt": "2026-09-29T18:49:50.265837Z",
+        "patientId": "60178",
+        "serverPracticeId": "local-test",
+        "syntheticOnly": true,
+        "system": "athena_preview",
+        "vendorPracticeId": "195900"
+      },
+      "status": "review_required",
+      "sourceDigest": "5735734c38ef09ef05fe464c767ce568e2aff8f9518cc1cbc9fdc73334b0e770",
+      "readError": null
+    },
+    "applied": null,
+    "mode": "mock",
+    "billingImport": null,
+    "caseBinding": "aca33f4a4e423d228ea3f88b3c52f6eb7d3856f7f7dd84cb1ca562a893be4f27"
+  },
+  "applied": {
+    "reviewId": "39fb3eaa-72ad-4def-8736-50dc7b04379d",
+    "operationId": "de718a0c-c3f8-46d7-9f8b-492d45b2ea32",
+    "sourceDigest": "5735734c38ef09ef05fe464c767ce568e2aff8f9518cc1cbc9fdc73334b0e770",
+    "patient": {
+      "fields": [
+        {
+          "name": "first_name",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/firstname",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "Casey"
+        },
+        {
+          "name": "last_name",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/lastname",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "Example"
+        },
+        {
+          "name": "birth_date",
+          "parsedValue": "2000-01-02",
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/dob",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "01/02/2000"
+        },
+        {
+          "name": "registration_department_id",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/departmentid",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "1"
+        },
+        {
+          "name": "current_department_id",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/primarydepartmentid",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        },
+        {
+          "name": "mobile_phone",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/mobilephone",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "+12025550142"
+        },
+        {
+          "name": "home_phone",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/homephone",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        },
+        {
+          "name": "email",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/email",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "casey@example.invalid"
+        },
+        {
+          "name": "email_exists",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/emailexistsyn",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        },
+        {
+          "name": "text_consent",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/consenttotext",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "string",
+          "state": "present",
+          "value": "unknown"
+        },
+        {
+          "name": "call_consent",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/consenttocall",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        },
+        {
+          "name": "billing_sms_preference",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/contactpreference_billing_sms",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        },
+        {
+          "name": "billing_phone_preference",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/contactpreference_billing_phone",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        },
+        {
+          "name": "billing_email_preference",
+          "parsedValue": null,
+          "source": {
+            "dataset": "patient",
+            "pointer": "/0/contactpreference_billing_email",
+            "sha256": "c2fc3483db043fe3a4fe920a0ecaadb707fd476e409b756c62ed648fb3e3c4d1"
+          },
+          "sourceType": "absent",
+          "state": "absent",
+          "value": null
+        }
+      ]
+    },
+    "contacts": [
+      {
+        "field": "mobile_phone",
+        "value": "+12025550142",
+        "consent": "unknown"
+      },
+      {
+        "field": "email",
+        "value": "casey@example.invalid",
+        "consent": "unknown"
+      }
+    ],
+    "policies": [
+      {
+        "accepted": false,
+        "candidateId": "b1fb8b0d53b793b4dd0ac2b04e9b1a9ef96aa323271d8fb559d909de9eb50e82",
+        "cardImageAvailability": "unknown",
+        "coverageEffectiveDate": null,
+        "currentCoverage": "unknown",
+        "eligibilityInterpretation": "source_snapshot_only",
+        "eligibilityVerifiedByCab": false,
+        "fields": [
+          {
+            "name": "policy_record_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insuranceid",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "55001"
+          },
+          {
+            "name": "package_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insurancepackageid",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "44001"
+          },
+          {
+            "name": "package_payer_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insurancepackagepayerid",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "category_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/ircid",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "member_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insuranceidnumber",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "DEMO-MEMBER-42"
+          },
+          {
+            "name": "insured_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insuredidnumber",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "group_number",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/policynumber",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "DEMO-GROUP-7"
+          },
+          {
+            "name": "category_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/ircname",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "plan_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insuranceplanname",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "Invented Harbor Plan"
+          },
+          {
+            "name": "plan_display_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insuranceplandisplayname",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "payer_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insurancepayername",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "subscriber_display_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insurancepolicyholder",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "subscriber_first_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insurancepolicyholderfirstname",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "Casey"
+          },
+          {
+            "name": "subscriber_last_name",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/insurancepolicyholderlastname",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "Example"
+          },
+          {
+            "name": "relationship",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/relationshiptoinsured",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "Self"
+          },
+          {
+            "name": "relationship_id",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/relationshiptoinsuredid",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "sequence",
+            "parsedValue": 1,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/sequencenumber",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "string",
+            "state": "present",
+            "value": "1"
+          },
+          {
+            "name": "issue_date",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/issuedate",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "policy_expiration_date",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/expirationdate",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "cancelled",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/cancelled",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "source_updated_at",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/lastupdated",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "package_expiration_date",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/packageexpirationdate",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "eligibility_status",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/eligibilitystatus",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "eligibility_checked_at",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/eligibilitylastchecked",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "eligibility_message",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/eligibilitymessage",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          },
+          {
+            "name": "eligibility_reason",
+            "parsedValue": null,
+            "source": {
+              "dataset": "insurance",
+              "pointer": "/insurances/0/eligibilityreason",
+              "sha256": "8447e4f954d8151d83a721ed95c4d42c831f944b77dc2aacebee8e53277810c3"
+            },
+            "sourceType": "absent",
+            "state": "absent",
+            "value": null
+          }
+        ],
+        "issues": [],
+        "memberIdState": "review_required",
+        "sequence": 1,
+        "sourceIndex": 0,
+        "sourceVersion": null,
+        "subscriberPatientMatch": "unverified",
+        "subscriberState": "review_required"
+      }
+    ],
+    "at": "2026-09-29T18:49:50.273644Z",
+    "actor": {
+      "tenantId": "e9746b96-6550-4f34-8043-d5405f457a13",
+      "userId": "643e7330-12b9-4590-bc93-b98c81a34ca4",
+      "role": "BillingStaff"
+    },
+    "reason": "Compared invented patient and insurance fields.",
+    "consent": "unknown",
+    "eligibilityVerified": false,
+    "caseClosed": false
+  },
+  "billing": {
+    "schemaVersion": "athena-billing-read.v1",
+    "sourcePatientId": "60178",
+    "departmentId": "1",
+    "encounters": [
+      {
+        "encounterid": {
+          "state": "present",
+          "value": "88001"
+        },
+        "appointmentid": {
+          "state": "absent",
+          "value": null
+        },
+        "departmentid": {
+          "state": "present",
+          "value": "1"
+        },
+        "providerid": {
+          "state": "absent",
+          "value": null
+        },
+        "encounterdate": {
+          "state": "absent",
+          "value": null
+        },
+        "encountertype": {
+          "state": "absent",
+          "value": null
+        },
+        "status": {
+          "state": "present",
+          "value": "CLOSED"
+        },
+        "stage": {
+          "state": "absent",
+          "value": null
+        },
+        "lastupdated": {
+          "state": "present",
+          "value": "09/29/2026"
+        },
+        "closeddate": {
+          "state": "absent",
+          "value": null
+        },
+        "reviewedandsigneddate": {
+          "state": "present",
+          "value": "09/29/2026"
+        }
+      }
+    ],
+    "state": "complete",
+    "pageHashes": [
+      "871a844af58ba2d88c8348d0dcb33a9418acc061d8030c3f90a7421b0f35d23c"
+    ],
+    "error": null,
+    "note": {
+      "encounterId": "88001",
+      "metadata": {
+        "encounterid": {
+          "state": "present",
+          "value": "88001"
+        },
+        "appointmentid": {
+          "state": "absent",
+          "value": null
+        },
+        "departmentid": {
+          "state": "present",
+          "value": "1"
+        },
+        "providerid": {
+          "state": "absent",
+          "value": null
+        },
+        "encounterdate": {
+          "state": "absent",
+          "value": null
+        },
+        "encountertype": {
+          "state": "absent",
+          "value": null
+        },
+        "status": {
+          "state": "present",
+          "value": "CLOSED"
+        },
+        "stage": {
+          "state": "absent",
+          "value": null
+        },
+        "lastupdated": {
+          "state": "present",
+          "value": "09/29/2026"
+        },
+        "closeddate": {
+          "state": "absent",
+          "value": null
+        },
+        "reviewedandsigneddate": {
+          "state": "present",
+          "value": "09/29/2026"
+        }
+      },
+      "metadataSha256": "dcea0ec172084698e8fd7dcc7c30bedaef81da718165ec055b2a6946074d4f77",
+      "responseSha256": "d91ea4e513364cc60014859446ead3e0633c336ebcc0bcdc95a91747e444c67b",
+      "sourcePointer": "/summaryhtml",
+      "summaryHtml": "<h1>Bundled synthetic visit</h1><h2>Intake</h2><div>Hi doctor, I am a 26 year old male. I am 5 feet and 9 inches tall and weigh 255 pounds. When I eat spicy food, I poop blood. Sometimes when I have constipation as well, I poop a little bit of blood. I am really scared that I have colon cancer. I do have diarrhea often. I do not have a family history of colon cancer. I got blood tests done last night. Please find my reports attached.</div><h2>Transcript</h2><div>Provider: Tell me about the bleeding - how much, what color, and how often?\nPatient: Bright red, a little, mostly after spicy food or when I&#x27;m constipated. A few times a month.\nProvider: Any weight loss, or change in your stools besides the blood?\nPatient: I&#x27;ve lost a bit of weight and I get diarrhea pretty often.\nProvider: I reviewed the CBC you brought - it&#x27;s reassuring, no anemia. Given the bleeding and the weight change, I&#x27;m going to order a stool occult blood test today and refer you for a colonoscopy to be safe. We&#x27;ll hold off on any new medication for now.</div><h2>Signed note</h2><div>26 y/o male, established patient. CC: intermittent hematochezia. HPI: bright red blood per rectum, small volume, associated with spicy food and constipation; frequent diarrhea; reports mild weight loss. Denies family history of colorectal cancer. Data: reviewed outside CBC (no anemia). Ordered fecal occult blood test. Vitals: ht 69in, wt 255lb, BMI 37.6. Assessment/Plan: (1) Hematochezia - refer for diagnostic colonoscopy, FOBT today; (2) Constipation - dietary fiber, hydration; (3) Diarrhea - monitor. Return if bleeding increases or new symptoms. Electronically signed.</div>",
+      "plainText": "Bundled synthetic visit\nIntake\nHi doctor, I am a 26 year old male. I am 5 feet and 9 inches tall and weigh 255 pounds. When I eat spicy food, I poop blood. Sometimes when I have constipation as well, I poop a little bit of blood. I am really scared that I have colon cancer. I do have diarrhea often. I do not have a family history of colon cancer. I got blood tests done last night. Please find my reports attached.\n\nTranscript\nProvider: Tell me about the bleeding - how much, what color, and how often?\nPatient: Bright red, a little, mostly after spicy food or when I'm constipated. A few times a month.\nProvider: Any weight loss, or change in your stools besides the blood?\nPatient: I've lost a bit of weight and I get diarrhea pretty often.\nProvider: I reviewed the CBC you brought - it's reassuring, no anemia. Given the bleeding and the weight change, I'm going to order a stool occult blood test today and refer you for a colonoscopy to be safe. We'll hold off on any new medication for now.\n\nSigned note\n26 y/o male, established patient. CC: intermittent hematochezia. HPI: bright red blood per rectum, small volume, associated with spicy food and constipation; frequent diarrhea; reports mild weight loss. Denies family history of colorectal cancer. Data: reviewed outside CBC (no anemia). Ordered fecal occult blood test. Vitals: ht 69in, wt 255lb, BMI 37.6. Assessment/Plan: (1) Hematochezia - refer for diagnostic colonoscopy, FOBT today; (2) Constipation - dietary fiber, hydration; (3) Diarrhea - monitor. Return if bleeding increases or new symptoms. Electronically signed.",
+      "transformVersion": "athena-summary-text.v1",
+      "offsetUnit": "unicode_code_point",
+      "sourceAtomicity": "unverified",
+      "signatureInterpretation": "unverified",
+      "requiresProviderConfirmation": true
+    },
+    "unknownFields": [
+      "place_of_service",
+      "patient_age",
+      "patient_sex",
+      "provider_specialty",
+      "submitted_codes",
+      "eligible_em_time"
+    ],
+    "readyForHeader": false,
+    "caseRevision": 2,
+    "mode": "mock"
+  },
+  "import": {
+    "encounterId": "athena-review-be23220c-f2f1-4356-a600-381e94a57e84",
+    "source": "athena_staff_review_mock",
+    "sourceEncounterId": "88001",
+    "departmentId": "1",
+    "sourcePatientId": "60178",
+    "sourceNoteSha256": "d91ea4e513364cc60014859446ead3e0633c336ebcc0bcdc95a91747e444c67b",
+    "sourceMetadataSha256": "dcea0ec172084698e8fd7dcc7c30bedaef81da718165ec055b2a6946074d4f77",
+    "plainTextSha256": "893d4a56e39fecdd3f57282d696df52d552874fdff7d98ac8631163c930bd192",
+    "transformVersion": "athena-summary-text.v1",
+    "sourcePointer": "/summaryhtml",
+    "sourceAtomicity": "unverified",
+    "reviewReason": "Reviewed complete synthetic note and context.",
+    "contextOrigin": "staff_confirmed",
+    "at": "2026-09-29T18:49:50.276978Z",
+    "clinicalContext": {
+      "patientAge": 26,
+      "patientSex": "M",
+      "encounterType": "office_established",
+      "placeOfService": "11",
+      "providerSpecialty": "Family Medicine"
+    },
+    "actor": {
+      "tenantId": "e9746b96-6550-4f34-8043-d5405f457a13",
+      "userId": "643e7330-12b9-4590-bc93-b98c81a34ca4",
+      "role": "BillingStaff"
+    }
+  }
+}

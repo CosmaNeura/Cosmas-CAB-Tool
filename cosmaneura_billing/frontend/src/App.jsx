@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ShieldCheck, Stethoscope, ClipboardCheck, CreditCard, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
+import ProviderHeaderLaunch from "./ProviderHeaderLaunch.jsx";
+import { canLaunchHeader, headerLaunchRequest } from "./providerHeaderLaunch.js";
 import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
@@ -50,24 +52,24 @@ function BrandedMessage({ children }) {
   );
 }
 
-function SafetyBanner() {
+function SafetyBanner({ compact = false }) {
   return (
     <section
-      aria-label="Synthetic pilot safety status"
-      className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-violet-950 shadow-sm"
+      aria-label={compact ? "CardChase workflow status" : "Synthetic pilot safety status"}
+      className={`${compact ? "mb-4 rounded-lg py-2" : "mb-5 rounded-2xl py-3 shadow-sm"} border border-violet-200 bg-violet-50 px-4 text-violet-950`}
     >
       <div className="flex items-start gap-3">
         <ShieldCheck size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
         <div>
-          <p className="text-sm font-semibold">Synthetic CAB demo boundary</p>
-          <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs leading-relaxed">
-            <li>Synthetic data</li>
+          {!compact && <p className="text-sm font-semibold">Synthetic CAB demo boundary</p>}
+          <ul className={`${compact ? "" : "mt-1 "}flex flex-wrap gap-x-4 gap-y-1 text-xs leading-relaxed`}>
+            {!compact && <li>Synthetic data</li>}
             <li>Decision support only</li>
             <li>Human review required</li>
             <li>No EHR or claim transmission</li>
-            <li>Patient outreach disabled by demo policy</li>
+            <li>{compact ? "Contact work requires staff review" : "Patient outreach disabled by demo policy"}</li>
           </ul>
-          <p className="mt-1 text-xs text-violet-800">Only server-verified, read-only synthetic encounters are listed in this workspace.</p>
+          {!compact && <p className="mt-1 text-xs text-violet-800">Only server-verified, read-only synthetic encounters are listed in this workspace.</p>}
         </div>
       </div>
     </section>
@@ -75,9 +77,15 @@ function SafetyBanner() {
 }
 
 export default function App() {
+  const launch = headerLaunchRequest(window.location.search);
+  return launch ? <ProviderHeaderLaunch launch={launch} /> : <Workspace />;
+}
+
+function Workspace() {
   const [view, setView] = useState(null);               // provider | coder | chase
   const [views, setViews] = useState([]);               // server-owned capabilities
   const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
+  const [billingHeaderAvailable, setBillingHeaderAvailable] = useState(false);
   const [manageChase, setManageChase] = useState(false); // Server-owned staff mutation capability
   const [health, setHealth] = useState(null);           // null = probing, false = offline
   const [authStatus, setAuthStatus] = useState(null);   // 401 = sign in, 403 = no assigned role
@@ -106,6 +114,7 @@ export default function App() {
         setViews(session.views);
         setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
         setManageChase(session.capabilities?.manageChase === true);
+        setBillingHeaderAvailable(canLaunchHeader(session));
         setView((current) => (
           session.views.includes(current) ? current : session.defaultView
         ));
@@ -164,7 +173,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 font-sans text-slate-900">
-      <div className="mx-auto max-w-5xl">
+      <div className={`mx-auto ${view === "chase" ? "max-w-[1440px]" : "max-w-5xl"}`}>
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <BrandLockup />
           <div className="flex items-center gap-2">
@@ -184,7 +193,7 @@ export default function App() {
           </div>
         </header>
 
-        <SafetyBanner />
+        <SafetyBanner compact={view === "chase"} />
 
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <nav
@@ -221,6 +230,7 @@ export default function App() {
             live={Boolean(health)}
             demoSeed={chaseDemoSeed}
             manageChase={manageChase}
+            billingHeaderAvailable={billingHeaderAvailable}
           />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>
@@ -255,7 +265,8 @@ export default function App() {
 
         <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
           <Info size={12} />
-          Prepared billing guidance only — no EHR, Athena, clearinghouse, payer, or patient transmission occurred.
+          {view === "chase" ? "Staff review governs outreach. Check each message's delivery status in Communications."
+            : "Prepared billing guidance only — no EHR, Athena, clearinghouse, payer, or patient transmission occurred."}
         </p>
       </div>
     </div>
