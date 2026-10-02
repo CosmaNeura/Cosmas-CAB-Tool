@@ -7,6 +7,8 @@ Mount the complete preserved source-review component in CardChase when the
 server advertises task.athenaReview.available. Keep its billing workflow behind
 an explicit billingAvailable flag until the billing backend is integrated.
 
+Configured mode requires a configured response envelope from the first read;
+missing/null connection metadata cannot expose a legacy patient override.
 Staff reads only the stored mapping in configured mode and explicitly confirms
 patient match, selected fields, insurance review and a reason. Successful apply
 refreshes the case in place; it preserves the selected source tab. Ambiguous

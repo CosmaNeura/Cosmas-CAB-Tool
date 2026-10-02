@@ -89,7 +89,7 @@ function CaseBody({ task, active, manageChase, blocked, onOpenEncounter, onAppli
           setContext({ patientAge: "", patientSex: "", encounterType: "", placeOfService: "", providerSpecialty: "" });
         }
       } else {
-        const parsed = readAthenaEnvelope(data, chaseId, command, connection !== null);
+        const parsed = readAthenaEnvelope(data, chaseId, command, task.athenaReview?.mode === "configured" || connection !== null);
         const next = parsed.view; receipt = parsed.receipt; setConnection(parsed.connection);
         setView(next); setPatient(next.candidate?.source.patientId || ""); clearSelections();
       }

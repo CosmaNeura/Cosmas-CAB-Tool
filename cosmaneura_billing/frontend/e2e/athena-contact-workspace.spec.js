@@ -7,7 +7,7 @@ const binding = {schemaVersion: "athena-source-binding.v1", serverPracticeId: "l
   environment: "preview", vendorPracticeId: "195900", sourcePatientId: "60178", connectionRevision: 1,
   bindingRevision: 1, profileSha256: "a".repeat(64), scopeSha256: "b".repeat(64)};
 
-async function setup(page, {lostApply = false, missingBinding = false} = {}) {
+async function setup(page, {lostApply = false, missingBinding = false, invalidConnection = false} = {}) {
   let view = {schemaVersion: "athena-case-review.v1", chaseId, revision: 0, reviewId: null, candidate: null, applied: null};
   let applyCount = 0, taskReads = 0;
   const commands = [];
@@ -19,7 +19,8 @@ async function setup(page, {lostApply = false, missingBinding = false} = {}) {
     const path = new URL(route.request().url()).pathname, body = route.request().postDataJSON();
     const connection = () => ({workflow: "configured", state: missingBinding ? "binding_missing" : "ready",
       readAllowed: !missingBinding, currentReviewMatchesBinding: view.revision > 0, binding: missingBinding ? null : binding});
-    if (path === base) return route.fulfill({json: {view, connection: connection()}});
+    if (path === base) return route.fulfill({json: invalidConnection === "omitted" ? {view}
+      : {view, connection: invalidConnection === "null" ? null : connection()}});
     commands.push({path, body});
     expect(missingBinding).toBe(false); expect(body.chaseId).toBe(chaseId);
     if (path === `${base}/read`) {
@@ -47,7 +48,7 @@ async function setup(page, {lostApply = false, missingBinding = false} = {}) {
   await page.goto("/"); await page.getByRole("button", {name: /Synthetic patient A/}).click();
   await page.getByRole("tab", {name: "Athena review", exact: true}).click();
   const panel = page.getByRole("region", {name: "Athena case review", exact: true});
-  await expect(panel.getByRole("heading", {name: "Mapped Athena source"})).toBeVisible();
+  if (!invalidConnection) await expect(panel.getByRole("heading", {name: "Mapped Athena source"})).toBeVisible();
   return {panel, commands, applyCount: () => applyCount, taskReads: () => taskReads};
 }
 
@@ -97,5 +98,15 @@ test("missing Athena mapping stays explicit and does not offer a patient overrid
   await expect(panel).toContainText("No Athena patient mapping is configured for this case.");
   await expect(panel.getByRole("button", {name: "Read mapped source", exact: true})).toBeDisabled();
   await expect(panel.getByLabel("Synthetic Athena patient", {exact: true})).toHaveCount(0);
+  expect(commands).toEqual([]);
+});
+
+for (const invalidConnection of ["omitted", "null"]) test(`configured Athena rejects ${invalidConnection} initial connection without legacy fallback`, async ({page}) => {
+  const {panel, commands} = await setup(page, {invalidConnection});
+  await expect(panel.getByRole("alert")).toBeVisible();
+  await expect(panel).toContainText("Source review unavailable.");
+  await expect(panel.getByLabel("Synthetic Athena patient", {exact: true})).toHaveCount(0);
+  await expect(panel.getByRole("button", {name: "Read source", exact: true})).toHaveCount(0);
+  await expect(panel.getByRole("button", {name: "Read mapped source", exact: true})).toHaveCount(0);
   expect(commands).toEqual([]);
 });
