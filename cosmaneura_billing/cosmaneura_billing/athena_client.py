@@ -2,10 +2,11 @@
 
 This module pins only the Preview origin, OAuth metadata locations, public
 synthetic practice, and portal-selected scope verified during access review.
-It intentionally does not claim to know Athena's proprietary resource paths,
-query parameters, OAuth wire exchange, or response schema.  Those details
-must come from the approved sandbox contract.  The boundary is split into
-three independently testable pieces:
+The application operation allowlist remains empty. A separate pure decoder at
+the end of this module maps the documented, bounded synthetic patient/insurance
+response shapes for staff review without activating a transport. Live operation
+details still require an approved sandbox contract. The read boundary is split
+into three independently testable pieces:
 
 * :class:`MockAthenaClient` supplies deterministic pages made only from the
   repository's wholly synthetic release-candidate pack;
@@ -17,11 +18,21 @@ three independently testable pieces:
 No factory silently selects the live transport.  Constructing the mock never
 reads credentials or opens a socket, and the one-shot sync skeleton runs only
 the mock in this release.
+
+The separate staff lane at the end retains its approved Preview transport.
+Its immutable practice/case contract also builds and decodes Production fixture
+data, but actual Production transport remains unavailable before authentication.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import re
+import ssl
+from html.parser import HTMLParser
+from threading import RLock
 import json
+import math
 import socket
 import time
 import urllib.error
@@ -35,6 +46,7 @@ from typing import Any, Callable, Mapping, Protocol
 from .corpus.demo_release_candidate import load_demo_release_candidate
 from .schemas import VisitBundle
 from .source_import import source_import_idempotency_key
+from .athena_staff_contract import AthenaStaffScope, AthenaStaffScopeError
 
 
 NORMALIZED_SCHEMA_VERSION = "cosmaneura-athena-normalized-v1"
@@ -45,6 +57,13 @@ ATHENA_PREVIEW_INTROSPECTION_URL = (
 )
 ATHENA_PREVIEW_PRACTICE_ID = "195900"
 ATHENA_PREVIEW_SCOPE = "athena/service/Athenanet.MDP.*"
+ATHENA_PRODUCTION_ORIGIN = "https://api.platform.athenahealth.com"
+# Only the pure staff contract supports Production in this release. The actual
+# staff transport rejects it before credential/token use, including injected I/O.
+_STAFF_ORIGINS = MappingProxyType({
+    "preview": ATHENA_PREVIEW_ORIGIN,
+    "production": ATHENA_PRODUCTION_ORIGIN,
+})
 MAX_PAGE_RECORDS = 100
 MAX_PAGES = 100
 MAX_RESPONSE_BYTES = 1_048_576
@@ -1013,3 +1032,699 @@ class AthenaSandboxClient:
         ):
             raise AthenaSchemaError() from None
         return page
+
+
+# Documented patient/insurance fields for the dormant Card Chase review mapper.
+# No operation is added to the live allowlist and no token/transport is selected.
+_CARD_PATIENT_FIELDS = (
+    ("first_name", "firstname"), ("last_name", "lastname"), ("birth_date", "dob"),
+    ("registration_department_id", "departmentid"),
+    ("current_department_id", "primarydepartmentid"),
+    ("mobile_phone", "mobilephone"), ("home_phone", "homephone"),
+    ("email", "email"), ("email_exists", "emailexistsyn"),
+    ("text_consent", "consenttotext"), ("call_consent", "consenttocall"),
+    ("billing_sms_preference", "contactpreference_billing_sms"),
+    ("billing_phone_preference", "contactpreference_billing_phone"),
+    ("billing_email_preference", "contactpreference_billing_email"),
+)
+_CARD_INSURANCE_FIELDS = (
+    ("policy_record_id", "insuranceid"), ("package_id", "insurancepackageid"),
+    ("package_payer_id", "insurancepackagepayerid"), ("category_id", "ircid"),
+    ("member_id", "insuranceidnumber"), ("insured_id", "insuredidnumber"),
+    ("group_number", "policynumber"), ("category_name", "ircname"),
+    ("plan_name", "insuranceplanname"), ("plan_display_name", "insuranceplandisplayname"),
+    ("payer_name", "insurancepayername"),
+    ("subscriber_display_name", "insurancepolicyholder"),
+    ("subscriber_first_name", "insurancepolicyholderfirstname"),
+    ("subscriber_last_name", "insurancepolicyholderlastname"),
+    ("relationship", "relationshiptoinsured"), ("relationship_id", "relationshiptoinsuredid"),
+    ("sequence", "sequencenumber"), ("issue_date", "issuedate"),
+    ("policy_expiration_date", "expirationdate"), ("cancelled", "cancelled"),
+    ("source_updated_at", "lastupdated"), ("package_expiration_date", "packageexpirationdate"),
+    ("eligibility_status", "eligibilitystatus"),
+    ("eligibility_checked_at", "eligibilitylastchecked"),
+    ("eligibility_message", "eligibilitymessage"), ("eligibility_reason", "eligibilityreason"),
+)
+
+
+@dataclass(frozen=True, repr=False)
+class AthenaCardField:
+    name: str
+    pointer: str
+    present: bool
+    wire_type: str
+    value: str | int | bool | None
+
+
+@dataclass(frozen=True, repr=False)
+class AthenaCardRead:
+    dataset: str
+    sha256: str
+    records: tuple[tuple[AthenaCardField, ...], ...]
+    total_count: int | None
+    truncated: bool
+
+
+def _card_json(raw: bytes, *, text_limit: int = 8192, allow_lines: bool = False) -> Any:
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError()
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError()
+
+    if not isinstance(raw, bytes) or not 1 <= len(raw) <= 262_144:
+        raise AthenaSchemaError() from None
+    try:
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+                             parse_constant=invalid_constant)
+        pending, nodes = [(payload, 0)], 0
+        while pending:
+            item, depth = pending.pop()
+            nodes += 1
+            if depth > 16 or nodes > 20_000:
+                raise ValueError()
+            if isinstance(item, str):
+                if len(item.encode("utf-8")) > text_limit or any(
+                    (ord(char) < 32 and not (allow_lines and char in "\n\r\t"))
+                    or ord(char) == 127 for char in item
+                ):
+                    raise ValueError()
+            elif isinstance(item, float) and not math.isfinite(item):
+                raise ValueError()
+            elif isinstance(item, dict):
+                pending.extend((child, depth + 1) for child in item.values())
+                pending.extend((key, depth + 1) for key in item)
+            elif isinstance(item, list):
+                pending.extend((child, depth + 1) for child in item)
+        return payload
+    except (ValueError, UnicodeError, RecursionError, OverflowError):
+        raise AthenaSchemaError() from None
+
+
+def decode_athena_card_read(
+    raw: bytes, *, dataset: str, expected_patient_id: str, scope: AthenaStaffScope | None = None,
+) -> AthenaCardRead:
+    """Decode supplied bytes only; this function cannot read or authorize data.
+
+    Insurance items need not repeat patientid. Their request binding must come
+    from the trusted caller's two-read receipt; an explicit mismatch always
+    rejects. Unknown fields are excluded, including emergency-contact fields,
+    SSNs, balances, addresses and any purported consent/coverage shortcuts.
+    Partial pages remain partial; continuation URLs never escape this decoder.
+    """
+    if not isinstance(dataset, str) or dataset not in {"patient", "insurance"}:
+        raise AthenaSchemaError() from None
+    _staff_patient(expected_patient_id, scope=scope)
+    practice = _staff_practice(scope)
+    payload = _card_json(raw)
+    if dataset == "patient":
+        records, total, truncated = payload, None, False
+        fields, prefix, limit = _CARD_PATIENT_FIELDS, "", 1
+    else:
+        if not isinstance(payload, dict) or "insurances" not in payload:
+            raise AthenaSchemaError() from None
+        if ("patientid" in payload and payload["patientid"] != expected_patient_id
+                or "practiceid" in payload and payload["practiceid"] != practice):
+            raise AthenaSchemaError() from None
+        records, total = payload["insurances"], payload.get("totalcount")
+        if "totalcount" in payload and (type(total) is not int or not 0 <= total <= 1_000_000):
+            raise AthenaSchemaError() from None
+        for key in ("next", "previous"):
+            if payload.get(key) is not None:
+                _safe_string(payload[key], minimum=0, maximum=2048)
+        truncated = bool(payload.get("next")) or bool(payload.get("previous")) or total is None
+        fields, prefix, limit = _CARD_INSURANCE_FIELDS, "/insurances", 5
+    if not isinstance(records, list) or len(records) > limit:
+        raise AthenaSchemaError() from None
+    if total is not None and total < len(records):
+        raise AthenaSchemaError() from None
+    truncated = truncated or (total is not None and total > len(records))
+    output = []
+    types = {str: "string", int: "number", float: "number", bool: "boolean",
+             dict: "object", list: "array", type(None): "null"}
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise AthenaSchemaError() from None
+        if ((dataset == "patient" or "patientid" in record)
+                and record.get("patientid") != expected_patient_id):
+            raise AthenaSchemaError() from None
+        if "practiceid" in record and record["practiceid"] != practice:
+            raise AthenaSchemaError() from None
+        output.append(tuple(AthenaCardField(
+            name=name, pointer=f"{prefix}/{index}/{key}", present=key in record,
+            wire_type=types[type(record.get(key))] if key in record else "absent",
+            value=record.get(key) if type(record.get(key)) in {str, int, bool} else None,
+        ) for name, key in fields))
+    return AthenaCardRead(dataset, hashlib.sha256(raw).hexdigest(), tuple(output),
+                          total, bool(truncated))
+
+# Explicit staff-reviewed Preview application lane. This does NOT register an
+# operation in the old sync allowlist or alter the separately approved probe.
+_STAFF_FIELDS = ("encounterid", "appointmentid", "departmentid", "providerid",
+                 "encounterdate", "encountertype", "status", "stage", "lastupdated",
+                 "closeddate", "reviewedandsigneddate")
+
+
+def _staff_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,17}", value):
+        raise AthenaSchemaError()
+    return value
+
+
+def _staff_response_id(value):
+    # Athena emits JSON integers for encounter IDs and related identifiers.
+    # Only response decoding accepts these; request IDs stay canonical strings.
+    return _staff_id(str(value) if type(value) is int else value)
+
+
+def _staff_scope(scope):
+    if type(scope) is not AthenaStaffScope:
+        raise AthenaSchemaError()
+    try:
+        scope.__post_init__()
+    except AthenaStaffScopeError:
+        raise AthenaSchemaError() from None
+    if (scope.profile.environment == "preview"
+            and scope.profile.vendor_practice_id != ATHENA_PREVIEW_PRACTICE_ID):
+        raise AthenaSchemaError()
+    return scope
+
+
+def _staff_practice(scope):
+    return _staff_scope(scope).profile.vendor_practice_id if scope is not None else ATHENA_PREVIEW_PRACTICE_ID
+
+
+def _staff_origin(scope):
+    return _STAFF_ORIGINS[_staff_scope(scope).profile.environment] if scope is not None else ATHENA_PREVIEW_ORIGIN
+
+
+def _staff_patient(value, *, scope=None):
+    if scope is not None:
+        _staff_scope(scope)
+        if value != scope.source_patient_id:
+            raise AthenaSchemaError()
+    if scope is None or scope.profile.environment == "preview":
+        if value not in tuple(str(i) for i in range(60178, 60185)):
+            raise AthenaSchemaError()
+    else:
+        _staff_id(value)
+    return value
+
+
+def _staff_target(kind, patient, *, department=None, encounter=None, offset=0, scope=None):
+    """Literal GET contract: no caller URL, arbitrary query, or write-like flags."""
+    _staff_patient(patient, scope=scope)
+    if (type(offset) is not int or offset < 0 or offset % 5
+            or offset > (999_999_995 if kind == "encounters" else 10)):
+        raise AthenaSchemaError()
+    prefix = f"/v1/{_staff_practice(scope)}"
+    if kind == "patient":
+        return prefix + f"/patients/{patient}", {"showfullssn": "false"}
+    if kind == "insurance":
+        return prefix + f"/patients/{patient}/insurances", {
+            "limit": "5", "offset": str(offset), "showcancelled": "true", "showfullssn": "false"}
+    if kind == "encounters":
+        return prefix + f"/chart/{patient}/encounters", {
+            "departmentid": _staff_id(department), "limit": "5", "offset": str(offset)}
+    if kind in ("encounter", "summary"):
+        _staff_id(encounter)
+        return (prefix + f"/chart/encounter/{encounter}" if kind == "encounter"
+                else prefix + f"/chart/encounters/{encounter}/summary"), {}
+    raise AthenaOperationUnavailable()
+
+
+def _staff_url(kind, patient, *, scope=None, **params):
+    path, query = _staff_target(kind, patient, scope=scope, **params)
+    return _staff_origin(scope) + path + ("?" + urllib.parse.urlencode(query) if query else "")
+
+
+def build_athena_staff_read_url(scope: AthenaStaffScope, kind: str, *,
+                                department=None, encounter=None, offset=0) -> str:
+    """Pure fixed-endpoint contract, not authority to send a request.
+
+    The server supplies the immutable case/patient binding. Production URL
+    construction is available for offline integration; its transport is closed.
+    Encounter IDs still require patient-bound discovery before any later read.
+    """
+    _staff_scope(scope)
+    return _staff_url(kind, scope.source_patient_id, scope=scope,
+                      department=department, encounter=encounter, offset=offset)
+
+
+class AthenaStaffReadClient:
+    """Executable fixed-origin TLS read lane; construction never performs I/O.
+
+    Legacy Preview is limited to the public synthetic cohort. Production needs
+    an exact server scope and active transaction-lived read/storage lease.
+    No environment access, credential fallback, introspection, EHR
+    write, redirect, proxy, next-link execution, or background activity exists.
+    All HTTP (including OAuth) is injectable for offline protocol tests.
+    """
+    mode = "preview"
+
+    def __init__(self, *, client_id="", client_secret="", token_provider=None,
+                 urlopen=None, clock=time.time, monotonic=time.monotonic, max_pages=3,
+                 scope: AthenaStaffScope | None = None, credential_environment=None, read_lease=None):
+        if scope is not None:
+            _staff_scope(scope)
+            _staff_patient(scope.source_patient_id, scope=scope)
+            if credential_environment != scope.profile.environment:
+                raise AthenaAuthenticationError()
+            if scope.profile.environment == "production":
+                from .athena_admission import AthenaReadLease, AthenaAdmissionError
+                if type(read_lease) is not AthenaReadLease: raise AthenaOperationUnavailable()
+                try: read_lease.assert_active(scope)
+                except AthenaAdmissionError: raise AthenaOperationUnavailable() from None
+        elif credential_environment not in (None, "preview"):
+            raise AthenaAuthenticationError()
+        self._scope = scope
+        self._scope_fingerprint = scope.fingerprint if scope is not None else None
+        self._credential_environment = credential_environment
+        self._read_lease = read_lease
+        self.mode = scope.profile.environment if scope is not None else type(self).mode
+        if type(max_pages) is not int or not 1 <= max_pages <= 3:
+            raise AthenaSchemaError()
+        if token_provider is None:
+            for value in (client_id, client_secret):
+                _safe_string(value, maximum=4096)
+            if ":" in client_id:
+                raise AthenaAuthenticationError()
+        elif not callable(token_provider):
+            raise AthenaAuthenticationError()
+        self._credentials = (client_id, client_secret)
+        self._provider, self._clock, self._monotonic = token_provider, clock, monotonic
+        self._max_pages, self._token, self._token_lock = max_pages, None, RLock()
+        self._open = urlopen or urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirectHandler(),
+            urllib.request.HTTPSHandler(context=ssl.create_default_context())).open
+
+    def __repr__(self):
+        return f"AthenaStaffReadClient(mode={self.mode!r}, credentials='<redacted>')"
+
+    def _assert_transport_scope(self):
+        if self._scope is None:
+            if self._scope_fingerprint is not None:
+                raise AthenaSchemaError()
+            environment = "preview"
+        else:
+            _staff_scope(self._scope)
+            if self._scope.fingerprint != self._scope_fingerprint:
+                raise AthenaSchemaError()
+            environment = self._scope.profile.environment
+        if self._credential_environment not in ((None, "preview") if self._scope is None else (environment,)):
+            raise AthenaAuthenticationError()
+        if environment == "production":
+            from .athena_admission import AthenaReadLease, AthenaAdmissionError
+            if type(self._read_lease) is not AthenaReadLease: raise AthenaOperationUnavailable()
+            try: self._read_lease.assert_active(self._scope)
+            except AthenaAdmissionError: raise AthenaOperationUnavailable() from None
+
+    def _wire(self, request, deadline):
+        self._assert_transport_scope()
+        target, allowed = urllib.parse.urlsplit(request.full_url), urllib.parse.urlsplit(_staff_origin(self._scope))
+        if (target.scheme, target.netloc) != (allowed.scheme, allowed.netloc):
+            raise AthenaOperationUnavailable()
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            raise AthenaTimeoutError()
+        try:
+            with self._open(request, timeout=min(5.0, remaining)) as response:
+                if response.geturl() != request.full_url or response.status != 200:
+                    raise AthenaRequestRejected()
+                if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                    raise AthenaSchemaError()
+                if response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                    raise AthenaSchemaError()
+                length = response.headers.get("Content-Length")
+                if length is not None and (not re.fullmatch(r"[0-9]{1,7}", length)
+                                           or int(length) > 262144):
+                    raise AthenaSchemaError()
+                chunks, size = [], 0
+                read = getattr(response, "read1", response.read)
+                while True:
+                    if self._monotonic() >= deadline:
+                        raise AthenaTimeoutError()
+                    chunk = read(min(8192, 262145 - size))
+                    if not isinstance(chunk, bytes):
+                        raise AthenaSchemaError()
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > 262144:
+                        raise AthenaSchemaError()
+                    chunks.append(chunk)
+                if self._monotonic() >= deadline:
+                    raise AthenaTimeoutError()
+                return b"".join(chunks)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                self._token = None
+                raise AthenaAuthenticationError() from None
+            if exc.code in (408, 429, 500, 502, 503, 504):
+                raise AthenaRetryExhausted() from None
+            raise AthenaRequestRejected() from None
+        except (socket.timeout, TimeoutError):
+            raise AthenaTimeoutError() from None
+        except (urllib.error.URLError, OSError):
+            raise AthenaRequestRejected() from None
+
+    def _bearer(self, deadline):
+        self._assert_transport_scope()
+        with self._token_lock:
+            now = _validated_now(self._clock())
+            if self._token is None or self._token.expires_at <= now + 5:
+                if self._provider:
+                    token = self._provider()
+                else:
+                    basic = base64.b64encode(":".join(self._credentials).encode()).decode("ascii")
+                    request = urllib.request.Request(_staff_origin(self._scope) + "/oauth2/v1/token", method="POST",
+                        headers={"Authorization": "Basic " + basic, "Accept": "application/json",
+                                 "Content-Type": "application/x-www-form-urlencoded"},
+                        data=urllib.parse.urlencode({"grant_type": "client_credentials", "scope": ATHENA_PREVIEW_SCOPE}).encode())
+                    payload = _card_json(self._wire(request, deadline), text_limit=MAX_TOKEN_CHARS)
+                    if not isinstance(payload, dict):
+                        raise AthenaAuthenticationError()
+                    expiry = payload.get("expires_in")
+                    if isinstance(expiry, str) and re.fullmatch(r"[1-9][0-9]{0,3}", expiry):
+                        payload["expires_in"] = int(expiry)
+                    payload.setdefault("scope", ATHENA_PREVIEW_SCOPE)
+                    token = validate_athena_token_response(payload, requested_scope=ATHENA_PREVIEW_SCOPE, now=now)
+                if (type(token) is not AthenaAccessToken or token.scope != ATHENA_PREVIEW_SCOPE
+                        or not isinstance(token.access_token, str)
+                        or any(ord(c) < 33 or ord(c) > 126 for c in token.access_token)
+                        or type(token.expires_at) not in (int, float)
+                        or not 5 < token.expires_at - now <= 3600):
+                    raise AthenaAuthenticationError()
+                validate_athena_token_response({"access_token": token.access_token, "token_type": "Bearer",
+                    "scope": token.scope, "expires_in": min(3600, int(token.expires_at - now))},
+                    requested_scope=ATHENA_PREVIEW_SCOPE, now=now)
+                self._token = token
+            return self._token.access_token
+
+    def _get(self, kind, patient, deadline, **params):
+        self._assert_transport_scope()
+        url = _staff_url(kind, patient, scope=self._scope, **params)  # Validate before any token action.
+        request = urllib.request.Request(url, method="GET", headers={
+            "Authorization": "Bearer " + self._bearer(deadline), "Accept": "application/json",
+            "Accept-Encoding": "identity"})
+        return self._wire(request, deadline)
+
+    def _pages(self, kind, patient, deadline, department=None, *, start_offset=0, page_limit=3, metadata=None):
+        pages, records, total, complete, error = [], [], None, False, None
+        if metadata is not None:
+            metadata.update(pages=[], totalCount=None, nextOffset=None)
+        for index in range(min(self._max_pages, page_limit)):
+            try:
+                offset = start_offset + index * 5
+                raw = self._get(kind, patient, deadline, department=department, offset=offset)
+                payload = _card_json(raw)
+                key = "insurances" if kind == "insurance" else "encounters"
+                rows = payload.get(key) if isinstance(payload, dict) else None
+                count = payload.get("totalcount") if isinstance(payload, dict) else None
+                if (not isinstance(rows, list) or len(rows) > 5
+                        or (count is not None and (type(count) is not int or not len(rows) <= count <= 1000000))
+                        or (total is not None and count != total)):
+                    raise AthenaSchemaError()
+                if kind == "insurance":
+                    decode_athena_card_read(raw, dataset="insurance", expected_patient_id=patient, scope=self._scope)
+                else:
+                    for row in rows:
+                        _encounter_row(row, patient, department, scope=self._scope)
+                for link_name in ("next", "previous"):
+                    link = payload.get(link_name)
+                    if link is not None and (not isinstance(link, str) or len(link) > 2048):
+                        raise AthenaSchemaError()
+                next_link = payload.get("next")
+                if next_link:
+                    # Observe the exact next offset, but construct every request
+                    # from this fixed manifest rather than executing the source URL.
+                    path, query = _staff_target(kind, patient, department=department, offset=offset, scope=self._scope)
+                    query["offset"] = str(offset + 5)
+                    expected = _staff_origin(self._scope) + path + "?" + urllib.parse.urlencode(query)
+                    if not isinstance(next_link, str) or len(next_link) > 2048:
+                        raise AthenaSchemaError()
+                    actual = urllib.parse.urlsplit(urllib.parse.urljoin(_staff_origin(self._scope), next_link))
+                    wanted = urllib.parse.urlsplit(expected)
+                    try:
+                        pairs = urllib.parse.parse_qsl(actual.query, strict_parsing=True)
+                        expected_pairs = urllib.parse.parse_qsl(wanted.query, strict_parsing=True)
+                    except ValueError:
+                        raise AthenaSchemaError() from None
+                    # Preview continuation links change the casing of flag
+                    # names/booleans. Compare their meaning, then construct our
+                    # next GET from the fixed manifest; never execute the link.
+                    pairs = [(name.lower(), value.lower() if name.lower() in
+                              {"showcancelled", "showfullssn"} else value)
+                             for name, value in pairs]
+                    # A final continuation may advertise only the remaining
+                    # records. Our request still uses the fixed five-row cap.
+                    remaining = count - start_offset - len(records) - len(rows) if count is not None else None
+                    if remaining is not None and 0 < remaining < 5:
+                        pairs = [(name, "5" if name == "limit" and value == str(remaining) else value)
+                                 for name, value in pairs]
+                    if ((actual.scheme, actual.netloc, actual.path, actual.fragment)
+                            != (wanted.scheme, wanted.netloc, wanted.path, "")
+                            or len(pairs) != len(dict(pairs)) or sorted(pairs) != sorted(expected_pairs)):
+                        raise AthenaSchemaError()
+                received = start_offset + len(records) + len(rows)
+                if count is not None and received > count:
+                    raise AthenaSchemaError()
+                if next_link and (len(rows) != 5 or (count is not None and count <= received)):
+                    raise AthenaSchemaError()
+                pages.append(raw)
+                records.extend(rows)
+                total = count
+                if metadata is not None:
+                    metadata["pages"].append({"offset": offset, "sha256": hashlib.sha256(raw).hexdigest(),
+                        "encounterIds": [_staff_response_id(row["encounterid"]) for row in rows]})
+                    metadata.update(totalCount=count, nextOffset=offset + 5 if next_link else None)
+                if not next_link:
+                    complete = count == start_offset + len(records)
+                    break
+            except AthenaClientError as exc:
+                error = exc.code
+                break
+        return pages, records, complete, error
+
+    def read_card(self, patient):
+        _staff_patient(patient, scope=self._scope)
+        deadline = self._monotonic() + 25
+        raw = self._get("patient", patient, deadline)
+        decode_athena_card_read(raw, dataset="patient", expected_patient_id=patient, scope=self._scope)
+        pages, records, complete, error = self._pages("insurance", patient, deadline)
+        state = "complete" if complete and records else "empty" if complete else "partial" if pages else "unavailable"
+        return {"patient": raw, "insurancePages": pages, "insuranceState": state, "error": error}
+
+    def read_billing(self, patient, department, encounter=None, *, boundary=None, page=None, expected_total=None):
+        _staff_patient(patient, scope=self._scope)
+        _staff_id(department)
+        if encounter is not None:
+            _staff_id(encounter)
+        if boundary is not None and (page is not None or encounter is not None):
+            raise AthenaSchemaError()
+        if page is not None and encounter is None:
+            raise AthenaSchemaError()
+        receipt = boundary if boundary is not None else page
+        if receipt is not None:
+            _staff_page_receipt(receipt)
+            if (expected_total is not None and (type(expected_total) is not int
+                    or not 0 <= expected_total <= 1_000_000)):
+                raise AthenaSchemaError()
+        deadline = self._monotonic() + 25
+        start_offset, page_limit = 0, 3
+        if boundary is not None:
+            check = {}
+            before, _, _, failure = self._pages("encounters", patient, deadline, department,
+                start_offset=boundary["offset"], page_limit=1, metadata=check)
+            if failure:
+                raise AthenaClientError()
+            if (len(before) != 1 or check["pages"] != [boundary]
+                    or check["totalCount"] != expected_total
+                    or check["nextOffset"] != boundary["offset"] + 5):
+                raise AthenaPartialResponseError()
+            start_offset, page_limit = boundary["offset"] + 5, 2
+        elif page is not None:
+            start_offset, page_limit = page["offset"], 1
+        pagination = {}
+        pages, rows, complete, error = self._pages("encounters", patient, deadline, department,
+            start_offset=start_offset, page_limit=page_limit, metadata=pagination)
+        if receipt is not None:
+            if error:
+                raise AthenaClientError()
+            if pagination["totalCount"] != expected_total:
+                raise AthenaPartialResponseError()
+            if page is not None and (error or pagination["pages"] != [page]):
+                raise AthenaPartialResponseError()
+        ids = [_staff_response_id(row["encounterid"]) for row in rows]
+        if len(ids) != len(set(ids)):
+            raise AthenaSchemaError()
+        result = {"schemaVersion": "athena-billing-read.v1", "sourcePatientId": patient,
+            "departmentId": department, "departmentIdMeaning": "chart_query", "encounters": [_encounter_row(row, patient, department, scope=self._scope) for row in rows],
+            "state": "complete" if complete and rows else "empty" if complete else "partial" if pages else "unavailable",
+            "pageHashes": [hashlib.sha256(page).hexdigest() for page in pages], "error": error,
+            "pagination": pagination, "note": None, "unknownFields": ["place_of_service", "patient_age", "patient_sex",
+                "provider_specialty", "submitted_codes", "eligible_em_time"], "readyForHeader": False}
+        if encounter is None:
+            return result
+        if encounter not in ids:
+            raise AthenaSchemaError()
+        before = self._get("encounter", patient, deadline, encounter=encounter)
+        metadata_payload = _card_json(before)
+        # The exact-encounter endpoint also returns a singleton record array.
+        # Require one record and retain the same identity checks and raw hash.
+        if isinstance(metadata_payload, list):
+            if len(metadata_payload) != 1:
+                raise AthenaSchemaError()
+            metadata_payload = metadata_payload[0]
+        metadata = _encounter_row(metadata_payload, patient, department, encounter, scope=self._scope)
+        # The query department is chart access context, not an encounter filter.
+        # Bind a known list observation to the exact metadata before reading text.
+        selected = next(row for row in result["encounters"] if row["encounterid"]["value"] == encounter)
+        listed_department, actual_department = selected["departmentid"], metadata["departmentid"]
+        if listed_department["state"] == "present" and actual_department != listed_department:
+            raise AthenaPartialResponseError()
+        source_department = actual_department["value"]
+        department_origin = ("list_and_metadata" if listed_department["state"] == "present"
+                             else "metadata" if actual_department["state"] == "present" else "not_supplied")
+        raw = self._get("summary", patient, deadline, encounter=encounter)
+        payload = _card_json(raw, text_limit=131072, allow_lines=True)
+        if not isinstance(payload, dict) or not isinstance(payload.get("summaryhtml"), str):
+            raise AthenaSchemaError()
+        for key, expected in (("patientid", patient), ("encounterid", encounter)):
+            if key in payload and _staff_response_id(payload[key]) != expected:
+                raise AthenaSchemaError()
+        html = payload["summaryhtml"]
+        extractor = _SummaryText()
+        try:
+            extractor.feed(html)
+            extractor.close()
+        except (ValueError, RecursionError):
+            raise AthenaSchemaError() from None
+        after = self._get("encounter", patient, deadline, encounter=encounter)
+        if before != after:
+            raise AthenaPartialResponseError()
+        # The endpoint offers no atomic summary+metadata version guarantee.
+        # Retain both hashes and require explicit provider source confirmation.
+        result["note"] = {"encounterId": encounter, "metadata": metadata,
+            "sourceDepartmentId": source_department, "sourceDepartmentOrigin": department_origin,
+            "metadataSha256": hashlib.sha256(before).hexdigest(),
+            "responseSha256": hashlib.sha256(raw).hexdigest(), "sourcePointer": "/summaryhtml",
+            "summaryHtml": html, "plainText": "".join(extractor.parts).strip(),
+            "transformVersion": "athena-summary-text.v1", "offsetUnit": "unicode_code_point",
+            "sourceAtomicity": "unverified", "signatureInterpretation": "unverified",
+            "requiresProviderConfirmation": True}
+        return result
+
+
+
+def _staff_page_receipt(value):
+    """Validated service receipt, never a URL or authority to select a patient."""
+    if (not isinstance(value, dict) or set(value) != {"offset", "sha256", "encounterIds"}
+            or type(value["offset"]) is not int or not 0 <= value["offset"] <= 999_999_995
+            or value["offset"] % 5 or not isinstance(value["sha256"], str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value["sha256"])
+            or not isinstance(value["encounterIds"], list) or not 0 <= len(value["encounterIds"]) <= 5):
+        raise AthenaSchemaError()
+    for identifier in value["encounterIds"]:
+        _staff_id(identifier)
+    if len(set(value["encounterIds"])) != len(value["encounterIds"]):
+        raise AthenaSchemaError()
+
+
+def _encounter_row(row, patient, _query_department, encounter=None, *, scope=None):
+    if scope is not None:
+        _staff_patient(patient, scope=scope)
+    if not isinstance(row, dict):
+        raise AthenaSchemaError()
+    identifier = _staff_response_id(row.get("encounterid"))
+    if encounter is not None and identifier != encounter:
+        raise AthenaSchemaError()
+    for key, expected in (("patientid", patient), ("practiceid", _staff_practice(scope))):
+        if key in row and _staff_response_id(row[key]) != expected:
+            raise AthenaSchemaError()
+    # Response departmentid describes this encounter, not the query context.
+    # Missing remains unknown; present null/empty/malformed IDs remain rejected.
+    if "departmentid" in row:
+        _staff_response_id(row["departmentid"])
+    row = dict(row)  # Retain the original response bytes for provenance.
+    for key in ("encounterid", "appointmentid", "departmentid", "providerid"):
+        if key in row and type(row[key]) is int:
+            row[key] = _staff_response_id(row[key])
+    return {key: {"state": "absent" if key not in row else "null" if row[key] is None
+                         else "present" if isinstance(row[key], str) else "invalid",
+                  "value": row.get(key) if isinstance(row.get(key), str) else None}
+            for key in _STAFF_FIELDS}
+
+
+class _SummaryText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "head", "template"):
+            self.skip += 1
+        if not self.skip and tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "head", "template") and self.skip:
+            self.skip -= 1
+        if not self.skip and tag in ("p", "div", "li", "tr"):
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(data)
+
+
+class MockAthenaStaffReadClient(AthenaStaffReadClient):
+    """Invented wire responses exercise the same real decoder and transport."""
+    mode = "mock"
+
+    def __init__(self):
+        import io
+
+        def open_mock(request, timeout):
+            url = urllib.parse.urlsplit(request.full_url)
+            path, query = url.path, urllib.parse.parse_qs(url.query)
+            match = re.search(r"/(6017[8-9]|6018[0-4])(?:/|$)", path)
+            source_encounter = re.search(r"/encounters?/(8800[1-7])(?:/|$)", path)
+            patient = (match.group(1) if match else str(60177 + int(source_encounter.group(1)[-1]))
+                       if source_encounter else "60178")
+            metadata = {"encounterid": "8800" + str(int(patient) - 60177), "patientid": patient, "departmentid": "1",
+                "status": "CLOSED", "lastupdated": "09/29/2026", "reviewedandsigneddate": "09/29/2026"}
+            if path.endswith("/insurances"):
+                payload = {"totalcount": 1, "insurances": [{"insurancepackageid": "44001",
+                    "insuranceid": "55001", "sequencenumber": "1", "insuranceidnumber": "DEMO-MEMBER-42",
+                    "policynumber": "DEMO-GROUP-7", "insuranceplanname": "Invented Harbor Plan",
+                    "insurancepolicyholderfirstname": "Casey", "insurancepolicyholderlastname": "Example",
+                    "relationshiptoinsured": "Self"}]}
+            elif path.endswith("/encounters"):
+                payload = {"totalcount": 1, "encounters": [metadata]}
+            elif path.endswith("/summary"):
+                from html import escape
+                from .corpus.demo import SAMPLE_VISIT
+                # Explicit local fixture only: keep every existing mock evidence
+                # span in the source, visibly separated by original section.
+                payload = {"summaryhtml": "<h1>Bundled synthetic visit</h1>" + "".join(
+                    "<h2>" + heading + "</h2><div>" + escape(value) + "</div>"
+                    for heading, value in (("Intake", SAMPLE_VISIT.intake_text),
+                        ("Transcript", SAMPLE_VISIT.transcript), ("Signed note", SAMPLE_VISIT.signed_note)))}
+            elif "/chart/encounter/" in path:
+                payload = metadata
+            else:
+                payload = [{"patientid": patient, "firstname": "Casey", "lastname": "Example",
+                    "dob": "01/02/2000", "departmentid": "1", "mobilephone": "+12025550142",
+                    "email": "casey@example.invalid", "consenttotext": "unknown"}]
+            response = io.BytesIO(json.dumps(payload).encode())
+            response.status, response.headers = 200, {"Content-Type": "application/json"}
+            response.geturl = lambda: request.full_url
+            return response
+        super().__init__(token_provider=lambda: AthenaAccessToken("synthetic-token", ATHENA_PREVIEW_SCOPE,
+            time.time() + 300), urlopen=open_mock)
