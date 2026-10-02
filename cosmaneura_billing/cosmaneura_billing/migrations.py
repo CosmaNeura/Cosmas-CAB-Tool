@@ -312,6 +312,15 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
     if conn.execute("SELECT to_regclass('public.chase_communication_unassigned_sources')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT ON chase_communication_unassigned_sources TO {}").format(identifier))
 
+    if conn.execute("SELECT to_regclass('public.provider_handoff_heads')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT SELECT ON provider_handoff_heads, provider_handoff_operations TO {}").format(identifier))
+        conn.execute(sql.SQL("GRANT EXECUTE ON FUNCTION cosmaneura_commit_provider_handoff(jsonb) TO {}").format(identifier))
+    if conn.execute("SELECT to_regclass('public.provider_source_connections')").fetchone()[0]:
+        conn.execute(sql.SQL(
+            "GRANT SELECT ON provider_source_connections, provider_source_admissions, "
+            "provider_source_bindings, provider_source_acceptances TO {}"
+        ).format(identifier))
+
     if conn.execute("SELECT to_regclass('public.athena_case_review_events')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT, INSERT ON athena_case_review_events TO {}").format(identifier))
         conn.execute(sql.SQL(

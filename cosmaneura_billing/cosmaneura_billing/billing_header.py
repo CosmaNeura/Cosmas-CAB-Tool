@@ -53,6 +53,18 @@ def text(value, maximum=500, *, empty=False):
     return value
 
 
+def source_text(value, maximum=200_000, *, empty=False):
+    """Preserve CRLF in documents/quotes; metadata keeps ``text``'s rules.
+
+    A bare CR is not yet a supported clinical section delimiter. Never silently
+    rewrite it (or any other source byte) to make a document pass validation.
+    """
+    require(isinstance(value, str) and len(value) <= maximum
+            and (empty or bool(value.strip())))
+    text(value.replace("\r\n", "\n"), maximum, empty=empty)
+    return value
+
+
 def identifier(value):
     text(value, 160)
     require(re.fullmatch(r"[A-Za-z0-9._:~-]+", value) is not None)
@@ -99,7 +111,7 @@ def digest(value):
 
 
 def sha256(value):
-    text(value, 200_000, empty=True)
+    source_text(value, 200_000, empty=True)
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -234,7 +246,7 @@ def validate_generated(generated, stored):
                 and item["sourceVersion"] == doc["version"])
         start, end = integer(item["start"]), integer(item["end"], 1)
         require(start < end <= len(doc["text"]))
-        text(item["text"], 2000)
+        source_text(item["text"], 2000)
         require(doc["text"][start:end] == item["text"])
     facts = sequence(generated["facts"], len(FACT_KEYS))
     require(len(facts) == len(FACT_KEYS))

@@ -93,8 +93,9 @@ to remove existing review evidence. No clinical note, claim or EHR is written.
 
 ## Combined local integration
 
-The combined candidate includes the exact canonical `001`–`023` chain.
-No live database or setting was changed. The following sections
+The combined candidate includes the exact canonical `001`–`024` chain.
+The scoped API/worker/Athena grants are now available through the reviewed
+provisioner; no live database or setting was changed. The following sections
 retain each independent schema slice’s dependency rationale and rehearsal scope.
 
 ## Dormant SMS storage expansion
@@ -116,8 +117,8 @@ Apply these together before consuming the PostgreSQL communications store.
 All fifteen tables use forced practice RLS and always-enabled append-only
 guards. Canonical SQL retains historical voice values for compatibility;
 this does not enable calling. Application channel defaults remain SMS-only.
-The current provisioner gives the API, worker and importer no access to these
-new tables, views or trigger functions. No consumer, transport, dispatch,
+The schema-only slice originally granted no access. The later reviewed SMS
+service/API slices add only their separate scoped worker and staff capabilities. No consumer, transport, dispatch,
 credential or hosted setting is activated by installing this schema.
 
 The local rehearsal upgrades the prior sparse baseline with the fixed twelve
@@ -147,16 +148,20 @@ Its receipt guard rechecks admission at persistence and keeps operational source
 provenance distinct. Registration metadata does not activate reads or models.
 
 Canonical `019_provider_note_handoff` and `020_provider_source_admission` are
-required dormant dependencies: they supply the shared canonical JSON function
-and protect the provider source label retained by `023`. Their receiver,
-immutable source/receipt guards and empty admission registry remain intact.
+required shared dependencies: they supply the shared canonical JSON function
+and protect the provider source label retained by `023`. Their guarded receiver
+and owner-only admission CLI are now integrated behind
+`COSMANEURA_PROVIDER_HANDOFF_ENABLED` (default false), together with the header
+release control. Only registered exact operations enter storage. Canonical024
+adds optional serviceDate while preserving existing manifests and receipts.
+Provider model-source admission025 remains deferred. Immutable source/receipt
+guards and the empty admission registry remain intact.
 An ordinary encounter writer cannot manufacture `provider_completed_note`.
 
-These files are exact preserved migrations; this slice adds no API grants,
-operator registrations, source admission, transport or application setting.
-The existing runtime provisioner grants none of the new tables/functions.
-The local restricted-role proof grants only its own disposable test role the
-narrow capabilities under test; that is not deployment provisioning.
+These are exact preserved migrations. The runtime provisioner grants only the
+guarded provider writer and registry/receipt reads; private019 remains denied.
+Receiver readiness checks those privileges. Operator registrations and hosted
+activation are separate from this source integration.
 Retain expand structures and evidence during code rollback; destructive
 rollback is not the recovery path.
 
