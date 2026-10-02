@@ -94,6 +94,39 @@ available set is `001`–`009` plus `011` and `013`. `010`/`012` communications 
 absent. Keep the expand table dormant on rollback; the down migration refuses
 to remove existing review evidence. No clinical note, claim or EHR is written.
 
+## Dormant Athena schema integration
+
+The available ordered set is now `001`–`009`, `011`, `013`, `014`,
+and `019`–`023`; it is intentionally sparse. Communications migrations
+`010`, `012`, `015`–`018` and later provider/context rungs are absent.
+
+`014_athena_staff_review` creates immutable practice-scoped review receipts,
+current BillingStaff/Admin authorization, same-transaction audit coupling and
+reviewed encounter source protection. `021_athena_staff_bindings` adds
+operator-owned connection/case mapping revisions, exact canonical fingerprints,
+current case-patient binding and no fallback from a revoked newest revision.
+`022_athena_configured_review` binds configured receipts to those mappings and
+preserves history without permitting receipt downgrade.
+
+`023_athena_read_admission` adds an empty operator-owned registry binding exact
+scope, runtime login, database, deployment/storage references and validity.
+Its receipt guard rechecks admission at persistence and keeps operational source
+provenance distinct. Registration metadata does not activate reads or models.
+
+Canonical `019_provider_note_handoff` and `020_provider_source_admission` are
+required dormant dependencies: they supply the shared canonical JSON function
+and protect the provider source label retained by `023`. Their receiver,
+immutable source/receipt guards and empty admission registry remain intact.
+An ordinary encounter writer cannot manufacture `provider_completed_note`.
+
+These files are exact preserved migrations; this slice adds no API grants,
+operator registrations, source admission, transport or application setting.
+The existing runtime provisioner grants none of the new tables/functions.
+The local restricted-role proof grants only its own disposable test role the
+narrow capabilities under test; that is not deployment provisioning.
+Retain expand structures and evidence during code rollback; destructive
+rollback is not the recovery path.
+
 ## Requirements
 
 - PostgreSQL 16 for the pilot persistence schema (`003`).

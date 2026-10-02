@@ -23,6 +23,12 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "009_source_import_foundation.up.sql",
         "011_billing_headers.up.sql",
         "013_billing_header_signoffs.up.sql",
+        "014_athena_staff_review.up.sql",
+        "019_provider_note_handoff.up.sql",
+        "020_provider_source_admission.up.sql",
+        "021_athena_staff_bindings.up.sql",
+        "022_athena_configured_review.up.sql",
+        "023_athena_read_admission.up.sql",
     ]
 
 
