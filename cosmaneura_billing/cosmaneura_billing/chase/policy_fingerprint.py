@@ -92,6 +92,10 @@ class DeliveryConfiguration:
 
     @classmethod
     def from_settings(cls, settings: "Settings") -> "DeliveryConfiguration":
+        if settings.chase_transport == "twilio":
+            # SMS/voice use their own reviewed dispatch policy and ledger. The
+            # legacy ACS email lane remains inert, even when Twilio is active.
+            return cls(contact_snapshot_max_age_hours=settings.contact_snapshot_max_age_hours)
         if settings.chase_transport == "record_only":
             return cls(
                 contact_snapshot_max_age_hours=settings.contact_snapshot_max_age_hours,
