@@ -18,7 +18,7 @@ from .auth import (
 )
 from .coder_feedback import (
     CodeDecision, EncounterFeedback, FeedbackConflict,
-    feedback_payload_digest, validate_feedback,
+    feedback_payload_digest, validate_feedback, validate_feedback_shape,
 )
 from .schemas import VisitBundle
 from .settings import Settings
@@ -503,7 +503,7 @@ class PostgresFeedbackStore:
         import_source_sha256: bytes | None = None,
         import_line: int | None = None,
     ) -> bool:
-        validate_feedback(feedback)
+        validate_feedback_shape(feedback)
         review_id = str(UUID(feedback.review_id))
         coder_tenant_id = str(UUID(feedback.coder_tenant_id))
         coder_user_id = str(UUID(feedback.coder_id))
@@ -530,6 +530,7 @@ class PostgresFeedbackStore:
         encounter_uid = self._encounter_uid(
             conn, feedback.encounter_id, feedback.encounter_version,
         )
+        validate_feedback(feedback)
         row = conn.execute(
             """INSERT INTO coder_feedback (
                    practice_id, review_id, encounter_uid, coder_tenant_id,
@@ -585,7 +586,7 @@ class PostgresFeedbackStore:
 
     def exact_replay(self, feedback: EncounterFeedback) -> bool:
         """Classify an existing ID without rechecking mutable domain state."""
-        validate_feedback(feedback)
+        validate_feedback_shape(feedback)
         review_id = str(UUID(feedback.review_id))
         payload_hash = feedback_payload_digest(feedback)
         with self.context.connection() as conn:

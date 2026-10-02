@@ -11,6 +11,7 @@ from uuid import uuid4
 from . import billing_header as h
 from .coder_feedback import (
     EncounterFeedback, FeedbackConflict, feedback_payload_digest, validate_feedback,
+    validate_feedback_shape,
 )
 
 
@@ -20,6 +21,27 @@ def header_proposals(header, revision):
     return [{"id": key, "original": original.get(key), "proposed": current.get(key)}
             for key in dict.fromkeys((*original, *current))
             if original.get(key) != current.get(key)]
+
+
+def accepted_diagnosis_order(header, revision, decisions, outcomes):
+    """Resolve only the explicitly accepted human sequence, never inferred order.
+
+    A rejected primary cannot be replaced by a surviving secondary. Every final
+    diagnosis must be represented; changed rows also need an accepted proposal.
+    """
+    order = h.diagnosis_order(h.create_draft(header, revision))
+    choice = outcomes.get(h.DIAGNOSIS_ORDER_DECISION)
+    if not choice or choice["decision"] != "accept":
+        return []
+    final = {d.final_code for d in decisions if d.kind == "ICD10"
+             and d.action in ("accept", "modify", "add")}
+    h.require(bool(order) and order[0]["code"] in final)
+    h.require(final <= {row["code"] for row in order})
+    retained = [row for row in order if row["code"] in final]
+    proposals = {row["id"] for row in header_proposals(header, revision)}
+    h.require(all(row["id"] not in proposals
+                  or outcomes.get(row["id"], {}).get("decision") == "accept" for row in retained))
+    return retained
 
 
 def review_manifest(feedback):
@@ -54,26 +76,35 @@ def reconcile_baseline(header, feedback, decisions):
     return [outcomes[key] for key in sorted(outcomes)]
 
 
+def _validate_context(feedback, context, acknowledged):
+    h.require(acknowledged is True)
+    count, digest = review_manifest(feedback)
+    h.require(type(context) is dict and context.get("recommendationCount") == count
+              and context.get("recommendationDigest") == digest
+              and context.get("engineVersion") == feedback.engine_version)
+
+
 def validate_signoff(header, revision, feedback, context, decisions, acknowledged,
                      baseline_decisions=()):
     """Human proposal decisions must agree with the recorded feedback outcomes."""
     try:
-        h.require(acknowledged is True)
         validate_feedback(feedback)
-        count, digest = review_manifest(feedback)
-        h.require(type(context) is dict and context.get("recommendationCount") == count
-                  and context.get("recommendationDigest") == digest
-                  and context.get("engineVersion") == feedback.engine_version)
+        _validate_context(feedback, context, acknowledged)
         proposals = {row["id"]: row for row in header_proposals(header, revision)}
-        h.sequence(decisions, 40)
+        h.sequence(decisions, 41)
+        expected = set(proposals)
+        if h.diagnosis_order(h.create_draft(header, revision)):
+            expected.add(h.DIAGNOSIS_ORDER_DECISION)
         outcomes = {}
         final = {(d.kind, d.final_code) for d in feedback.decisions if d.action != "reject"}
         for decision in decisions:
             h.closed(decision, ("id", "decision", "reason"))
-            h.identifier(decision["id"])
-            h.require(decision["id"] in proposals and decision["id"] not in outcomes)
+            h.require(decision["id"] in expected and decision["id"] not in outcomes)
             h.require(decision["decision"] in ("accept", "reject"))
             h.text(decision["reason"], 1000)
+            if decision["id"] == h.DIAGNOSIS_ORDER_DECISION:
+                outcomes[decision["id"]] = h.detached(decision)
+                continue
             proposal = proposals[decision["id"]]
             before, after = proposal["original"], proposal["proposed"]
             before_key = (before["kind"], before["code"]) if before else None
@@ -88,7 +119,8 @@ def validate_signoff(header, revision, feedback, context, decisions, acknowledge
             elif after is None:
                 h.require(before_key in final)
             outcomes[decision["id"]] = h.detached(decision)
-        h.require(set(outcomes) == set(proposals))
+        h.require(set(outcomes) == expected)
+        accepted_diagnosis_order(header, revision, feedback.decisions, outcomes)
         baseline = reconcile_baseline(header, feedback, list(baseline_decisions)
                                       if baseline_decisions == () else baseline_decisions)
         return [outcomes[key] for key in sorted(outcomes)], baseline
@@ -103,7 +135,8 @@ class SignoffStoreMixin:
         h.require(isinstance(actor, h.HeaderActor) and actor.role in ("Coder", "Admin"), "not_authorized")
         h.require(isinstance(feedback, EncounterFeedback), "invalid_signoff")
         try:
-            validate_feedback(feedback)
+            validate_feedback_shape(feedback)
+            _validate_context(feedback, verified_context, acknowledged)
         except (ValueError, TypeError, AttributeError):
             raise h.BillingHeaderError("invalid_signoff") from None
         actor = h.HeaderActor(**asdict(actor))
@@ -130,14 +163,14 @@ class SignoffStoreMixin:
             current = self._view(unit, record)
             h.require(current["revisionNumber"] == expected_revision, "revision_conflict")
             h.require(h.canonical(record["header"]["expectedSource"]) == h.canonical(expected_source), "source_changed")
-            decisions, baseline = validate_signoff(record["header"], current["revision"], feedback,
-                verified_context, human_proposal_decisions, acknowledged, baseline_decisions)
             prior = unit.signoff_receipt(review_id=feedback.review_id)
             if prior:
                 h.require(prior["requestDigest"] == intent, "operation_conflict")
                 created = False
             else:
                 h.require(current["signoff"] is None, "review_conflict")
+                decisions, baseline = validate_signoff(record["header"], current["revision"], feedback,
+                    verified_context, human_proposal_decisions, acknowledged, baseline_decisions)
                 # A historical feedback-only receipt cannot be promoted later.
                 h.require(unit.append_feedback(feedback, feedback_store), "review_conflict")
                 receipt = {"id": str(uuid4()), "reviewId": feedback.review_id,
@@ -170,13 +203,14 @@ class MemoryHeaderFeedbackAdapter:
 
     @staticmethod
     def _append(data, feedback):
-        validate_feedback(feedback)
+        validate_feedback_shape(feedback)
         key = feedback.review_id
         prior = data["feedback"].get(key)
         if prior:
             if feedback_payload_digest(EncounterFeedback.from_dict(prior)) != feedback_payload_digest(feedback):
                 raise FeedbackConflict("review ID conflicts with an existing review")
             return False
+        validate_feedback(feedback)
         data["feedback"][key] = h.detached(feedback.to_dict())
         return True
 

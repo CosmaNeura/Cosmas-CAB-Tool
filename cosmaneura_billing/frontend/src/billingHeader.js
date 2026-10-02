@@ -1,4 +1,5 @@
 // Validate the whole header against the currently displayed source before render.
+export const diagnosisOrderDecisionId = "@diagnosis-order";
 export const factKeys = ["visit_type", "patient_type", "modality", "patient_location",
   "place_of_service", "provider_location", "consent", "visit_duration", "em_time"];
 const canonical = (v) => JSON.stringify(v, (_, value) => value && !Array.isArray(value)
@@ -66,13 +67,19 @@ export function readBillingHeader(view, encounter) {
       && same(revision.expectedSource, pin) && revision.reviewStatus === "unreviewed"
       && actorValid(revision.actor) && timeValid(revision.createdAt) && text(revision.reason, 600));
     const draft = revision.draft;
-    require(draft && same(Object.keys(draft.facts).sort(), [...factKeys].sort())
+    require(draft && same(Object.keys(draft).sort(), ["codes", "facts", "note",
+        ...(Object.hasOwn(draft, "diagnosisOrderConfirmed") ? ["diagnosisOrderConfirmed"] : [])].sort())
+      && (!Object.hasOwn(draft, "diagnosisOrderConfirmed") || typeof draft.diagnosisOrderConfirmed === "boolean")
+      && (draft.diagnosisOrderConfirmed !== true || draft.codes?.some((row) => row.kind === "ICD10"))
+      && same(Object.keys(draft.facts).sort(), [...factKeys].sort())
       && Object.values(draft.facts).every((v) => text(v, 600, true))
-      && list(draft.codes, 20) && draft.codes.every(codeValid) && text(draft.note, 2000, true));
+      && list(draft.codes, 20) && draft.codes.every(codeValid) && text(draft.note, 2000, true)
+      && new Set(draft.codes.map((row) => row.id)).size === draft.codes.length
+      && new Set(draft.codes.map((row) => `${row.kind}:${row.code}`)).size === draft.codes.length);
     require(list(revision.history, 100) && revision.history.length === revision.number);
     for (const item of revision.history) {
       require(actorValid(item.actor) && timeValid(item.createdAt) && text(item.reason, 600)
-        && list(item.changes, 50) && item.changes.every((c) => text(c.path, 180)
+        && list(item.changes, 51) && item.changes.every((c) => text(c.path, 180)
           && text(c.label, 150) && JSON.stringify(c.before)?.length <= 10000 && JSON.stringify(c.after)?.length <= 10000));
     }
   }
@@ -83,9 +90,9 @@ export function readBillingHeader(view, encounter) {
       && actorValid(receipt.actor) && ["coder", "admin"].includes(receipt.actor.role)
       && receipt.status === "recorded" && timeValid(receipt.createdAt)
       && /^[a-f0-9]{64}$/.test(receipt.recommendationDigest)
-      && list(receipt.humanProposalDecisions, 40) && list(receipt.codeDecisions, 500)
+      && list(receipt.humanProposalDecisions, 41) && list(receipt.codeDecisions, 500)
       && text(receipt.reviewerNote, 4000, true));
-    const proposals = new Set(headerProposals(view).map((row) => row.id));
+    const proposals = new Set(headerDecisionIds(view));
     require(receipt.humanProposalDecisions.length === proposals.size);
     for (const decision of receipt.humanProposalDecisions) {
       require(proposals.delete(decision.id) && ["accept", "reject"].includes(decision.decision)
@@ -99,6 +106,7 @@ export function readBillingHeader(view, encounter) {
         : d.engine_code !== null && (d.action === "reject" ? d.final_code === null
           : d.final_code !== null && (d.action === "accept" ? d.final_code === d.engine_code : d.final_code !== d.engine_code)))));
     validateBaselineDecisions(view, receipt.codeDecisions, receipt.baselineDecisions ?? []);
+    acceptedDiagnosisOrder(view, receipt.codeDecisions, receipt.humanProposalDecisions);
   }
   if (view.previousSignoff != null) {
     const prior = view.previousSignoff;
@@ -110,11 +118,11 @@ export function readBillingHeader(view, encounter) {
 }
 
 export function headerDraft(view) {
-  return structuredClone(view.revision?.draft || {
+  return structuredClone({diagnosisOrderConfirmed: false, ...(view.revision?.draft || {
     facts: Object.fromEntries(view.header.facts.map((f) => [f.key, f.value || ""])),
     codes: view.header.suggestions.map(({id, kind, code, label, evidenceIds}) => ({id, kind, code, label, evidenceIds})),
     note: "",
-  });
+  })});
 }
 
 export function fieldAuthor(view, path) {
@@ -130,6 +138,63 @@ export function headerProposals(view) {
   return [...new Set([...original.keys(), ...proposed.keys()])]
     .filter((id) => !same(original.get(id), proposed.get(id)))
     .map((id) => ({id, original: original.get(id) || null, proposed: proposed.get(id) || null}));
+}
+
+export function proposedDiagnosisOrder(view) {
+  const draft = headerDraft(view);
+  return draft.diagnosisOrderConfirmed === true ? draft.codes.filter((row) => row.kind === "ICD10") : [];
+}
+
+export function diagnosisOrderReviewText(view) {
+  const receipt = view.signoff;
+  const current = receipt?.headerId === view.header.headerId
+    && receipt.headerRevision === view.revisionNumber
+    && same(receipt.expectedSource, view.header.expectedSource);
+  const decision = current ? receipt.humanProposalDecisions
+    .find((row) => row.id === diagnosisOrderDecisionId)?.decision : null;
+  return decision === "accept" ? "Coder acceptance recorded for this revision."
+    : decision === "reject" ? "Coder rejected this proposed primary and order."
+      : "Awaiting separate coder acceptance.";
+}
+
+export function headerDecisionIds(view) {
+  return [...headerProposals(view).map((row) => row.id),
+    ...(proposedDiagnosisOrder(view).length ? [diagnosisOrderDecisionId] : [])];
+}
+
+// All ICD content is included: changing evidence, membership or ordering clears
+// the UI affirmation. Facts and E/M-only edits retain the prior attribution.
+export function replaceHeaderCodes(draft, codes) {
+  const diagnoses = (rows) => rows.filter((row) => row.kind === "ICD10")
+    .map((row) => ({...row, evidenceIds: [...row.evidenceIds].sort()}));
+  return {...draft, codes, diagnosisOrderConfirmed: draft.diagnosisOrderConfirmed === true
+    && same(diagnoses(draft.codes), diagnoses(codes))};
+}
+
+export function moveHeaderDiagnosis(draft, id, target) {
+  const indices = draft.codes.flatMap((row, i) => row.kind === "ICD10" ? [i] : []);
+  const rows = indices.map((i) => draft.codes[i]);
+  const from = rows.findIndex((row) => row.id === id);
+  if (from < 0 || !Number.isInteger(target) || target < 0 || target >= rows.length) return draft;
+  rows.splice(target, 0, rows.splice(from, 1)[0]);
+  const codes = [...draft.codes]; indices.forEach((index, i) => { codes[index] = rows[i]; });
+  return replaceHeaderCodes(draft, codes);
+}
+
+export function acceptedDiagnosisOrder(view, decisions = view.signoff?.codeDecisions || [],
+  choices = view.signoff?.humanProposalDecisions || []) {
+  const choice = choices.find((row) => row.id === diagnosisOrderDecisionId);
+  if (!choice || choice.decision !== "accept") return [];
+  const order = proposedDiagnosisOrder(view);
+  const final = new Set(decisions.filter((d) => d.kind === "ICD10"
+    && ["accept", "modify", "add"].includes(d.action)).map((d) => d.final_code));
+  require(order.length > 0 && final.has(order[0].code)
+    && [...final].every((code) => order.some((row) => row.code === code)));
+  const retained = order.filter((row) => final.has(row.code));
+  const proposals = new Set(headerProposals(view).map((row) => row.id));
+  require(retained.every((row) => !proposals.has(row.id)
+    || choices.some((c) => c.id === row.id && c.decision === "accept")));
+  return retained;
 }
 
 export function missingHeaderBaseline(view, decisions) {
@@ -156,17 +221,22 @@ export function headerReviewRequest(view, feedback, decisions, acknowledged, bas
   require(view && acknowledged === true && !view.signoff
     && feedback.encounter_id === view.header.expectedSource.encounterId
     && feedback.encounter_version === view.header.expectedSource.encounterVersion);
-  const proposals = new Set(headerProposals(view).map((row) => row.id));
-  require(list(decisions, 40) && decisions.length === proposals.size);
+  const proposals = new Set(headerDecisionIds(view));
+  require(list(decisions, 41) && decisions.length === proposals.size);
   for (const choice of decisions) require(proposals.delete(choice.id)
     && ["accept", "reject"].includes(choice.decision) && text(choice.reason, 1000));
   validateBaselineDecisions(view, feedback.decisions, baselineDecisions);
+  acceptedDiagnosisOrder(view, feedback.decisions, decisions);
   return structuredClone({encounterId: feedback.encounter_id, expectedSource: view.header.expectedSource,
     headerId: view.header.headerId, expectedRevision: view.revisionNumber, feedback,
     acknowledged, humanProposalDecisions: decisions, baselineDecisions});
 }
 
-export function exportBillingHeader(view) {
+export function exportBillingHeader(view, encounter) {
+  // A human sequence must export against the same verified source as the view.
+  if (proposedDiagnosisOrder(view).length
+    || view.signoff?.humanProposalDecisions?.some((d) => d.id === diagnosisOrderDecisionId)) require(encounter != null);
+  if (encounter) readBillingHeader(view, encounter);
   const h = view.header, draft = headerDraft(view), receipt = view.signoff;
   const rows = ["BILLING HEADER", `Encounter: ${h.expectedSource.encounterId}`,
     `Source version: ${h.expectedSource.encounterVersion} | Header revision: ${view.revisionNumber}`,
@@ -187,10 +257,22 @@ export function exportBillingHeader(view) {
     for (const code of h.suggestions.filter((s) => !draft.codes.some((c) => c.id === s.id))) rows.push(`Removal proposed: ${code.kind} ${code.code}`);
     if (draft.note) rows.push(`Reviewer note: ${draft.note}`);
   }
+  const proposed = proposedDiagnosisOrder(view), accepted = acceptedDiagnosisOrder(view);
+  rows.push("", "HUMAN DIAGNOSIS ORDER");
+  if (!proposed.length) rows.push("Unconfirmed — list order does not establish a human primary.");
+  else {
+    const author = fieldAuthor(view, "diagnosisOrder");
+    rows.push(`Saved proposal (revision ${view.revisionNumber})${author ? ` by ${author.name} (${author.role})` : ""}: ${proposed.map((row) => row.code).join(" → ")}`,
+      `Proposed primary: ${proposed[0].code}. ${diagnosisOrderReviewText(view)}`);
+    for (const row of proposed) rows.push(`  ${row.code} [${row.evidenceIds.join(", ")}]`);
+    if (accepted.length) rows.push(`Coder-confirmed primary: ${accepted[0].code}`,
+      `Coder-confirmed order: ${accepted.map((row) => row.code).join(" → ")}`);
+    else rows.push("Coder-confirmed primary: unresolved. No secondary is substituted.");
+  }
   if (receipt) {
     rows.push("", "RECORDED CODER OUTCOMES", `Recommendation digest: ${receipt.recommendationDigest}`);
     for (const d of receipt.codeDecisions) rows.push(`${d.kind} ${d.engine_code || "Human addition"}: ${d.action} → ${d.final_code || "Removed"}${d.note ? ` — ${d.note}` : ""}`);
-    for (const d of receipt.humanProposalDecisions) rows.push(`Header proposal ${d.id}: ${d.decision} — ${d.reason}`);
+    for (const d of receipt.humanProposalDecisions) rows.push(`${d.id === diagnosisOrderDecisionId ? "Diagnosis order" : `Header proposal ${d.id}`}: ${d.decision} — ${d.reason}`);
     for (const d of receipt.baselineDecisions || []) {
       const original = h.suggestions.find((row) => row.id === d.id);
       rows.push(`Earlier suggestion ${original.kind} ${original.code}: ${d.decision} — ${d.reason}`);

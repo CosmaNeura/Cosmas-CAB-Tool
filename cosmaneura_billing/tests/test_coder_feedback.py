@@ -10,7 +10,7 @@ def _sample_feedbacks():
         EncounterFeedback("ENC-1", "coder_A", "cpt2025", "99213", "99214", "99214",
             [CodeDecision("EM", "99214", Action.ACCEPT, "99214"),
              CodeDecision("ICD10", "K62.5", Action.ACCEPT, "K62.5"),
-             CodeDecision("ICD10", None, Action.ADD, "Z86.010", Reason.DX_MISSED)],
+             CodeDecision("ICD10", None, Action.ADD, "Z86.0100", Reason.DX_MISSED)],
             time_spent_seconds=95),
         EncounterFeedback("ENC-2", "coder_A", "cpt2025", "99214", "99214", "99213",
             [CodeDecision("EM", "99214", Action.MODIFY, "99213", Reason.EM_SUPPORTS_LOWER),
@@ -57,4 +57,4 @@ def test_gold_export_excludes_rejected():
     gold = export_gold(fbs)
     assert gold[0]["gold_em"] == "99214"
     assert "Z80.0" not in gold[0]["gold_dx"]
-    assert gold[0]["gold_dx"] == ["K62.5", "Z86.010"]
+    assert gold[0]["gold_dx"] == ["K62.5", "Z86.0100"]

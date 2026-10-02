@@ -14,7 +14,8 @@ import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
 import { primaryBadge } from "./diagnosisSequencing.js";
-import { headerProposals, headerReviewRequest, missingHeaderBaseline, readBillingHeader } from "./billingHeader.js";
+import { diagnosisOrderDecisionId, headerDecisionIds, headerProposals, headerReviewRequest,
+  missingHeaderBaseline, proposedDiagnosisOrder, readBillingHeader } from "./billingHeader.js";
 import {
   completenessLabel, isSyntheticDemoEncounter, sourceLabel,
 } from "./providerBilling.js";
@@ -322,14 +323,16 @@ export default function CoderReview({
   const headerEnabled = Boolean(headerEncounter?.headerSource);
   const headerView = headerState?.view;
   const proposals = useMemo(() => headerView ? headerProposals(headerView) : [], [headerView]);
+  const proposedOrder = headerView ? proposedDiagnosisOrder(headerView) : [];
+  const proposalIds = headerView ? headerDecisionIds(headerView) : [];
   const missingBaseline = useMemo(() => headerView && engine
     ? missingHeaderBaseline(headerView, capturedRecommendations(engine)
       .map(({kind, row}) => ({kind, engine_code: row.code, action: "unreviewed"})))
     : [], [headerView, engine]);
   const headerReady = !headerEnabled || Boolean(headerView && !headerView.signoff
     && !headerState.dirty && !headerState.busy && !headerState.stale && headerAcknowledged
-    && proposals.every((p) => ["accept", "reject"].includes(headerChoices[p.id]?.decision)
-      && headerChoices[p.id]?.reason?.trim())
+    && proposalIds.every((id) => ["accept", "reject"].includes(headerChoices[id]?.decision)
+      && headerChoices[id]?.reason?.trim())
     && missingBaseline.every((row) => ["retain", "reject"].includes(baselineChoices[row.id]?.decision)
       && baselineChoices[row.id]?.reason?.trim()));
 
@@ -425,9 +428,9 @@ export default function CoderReview({
         }
         try {
           pendingHeaderRequest.current = headerReviewRequest(headerView, candidate,
-            proposals.map((p) => ({id: p.id, ...headerChoices[p.id]})), headerAcknowledged,
+            proposalIds.map((id) => ({id, ...headerChoices[id]})), headerAcknowledged,
             missingBaseline.map((row) => ({id: row.id, ...baselineChoices[row.id]})));
-        } catch { setSaveError("Earlier-header decisions must match your final code outcomes. Retained codes need an explicit human addition or E/M edit below; rejected codes must be absent. Check the header decisions and reasons before saving."); return; }
+        } catch { setSaveError("Header decisions must match final code outcomes. Accepting diagnosis order requires the proposed primary to be accepted and every final diagnosis to appear in the saved order. Rejected primary codes cannot be replaced by a secondary. Edit and save the header if the intended order changed."); return; }
       }
       pendingPayload.current = candidate;
       setFrozen(true);
@@ -552,6 +555,19 @@ export default function CoderReview({
                   <input className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm" maxLength={1000} value={headerChoices[proposal.id]?.reason || ""} onChange={(event) => {setHeaderAcknowledged(false); setHeaderChoices((current) => ({...current, [proposal.id]: {...current[proposal.id], reason: event.target.value}}));}} />
                 </label>
               </fieldset>)}
+              {proposedOrder.length > 0 && <fieldset disabled={frozen || headerState?.dirty || headerState?.busy || headerState?.stale || Boolean(headerView?.signoff)} className="mt-3 grid gap-3 rounded-xl border border-violet-300 bg-white p-3 sm:grid-cols-2">
+                <legend className="px-1 text-sm font-semibold">Human diagnosis order</legend>
+                <p className="text-sm sm:col-span-2">Proposed primary: <code>{proposedOrder[0].code}</code> · {proposedOrder.map((row) => row.code).join(" → ")}. Accept only after matching code decisions below. A rejected primary leaves sequencing unresolved; edit the header to propose a different primary.</p>
+                {proposedOrder.map((row) => <div key={row.id} className="text-xs sm:col-span-2"><strong>{row.code}</strong>{row.evidenceIds.map((id) => <blockquote key={id} className="mt-1 border-l-2 border-slate-300 pl-2">{headerView.header.evidence.find((e) => e.id === id).text}</blockquote>)}</div>)}
+                <label className="grid gap-1 text-xs font-medium">Diagnosis order decision
+                  <select aria-label="Diagnosis order decision" className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm" value={headerChoices[diagnosisOrderDecisionId]?.decision || ""} onChange={(event) => {setHeaderAcknowledged(false); setHeaderChoices((current) => ({...current, [diagnosisOrderDecisionId]: {...current[diagnosisOrderDecisionId], decision: event.target.value}}));}}>
+                    <option value="">Choose a decision</option><option value="accept">Accept proposed primary and order</option><option value="reject">Reject order; primary unresolved</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-medium">Diagnosis order reason
+                  <input className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm" maxLength={1000} value={headerChoices[diagnosisOrderDecisionId]?.reason || ""} onChange={(event) => {setHeaderAcknowledged(false); setHeaderChoices((current) => ({...current, [diagnosisOrderDecisionId]: {...current[diagnosisOrderDecisionId], reason: event.target.value}}));}} />
+                </label>
+              </fieldset>}
               <label className="mt-4 flex items-start gap-2 text-sm font-medium text-teal-950"><input className="mt-1" type="checkbox" checked={headerAcknowledged} disabled={frozen || !headerView || headerState?.dirty || headerState?.busy || headerState?.stale || Boolean(headerView?.signoff)} onChange={(event) => setHeaderAcknowledged(event.target.checked)} />I reviewed this header’s facts, code proposals, evidence, and documentation warnings.</label>
               {headerView?.signoff && <p className="mt-3 text-sm text-teal-900">This header revision already has a recorded coder review. A saved header edit requires a fresh review.</p>}
               {headerState?.dirty && <p className="mt-3 text-sm text-teal-900">Save or cancel the header edits before recording the review.</p>}
