@@ -205,3 +205,26 @@ test("refresh preserves an in-flight mutation and its exact retry command", () =
   assert.equal(retry.controller.signal.aborted, true);
   assert.equal(pending.current, null);
 });
+
+
+test("an ambiguous completed save blocks late refreshes and new writes until its exact retry resolves", () => {
+  const pending = {current: null};
+  const command = {path: "/api/encounters/header/save", body: {operationId: "original-save", expectedRevision: 2}};
+  const save = beginHeaderRequest(pending, command);
+  const unresolvedCommand = command; // A 503 cannot determine whether the save committed.
+  assert.equal(finishHeaderRequest(pending, save), true);
+  assert.equal(pending.current, null);
+  assert.equal(beginHeaderRequest(pending, null, true, unresolvedCommand), null);
+  assert.equal(beginHeaderRequest(pending, null, false, unresolvedCommand), null);
+  assert.equal(beginHeaderRequest(pending, {...command}, false, unresolvedCommand), null);
+  const retry = beginHeaderRequest(pending, command, false, unresolvedCommand);
+  assert.equal(retry.command, command);
+  assert.equal(retry.command.body.operationId, "original-save");
+  assert.equal(beginHeaderRequest(pending, null, true, unresolvedCommand), null);
+  assert.equal(retry.controller.signal.aborted, false);
+  assert.equal(finishHeaderRequest(pending, retry), true);
+  // Only a resolved retry clears the held command; ordinary reads can then resume.
+  const refreshed = beginHeaderRequest(pending, null, true, null);
+  assert.ok(refreshed);
+  cancelHeaderRequest(pending);
+});

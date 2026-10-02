@@ -28,7 +28,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
   const [retry, setRetry] = useState(null), [stale, setStale] = useState(false);
   const [notice, setNotice] = useState("");
-  const pending = useRef(null);
+  const pending = useRef(null), unresolvedCommand = useRef(null);
   const pin = encounter.headerSource;
 
   useEffect(() => run(null, true), [refreshKey]);
@@ -40,7 +40,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
 
   function run(command = null, refresh = false) {
-    const request = beginHeaderRequest(pending, command, refresh);
+    const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
     if (!request) return NOOP;
     const {controller} = request;
     setBusy(true); setError(""); setNotice("");
@@ -51,13 +51,15 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         if (!ownsHeaderRequest(pending, request)) return;
         const received = readBillingHeader(response.view, encounter);
         if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
+        unresolvedCommand.current = null;
         setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
         if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
           : "Header generated for review. No code has been accepted.");
       } catch (failure) {
         if (!ownsHeaderRequest(pending, request) || failure.name === "AbortError") return;
         const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
-        setRetry(ambiguous ? command : null);
+        unresolvedCommand.current = ambiguous ? command : null;
+        setRetry(unresolvedCommand.current);
         if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
         setError(failure.status === 409
           ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."

@@ -217,7 +217,9 @@ export function cancelHeaderRequest(pending, request = pending.current) {
   if (finishHeaderRequest(pending, request)) request.controller.abort();
 }
 
-export function beginHeaderRequest(pending, command = null, refresh = false) {
+export function beginHeaderRequest(pending, command = null, refresh = false, unresolvedCommand = null) {
+  // An ambiguous save keeps its exact command even after its network request ends.
+  if (unresolvedCommand && command !== unresolvedCommand) return null;
   // Refresh may replace reads, but must not discard an unresolved mutation.
   if (refresh && pending.current && !pending.current.command) cancelHeaderRequest(pending);
   if (pending.current) return null;
