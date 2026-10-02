@@ -141,7 +141,7 @@ class SignoffStoreMixin:
             _validate_context(feedback, verified_context, acknowledged)
         except (ValueError, TypeError, AttributeError):
             raise h.BillingHeaderError("invalid_signoff") from None
-        actor = h.HeaderActor(**asdict(actor))
+        actor = h.validated_actor(actor)
         h.uuid(header_id)
         h.uuid(feedback.review_id)
         h.integer(expected_revision, 0, h.MAX_REVISIONS)

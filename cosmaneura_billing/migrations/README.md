@@ -362,3 +362,13 @@ in scope for HIPAA: encrypt at rest and in transit, restrict access, enable audi
 logging, and include it in the service/subprocessor/BAA inventory. The current
 pilot does not authorize PHI in this table or any external embedding call.
 Minimizing and properly de-identifying indexed text keeps that surface small.
+
+`026_core_workload_bridge` adds explicit Core identity projections and an empty,
+owner-registered source/workload mapping. Only its distinct runtime login can
+consume the narrow source grant/lock readers; it receives no direct encounter,
+identity or admission writes. Existing Entra authorizations reject Core IDs.
+The existing provider source and model lanes retain their separate approvals.
+The separately composed `cosmaneura_billing.core_bridge:app` remains disabled
+unless `COSMANEURA_CORE_BRIDGE_POLICY_JSON` and the source/runtime mappings are
+configured. Install the `core_bridge` extra; the shared image includes it but
+keeps its normal API entrypoint. Down preserves all identity and audit history.

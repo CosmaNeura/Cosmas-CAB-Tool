@@ -23,7 +23,7 @@ def connection(value):
     closed(value,CONNECTION_KEYS)
     uuid(value['connectionId']); integer(value['version'],1)
     uuid(value['tenantId']); text(value['reviewRef'],160)
-    require(value['sourceMode']=='cab_provider_attested')
+    require(value['sourceMode'] in {'cab_provider_attested','core_workload_verified'})
     require(value['dataClass'] in {'synthetic','deidentified'})
     return deepcopy(value)
 

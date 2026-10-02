@@ -8,7 +8,7 @@ from threading import RLock
 from uuid import uuid4
 from urllib.parse import quote
 
-from .billing_header import HeaderActor, digest, source_snapshot, utc_now
+from .billing_header import HeaderActor, validated_actor, digest, source_snapshot, utc_now
 from .billing_header_store import _audit_check
 from .persistence import PostgresAccessAuditStore, PostgresEncounterStore, StoredEncounter
 from .provider_handoff import SOURCE, SCHEMA, require, verified_fixture
@@ -26,7 +26,7 @@ class HandoffStore:
     durable = False
 
     def accept(self, prepared, actor, *, audit_completion=None):
-        actor = HeaderActor(**asdict(actor))
+        actor = validated_actor(actor)
         require(actor.role in {"Provider", "Admin"}, "not_authorized")
         intent = digest({"request": prepared.intent, "actor": asdict(actor), "practice": self.practice_id})
         with self.unit(prepared, actor) as unit:
@@ -122,6 +122,10 @@ class PostgresHandoffStore(HandoffStore):
             require(row and row["allowed"] is True, "not_authorized")
             yield _PostgresUnit(self, conn, prepared)
 
+    def _locked_encounter(self, conn, encounter_id):
+        return conn.execute(PostgresEncounterStore._select() + " WHERE practice_id=%s AND external_id=%s FOR UPDATE",
+                            (self.practice_id, encounter_id)).fetchone()
+
     def healthcheck(self):
         with self.context.connection() as conn:
             row = conn.execute("""SELECT
@@ -143,8 +147,7 @@ class _PostgresUnit:
                                   (store.practice_id, p.operation_id)).fetchone()
         self.head = conn.execute("SELECT * FROM provider_handoff_heads WHERE practice_id=%s AND record_key=%s",
                                  (store.practice_id, p.record_key)).fetchone()
-        row = conn.execute(PostgresEncounterStore._select() + " WHERE practice_id=%s AND external_id=%s FOR UPDATE",
-                           (store.practice_id, p.bundle.encounter_id)).fetchone()
+        row = store._locked_encounter(conn, p.bundle.encounter_id)
         self.stored = PostgresEncounterStore._bundle(row) if row else None
 
     def audit(self, event, actor, stored, prepared):
