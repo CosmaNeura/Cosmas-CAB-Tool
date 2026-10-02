@@ -37,3 +37,12 @@ converted or removed. This display is advisory and does not authorize claims.
 Independent finding C7-R1: the data summary card now uses the validated ledger,
 with complete/incomplete/invalid/absent actual-component regression coverage.
 An unavailable ledger cannot fall back to a raw MDM classification.
+
+
+Header time-fact correction: the old presentation regex missed the exact eligible
+time retained by the pipeline. Populate this fact only from the completed E/M
+view's explicit total and retained exact source span, requalified against the
+stored note/transcript. Remove the unqualified regex path. Do not infer from
+code/rationale, change visit duration, release held codes, or modify original
+notes/engine results. Verify exact source, attribution, missing/stripped evidence
+and the actual note-09 syntax with scoped adapter/API checks before review.

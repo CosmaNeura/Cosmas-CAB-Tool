@@ -8,6 +8,7 @@ from .billing_header import BillingHeaderError, source_documents
 from .billing_tab import build_billing_tab_view
 from .completeness import RULE_PACKS, applicable_rulepack, check_note
 from .primary_diagnosis import result_primary
+from .em_time import qualify_em_time
 
 
 _FACT_LABELS = {
@@ -85,7 +86,6 @@ def generated_header(stored, result, *, engine_version: str) -> dict:
         "patient_type": r"\b(?:new|established) patient\b",
         "place_of_service": r"\b(?:place of service|POS)\s*[:=]\s*(?:02|10|11)\b",
         "visit_duration": r"\b(?:visit|session) duration\s*[:=]\s*\d{1,3}\s*minutes\b",
-        "em_time": r"\btotal (?:physician|QHP|qualified health care professional) time on (?:the )?(?:date of service|service date)\s*[:=]\s*\d{1,3}\s*minutes\b",
     }
     note = stored.bundle.signed_note
     for key, pattern in patterns.items():
@@ -99,6 +99,22 @@ def generated_header(stored, result, *, engine_version: str) -> dict:
             elif matches:
                 observations.append(clause)
         fact(key, observations)
+
+    # Use the completed pipeline's explicit total and retained exact evidence.
+    # Requalify against the stored source: code/rationale wording and a legacy
+    # regex hit cannot establish eligible clinician service-date time.
+    em = view.get("em") or {}
+    minutes = em.get("total_time_minutes")
+    if type(minutes) is int:
+        for span in em.get("evidence_spans", []):
+            proof = qualify_em_time(minutes, span["text"], stored.bundle).attestation
+            if (proof is None or proof.source != span["source"] or proof.quote != span["text"]
+                    or proof.start != span["loc"]["start"] or proof.end != span["loc"]["end"]):
+                continue
+            ref = add_span(_SOURCE_KIND[proof.source], proof.start, proof.end, proof.quote)
+            if ref:
+                facts["em_time"].update(status="documented", value=f"{proof.minutes} minutes", evidenceIds=[ref])
+                break
 
     pack = applicable_rulepack(place_of_service=stored.bundle.place_of_service,
                                encounter_type=stored.bundle.encounter_type)
