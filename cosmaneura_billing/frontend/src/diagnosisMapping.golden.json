@@ -1,0 +1,11 @@
+{
+  "id": "human-mapping",
+  "kind": "ICD10",
+  "code": "G43.009",
+  "label": "Migraine without aura, not intractable, without status migrainosus",
+  "evidenceIds": ["e1"],
+  "mapping": {
+    "candidateId": "diagnosis-review-0",
+    "catalogVersion": "icd10cm-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

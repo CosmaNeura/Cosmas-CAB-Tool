@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import DiagnosisMapping from "./DiagnosisMapping.jsx";
+import {mappingReviewText} from "./diagnosisMapping.js";
 import { api } from "./api.js";
 import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
 
@@ -157,6 +159,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         <h3 className="font-semibold">Current code proposals · {view.signoff ? "review outcomes recorded above" : "require review"}</h3>
         <p className="mt-1 text-xs">Edited codes remain separate from engine suggestions. Saving does not accept a code or complete coder signoff.</p>
         <ul className="mt-2 space-y-2">{currentDraft.codes.map((code) => {const author = fieldAuthor(view, `codes.${code.id}`); return <li key={code.id}><code>{code.code}</code> · {code.label}
+          {code.mapping && <p className="text-xs">{mappingReviewText(view, code)} Linked to {code.mapping.candidateId}; original hold retained.</p>}
           <p className="text-xs">{author ? `Human proposal · ${author.name} (${author.role})` : "Original pipeline suggestion retained"}</p><Evidence ids={code.evidenceIds} header={h} /></li>; })}</ul>
         {h.suggestions.filter((s) => !currentDraft.codes.some((c) => c.id === s.id)).map((s) => <p key={s.id} className="mt-2 text-xs">Removal proposed: <code>{s.code}</code> · {s.label}</p>)}
         {!currentDraft.codes.length && <p className="mt-2">No codes proposed in this revision.</p>}
@@ -177,9 +180,9 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
       <fieldset disabled={disabled} className="mt-4 space-y-3"><legend className="text-sm font-semibold">Code proposals</legend>
         {draft.codes.map((code, index) => <div key={code.id} className="rounded-lg border border-slate-200 p-3">
           <div className="grid gap-2 sm:grid-cols-[6rem_7rem_1fr_auto]">
-            <label className="text-xs">Kind<select className={input} value={code.kind} onChange={(e) => editCode(index, {kind: e.target.value})}><option>EM</option><option>ICD10</option></select></label>
-            <label className="text-xs">Code<input className={input} maxLength={15} required value={code.code} onChange={(e) => editCode(index, {code: e.target.value.toUpperCase()})} /></label>
-            <label className="text-xs">Short label<input className={input} maxLength={150} required value={code.label} onChange={(e) => editCode(index, {label: e.target.value})} /></label>
+            <label className="text-xs">Kind<select disabled={!!code.mapping} className={input} value={code.kind} onChange={(e) => editCode(index, {kind: e.target.value})}><option>EM</option><option>ICD10</option></select></label>
+            <label className="text-xs">Code<input readOnly={!!code.mapping} className={input} maxLength={15} required value={code.code} onChange={(e) => editCode(index, {code: e.target.value.toUpperCase()})} /></label>
+            <label className="text-xs">Short label<input readOnly={!!code.mapping} className={input} maxLength={150} required value={code.label} onChange={(e) => editCode(index, {label: e.target.value})} /></label>
             <button type="button" className={`${button} self-end`} onClick={() => setDraft(replaceHeaderCodes(draft, draft.codes.filter((_, i) => i !== index)))}>Remove proposal</button>
           </div>
           {code.kind === "ICD10" && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" role="group" aria-label={`Order ${code.code || "new diagnosis"}`}>
@@ -189,11 +192,14 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
             <button type="button" className={button} disabled={draftDiagnoses.at(-1)?.id === code.id} onClick={() => setDraft(moveHeaderDiagnosis(draft, code.id, draftDiagnoses.findIndex((row) => row.id === code.id) + 1))}>Move down</button>
           </div>}
           <details className="mt-3 text-xs"><summary className="cursor-pointer">Source evidence ({code.evidenceIds.length} selected; required)</summary>
-            {h?.evidence.map((e) => <label key={e.id} className="mt-2 flex items-start gap-2"><input type="checkbox" checked={code.evidenceIds.includes(e.id)} onChange={(event) => editCode(index, {evidenceIds: event.target.checked ? [...code.evidenceIds, e.id] : code.evidenceIds.filter((id) => id !== e.id)})} /><span>{e.source}: {e.text}</span></label>)}
+            {code.mapping && <p>Evidence is bound to the original held diagnosis. Use the catalog below to replace its mapping.</p>}
+            {h?.evidence.map((e) => <label key={e.id} className="mt-2 flex items-start gap-2"><input type="checkbox" disabled={!!code.mapping} checked={code.evidenceIds.includes(e.id)} onChange={(event) => editCode(index, {evidenceIds: event.target.checked ? [...code.evidenceIds, e.id] : code.evidenceIds.filter((id) => id !== e.id)})} /><span>{e.source}: {e.text}</span></label>)}
           </details>
         </div>)}
         <button type="button" className={button} disabled={draft.codes.length >= 20} onClick={() => setDraft(replaceHeaderCodes(draft, [...draft.codes, {id: `human-${crypto.randomUUID()}`, kind: "ICD10", code: "", label: "", evidenceIds: []}]))}>Add code proposal</button>
       </fieldset>
+      <DiagnosisMapping {...{view, draft, disabled}} onChoose={(row) => setDraft((current) => replaceHeaderCodes(current,
+        current.codes.some((c) => c.id === row.id) ? current.codes.map((c) => c.id === row.id ? row : c) : [...current.codes, row]))} />
       <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" disabled={disabled || !draftDiagnoses.length} checked={draft.diagnosisOrderConfirmed === true} onChange={(event) => setDraft({...draft, diagnosisOrderConfirmed: event.target.checked})} />
         <span>I confirm {draftDiagnoses[0]?.code || "the first diagnosis"} as my proposed primary and the displayed diagnosis order. Saving sends this proposal for coder review. Code, order, or evidence edits clear this confirmation.</span>
       </label>

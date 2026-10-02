@@ -89,6 +89,8 @@ def validate_signoff(header, revision, feedback, context, decisions, acknowledge
     """Human proposal decisions must agree with the recorded feedback outcomes."""
     try:
         validate_feedback(feedback)
+        from .billing_header_mapping import validate_mappings
+        validate_mappings(header, h.create_draft(header, revision)["codes"])
         _validate_context(feedback, context, acknowledged)
         proposals = {row["id"]: row for row in header_proposals(header, revision)}
         h.sequence(decisions, 41)

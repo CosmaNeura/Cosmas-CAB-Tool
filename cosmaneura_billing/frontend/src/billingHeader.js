@@ -1,4 +1,5 @@
 // Validate the whole header against the currently displayed source before render.
+import { validMapping, validMappingOutcomes, mappingReviewText } from "./diagnosisMapping.js";
 export const diagnosisOrderDecisionId = "@diagnosis-order";
 export const factKeys = ["visit_type", "patient_type", "modality", "patient_location",
   "place_of_service", "provider_location", "consent", "visit_duration", "em_time"];
@@ -53,6 +54,7 @@ export function readBillingHeader(view, encounter) {
     && text(line.code, 15) && /^[A-Z0-9][A-Z0-9.]*$/.test(line.code)
     && text(line.label, 150) && refs(line.evidenceIds);
   require(list(h.suggestions, 20) && h.suggestions.every((line) => codeValid(line)
+    && !Object.hasOwn(line, "mapping")
     && line.reviewStatus === "unreviewed" && text(line.basis, 700))
     && new Set(h.suggestions.map((s) => s.id)).size === h.suggestions.length);
   require(list(h.flags, 30) && h.flags.every((f) => id(f.id) && text(f.message, 700)
@@ -76,6 +78,9 @@ export function readBillingHeader(view, encounter) {
       && list(draft.codes, 20) && draft.codes.every(codeValid) && text(draft.note, 2000, true)
       && new Set(draft.codes.map((row) => row.id)).size === draft.codes.length
       && new Set(draft.codes.map((row) => `${row.kind}:${row.code}`)).size === draft.codes.length);
+    const mapped = draft.codes.filter((row) => Object.hasOwn(row, "mapping"));
+    require(mapped.every((row) => validMapping(row, h))
+      && new Set(mapped.map((row) => row.mapping.candidateId)).size === mapped.length);
     require(list(revision.history, 100) && revision.history.length === revision.number);
     for (const item of revision.history) {
       require(actorValid(item.actor) && timeValid(item.createdAt) && text(item.reason, 600)
@@ -106,6 +111,7 @@ export function readBillingHeader(view, encounter) {
         : d.engine_code !== null && (d.action === "reject" ? d.final_code === null
           : d.final_code !== null && (d.action === "accept" ? d.final_code === d.engine_code : d.final_code !== d.engine_code)))));
     validateBaselineDecisions(view, receipt.codeDecisions, receipt.baselineDecisions ?? []);
+    require(validMappingOutcomes(view, receipt.codeDecisions, receipt.humanProposalDecisions));
     acceptedDiagnosisOrder(view, receipt.codeDecisions, receipt.humanProposalDecisions);
   }
   if (view.previousSignoff != null) {
@@ -132,7 +138,8 @@ export function fieldAuthor(view, path) {
 export const headerSourceKey = (encounter) => canonical([encounter.encounterId, encounter.headerSource]);
 
 export function headerProposals(view) {
-  const code = ({id, kind, code, label, evidenceIds}) => ({id, kind, code, label, evidenceIds: [...evidenceIds].sort()});
+  const code = ({id, kind, code, label, evidenceIds, mapping}) => ({id, kind, code, label, evidenceIds: [...evidenceIds].sort(),
+    ...(mapping ? {mapping: structuredClone(mapping)} : {})});
   const original = new Map(view.header.suggestions.map((row) => [row.id, code(row)]));
   const proposed = new Map(headerDraft(view).codes.map((row) => [row.id, code(row)]));
   return [...new Set([...original.keys(), ...proposed.keys()])]
@@ -226,6 +233,7 @@ export function headerReviewRequest(view, feedback, decisions, acknowledged, bas
   for (const choice of decisions) require(proposals.delete(choice.id)
     && ["accept", "reject"].includes(choice.decision) && text(choice.reason, 1000));
   validateBaselineDecisions(view, feedback.decisions, baselineDecisions);
+  require(validMappingOutcomes(view, feedback.decisions, decisions));
   acceptedDiagnosisOrder(view, feedback.decisions, decisions);
   return structuredClone({encounterId: feedback.encounter_id, expectedSource: view.header.expectedSource,
     headerId: view.header.headerId, expectedRevision: view.revisionNumber, feedback,
@@ -235,6 +243,7 @@ export function headerReviewRequest(view, feedback, decisions, acknowledged, bas
 export function exportBillingHeader(view, encounter) {
   // A human sequence must export against the same verified source as the view.
   if (proposedDiagnosisOrder(view).length
+    || headerDraft(view).codes.some((row) => Object.hasOwn(row, "mapping"))
     || view.signoff?.humanProposalDecisions?.some((d) => d.id === diagnosisOrderDecisionId)) require(encounter != null);
   if (encounter) readBillingHeader(view, encounter);
   const h = view.header, draft = headerDraft(view), receipt = view.signoff;
@@ -253,7 +262,10 @@ export function exportBillingHeader(view, encounter) {
   for (const code of h.suggestions) rows.push(`${code.kind} ${code.code}: ${code.label} [${code.evidenceIds.join(", ")}]`, `  ${code.basis}`);
   if (view.revision) {
     rows.push("", "CURRENT CODE PROPOSALS — human edits are not engine validation");
-    for (const code of draft.codes) rows.push(`${code.kind} ${code.code}: ${code.label} [${code.evidenceIds.join(", ")}]`);
+    for (const code of draft.codes) {
+      rows.push(`${code.kind} ${code.code}: ${code.label} [${code.evidenceIds.join(", ")}]`);
+      if (code.mapping) rows.push(`  Human mapping of ${code.mapping.candidateId}; ${code.mapping.catalogVersion}. ${mappingReviewText(view, code)}`);
+    }
     for (const code of h.suggestions.filter((s) => !draft.codes.some((c) => c.id === s.id))) rows.push(`Removal proposed: ${code.kind} ${code.code}`);
     if (draft.note) rows.push(`Reviewer note: ${draft.note}`);
   }

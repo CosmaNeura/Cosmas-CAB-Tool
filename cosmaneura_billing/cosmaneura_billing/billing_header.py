@@ -29,6 +29,7 @@ class BillingHeaderError(ValueError):
                 "not_authorized": 403, "invalid_header": 422, "invalid_edit": 422,
                 "audit_required": 503, "history_limit": 409, "store_invalid": 503,
                 "generation_unavailable": 503, "header_unavailable": 404,
+                "catalog_unavailable": 503, "catalog_changed": 409,
                 "invalid_signoff": 422, "signoff_unavailable": 503, "review_conflict": 409}
 
     def __init__(self, code="invalid_header"):
@@ -261,6 +262,8 @@ def make_header(generated, stored, actor, operation_id, at):
 
 def code_fields(line):
     result = {key: detached(line[key]) for key in ("id", "kind", "code", "label", "evidenceIds")}
+    if "mapping" in line:
+        result["mapping"] = detached(line["mapping"])
     result["evidenceIds"] = sorted(result["evidenceIds"])
     return result
 
@@ -285,7 +288,8 @@ def normalize_draft(header, draft):
         originals = {line["id"]: code_fields(line) for line in header["suggestions"]}
         ids, codes, result = set(), set(), []
         for line in sequence(draft["codes"], 20):
-            closed(line, ("id", "kind", "code", "label", "evidenceIds"))
+            closed(line, ("id", "kind", "code", "label", "evidenceIds", *(
+                ("mapping",) if type(line) is dict and "mapping" in line else ())))
             identifier(line["id"])
             require(line["id"] not in ids and line["kind"] in ("EM", "ICD10"))
             ids.add(line["id"])
@@ -308,8 +312,14 @@ def normalize_draft(header, draft):
             codes.add(key)
             result.append(normalized)
         require(not confirmed or any(row["kind"] == "ICD10" for row in result))
+        from .billing_header_mapping import validate_mappings
+        validate_mappings(header, result)
         return {"facts": facts, "codes": result, "note": note, "diagnosisOrderConfirmed": confirmed}
-    except (BillingHeaderError, TypeError, KeyError):
+    except BillingHeaderError as exc:
+        if exc.code in ("catalog_unavailable", "catalog_changed"):
+            raise
+        raise BillingHeaderError("invalid_edit") from None
+    except (TypeError, KeyError):
         raise BillingHeaderError("invalid_edit") from None
 
 

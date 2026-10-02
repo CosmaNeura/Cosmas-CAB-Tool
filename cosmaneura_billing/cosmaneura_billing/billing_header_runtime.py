@@ -178,6 +178,8 @@ def generated_header(stored, result, *, engine_version: str) -> dict:
                     f"{row['description'][:150]} — {row['status']} from suggestions: {reason}"[:700]}
             if refs:
                 flag["evidenceIds"] = refs
+                if kind == "ICD10" and row["status"] == "held":
+                    flag["id"] = f"diagnosis-review-{len(flags)}"
             flags.append(flag)
             continue
         if not refs:

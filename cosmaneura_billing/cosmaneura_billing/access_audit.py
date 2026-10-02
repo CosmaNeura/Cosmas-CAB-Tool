@@ -21,6 +21,7 @@ _ENCOUNTER_FIXED_ROUTES = {
     "/api/encounters/coder-view": "encounter.compute",
     "/api/encounters/billing-tab": "encounter.compute",
     "/api/encounters/header": "billing_header.view",
+    "/api/encounters/header/diagnosis-catalog": "billing_header.catalog",
     "/api/encounters/header/generate": "billing_header.compute",
     "/api/encounters/header/save": "billing_header.save",
     "/api/encounters/header/signoff": "billing_header.signoff",
