@@ -66,6 +66,268 @@ _STOPWORDS = frozenset({
     "site", "part", "region", "complication", "complications", "primary",
 })
 
+DATA_REVIEW_VERSION = "office-mdm-data.2026-09-30.v1"
+_DATA_REVIEW_VERSIONS = (DATA_REVIEW_VERSION, "office-mdm-data.2026-09-30.v2",
+                         "office-mdm-data.2026-10-02.v3")
+CLINICAL_REVIEW_VERSION = "office-mdm-clinical.2026-09-30.v1"
+# Semantic rule revisions keep the bounded ledger shape. Preserve old saved
+# reviews verbatim; accepting a version never reclassifies its original events.
+_CLINICAL_VERSIONS = {
+    "problems": ("office-mdm-problems.2026-09-30.v1", "office-mdm-problems.2026-09-30.v2",
+                 "office-mdm-problems.2026-09-30.v3", "office-mdm-problems.2026-09-30.v4"),
+    "risk": ("office-mdm-risk.2026-09-30.v1", "office-mdm-risk.2026-09-30.v2",
+             "office-mdm-risk.2026-09-30.v3", "office-mdm-risk.2026-09-30.v4"),
+}
+_CLINICAL_CATEGORIES = {
+    "problems": ("self_limited", "acute_uncomplicated", "stable_acute", "stable_chronic",
+                 "chronic_exacerbation", "undiagnosed_uncertain_prognosis", "acute_systemic",
+                 "complicated_injury", "severe_chronic", "threat_to_life_or_function"),
+    "risk": ("intensive_toxicity_monitoring", "patient_specific_management",
+             "parenteral_controlled_medication", "prescription_management",
+             "nonprescription_management", "socially_limited_care", "minimal_management",
+             "conservative_management", "emergency_major_surgery", "minor_surgery_with_risks",
+             "minor_surgery", "elective_major_surgery_with_risks", "elective_major_surgery",
+             "hospitalization", "life_sustaining_deescalation"),
+}
+_CLINICAL_EVENT = {"id", "subject", "status", "category", "reason"}
+_DATA_ACTIONS = {"test_order", "test_considered", "test_result_review", "external_note_review",
+                 "independent_historian", "independent_interpretation",
+                 "external_discussion", "unclassified"}
+_DATA_CATEGORIES = {"category_one", "historian", "interpretation", "discussion"}
+_DATA_SUMMARY = {"rule_version", "level", "category_one_units", "independent_historian",
+                 "independent_interpretation", "external_discussion", "qualifying_categories"}
+_DATA_EVENT = {"id", "action", "subject", "status", "category", "reason"}
+
+
+def _data_text(value, maximum):
+    return (isinstance(value, str) and 0 < len(value) <= maximum and bool(value.strip())
+            and not any(ord(c) < 32 and c not in "\n\t" or ord(c) == 127
+                        or 0xD800 <= ord(c) <= 0xDFFF for c in value))
+
+
+def _data_shape(review, *, located):
+    """Validate the additive ledger's bounded display shape, not MDM rules."""
+    fields = _DATA_SUMMARY | {"events"} | ({"evidence_complete"} if located else set())
+    if not isinstance(review, dict) or set(review) != fields:
+        return False
+    if (review["rule_version"] not in _DATA_REVIEW_VERSIONS
+            or review["level"] not in ("straightforward", "low", "moderate", "high")
+            or type(review["category_one_units"]) is not int
+            or not 0 <= review["category_one_units"] <= 41
+            or any(type(review[key]) is not bool for key in
+                   ("independent_historian", "independent_interpretation", "external_discussion"))
+            or located and type(review["evidence_complete"]) is not bool):
+        return False
+    cats = review["qualifying_categories"]
+    if (type(cats) is not list or len(cats) > 3
+            or any(c not in ("category_one", "interpretation", "discussion") for c in cats)
+            or len(set(cats)) != len(cats)):
+        return False
+    events = review["events"]
+    if type(events) is not list or len(events) > 40:
+        return False
+    seen = set()
+    for event in events:
+        extra = {"evidence_spans", "evidence_complete"} if located else {"evidence"}
+        if (type(event) is not dict or set(event) != _DATA_EVENT | extra
+                or not _data_text(event["id"], 32) or event["id"] in seen
+                or event["action"] not in tuple(_DATA_ACTIONS)
+                or event["category"] not in (*_DATA_CATEGORIES, None)
+                or event["status"] not in ("counted", "duplicate", "held")
+                or not _data_text(event["subject"], 160) or not _data_text(event["reason"], 300)):
+            return False
+        seen.add(event["id"])
+        spans = event["evidence_spans" if located else "evidence"]
+        if type(spans) is not list or len(spans) > 3:
+            return False
+        if located and (type(event["evidence_complete"]) is not bool
+                        or event["evidence_complete"] and not spans
+                        or event["status"] == "counted" and
+                        (not event["evidence_complete"] or event["category"] is None)):
+            return False
+        for span in spans:
+            if (type(span) is not dict
+                    or set(span) != ({"source", "text", "loc"} if located else {"source", "quote"})
+                    or span["source"] not in ("signed_note", "transcript", "intake_text")
+                    or not _data_text(span["text" if located else "quote"], 1000)):
+                return False
+    return True
+
+
+def valid_data_review(review, bundle):
+    """Persist/render a ledger only against its original exact source bytes."""
+    if not _data_shape(review, located=True):
+        return False
+    sources = {"signed_note": bundle.signed_note, "transcript": bundle.transcript,
+               "intake_text": bundle.intake_text}
+    for event in review["events"]:
+        for span in event["evidence_spans"]:
+            loc = span["loc"]
+            source = sources.get(span["source"]) or ""
+            if (type(loc) is not dict or set(loc) != {"start", "end"}
+                    or type(loc["start"]) is not int or type(loc["end"]) is not int
+                    or not 0 <= loc["start"] < loc["end"] <= len(source)
+                    or source[loc["start"]:loc["end"]] != span["text"]):
+                return False
+            if event["status"] == "counted" and span["source"] == "intake_text":
+                return False
+    if review["evidence_complete"] and not _data_summary_matches(review):
+        return False
+    return True
+
+
+def _data_summary_matches(review):
+    counted = [event["category"] for event in review["events"] if event["status"] == "counted"]
+    return (review["category_one_units"] == counted.count("category_one") + ("historian" in counted)
+            and review["independent_historian"] == ("historian" in counted)
+            and review["independent_interpretation"] == ("interpretation" in counted)
+            and review["external_discussion"] == ("discussion" in counted))
+
+
+def _data_source_span(ev, bundle):
+    sources = {"signed_note": bundle.signed_note, "transcript": bundle.transcript,
+               "intake_text": bundle.intake_text}
+    source = sources.get(ev["source"])
+    quote = ev["quote"]
+    if not isinstance(source, str) or len(source) > 500_000:
+        return None
+    start = source.find(quote)
+    if start < 0 or source.find(quote, start + 1) >= 0:
+        return None
+    return {"source": ev["source"], "text": quote,
+            "loc": {"start": start, "end": start + len(quote)}}
+
+
+def _clinical_shape(review, *, located):
+    """A versioned display contract; this does not adjudicate clinical facts."""
+    if (type(review) is not dict or set(review) != {"rule_version", "problems", "risk"}
+            or review["rule_version"] != CLINICAL_REVIEW_VERSION):
+        return False
+    for name, versions in _CLINICAL_VERSIONS.items():
+        section = review[name]
+        if (type(section) is not dict or set(section) != {"rule_version", "level", "events"}
+                | ({"evidence_complete"} if located else set())
+                or section["rule_version"] not in versions
+                or section["level"] not in ("straightforward", "low", "moderate", "high")
+                or type(section["events"]) is not list or len(section["events"]) > 20
+                or located and type(section["evidence_complete"]) is not bool):
+            return False
+        seen = set()
+        for event in section["events"]:
+            if (type(event) is not dict or set(event) != _CLINICAL_EVENT
+                    | ({"evidence_spans", "evidence_complete"} if located else {"evidence"})
+                    or not _data_text(event["id"], 32) or event["id"] in seen
+                    or not _data_text(event["subject"], 160) or not _data_text(event["reason"], 300)
+                    or event["status"] not in ("counted", "duplicate", "held")
+                    or event["category"] not in (*_CLINICAL_CATEGORIES[name], None)):
+                return False
+            seen.add(event["id"])
+            spans = event["evidence_spans" if located else "evidence"]
+            if type(spans) is not list or len(spans) > 3:
+                return False
+            if located and (type(event["evidence_complete"]) is not bool
+                            or event["evidence_complete"] and not spans
+                            or event["status"] == "counted" and
+                            (not event["evidence_complete"] or event["category"] is None)):
+                return False
+            for span in spans:
+                if (type(span) is not dict or set(span) !=
+                        ({"source", "text", "loc"} if located else {"source", "quote"})
+                        or span["source"] not in ("signed_note", "transcript", "intake_text")
+                        or not _data_text(span["text" if located else "quote"], 1000)):
+                    return False
+    return True
+
+
+def valid_clinical_review(review, bundle):
+    """Validate persisted original decisions against the current exact source."""
+    if not _clinical_shape(review, located=True):
+        return False
+    for name in _CLINICAL_VERSIONS:
+        section = review[name]
+        for event in section["events"]:
+            seen = []
+            for span in event["evidence_spans"]:
+                loc = span["loc"]
+                expected = _data_source_span({"source": span["source"], "quote": span["text"]}, bundle)
+                if (type(loc) is not dict or set(loc) != {"start", "end"}
+                        or type(loc["start"]) is not int or type(loc["end"]) is not int
+                        or span != expected or span in seen
+                        or event["status"] == "counted" and span["source"] == "intake_text"):
+                    return False
+                seen.append(span)
+        if (section["evidence_complete"] and not any(e["status"] == "counted" for e in section["events"])
+                and section["level"] != "straightforward"):
+            return False
+    return True
+
+
+def _clinical_review(s, bundle):
+    raw = getattr(s, "clinical_review", None)
+    if raw is None or not _clinical_shape(raw, located=False):
+        return None
+    anchored = _anchored_evidence(s, bundle)
+    display = {"rule_version": raw["rule_version"]}
+    for name in _CLINICAL_VERSIONS:
+        events, complete = [], True
+        for event in raw[name]["events"]:
+            spans, all_found = [], bool(event["evidence"])
+            for ev in event["evidence"]:
+                span = _data_source_span(ev, bundle)
+                if event["status"] == "counted":
+                    span = next((located for retained, located in anchored
+                                 if retained.rationale == f"MDM {name}: {event['id']}"
+                                 and retained.source == ev["source"] and retained.quote == ev["quote"]
+                                 and located == span and ev["source"] != "intake_text"), None)
+                all_found = all_found and span is not None
+                if span is not None and span not in spans:
+                    spans.append(span)
+            row = {key: event[key] for key in sorted(_CLINICAL_EVENT)}
+            if row["status"] == "counted" and (not all_found or row["category"] is None):
+                row.update(status="held", reason="Counted clinical work could not be fully located in retained source evidence. Review the source documentation.")
+                complete = False
+            events.append({**row, "evidence_spans": spans, "evidence_complete": bool(all_found)})
+        if not any(e["status"] == "counted" for e in events) and raw[name]["level"] != "straightforward":
+            complete = False
+        # Preserve the original engine result; incomplete display cannot assign
+        # a replacement level. Held/duplicate quotes never become code support.
+        display[name] = {"rule_version": raw[name]["rule_version"], "level": raw[name]["level"],
+                         "events": events, "evidence_complete": complete}
+    return display
+
+
+def _data_review(s, bundle):
+    raw = getattr(s, "data_review", None)
+    if raw is None or not _data_shape(raw, located=False):
+        return None
+    anchored = _anchored_evidence(s, bundle)
+    events, complete = [], True
+    for event in raw["events"]:
+        spans = []
+        all_found = bool(event["evidence"])
+        for ev in event["evidence"]:
+            span = _data_source_span(ev, bundle)
+            if event["status"] == "counted":
+                span = next((retained_span for retained, retained_span in anchored
+                             if retained.rationale == f"MDM data: {event['id']}"
+                             and retained.source == ev["source"] and retained.quote == ev["quote"]
+                             and retained_span == span), None)
+            # Held/duplicate quotations explain the decision only. They never
+            # enter CodeSuggestion.evidence or the code's _spans support list.
+            all_found = (all_found and span is not None
+                         and not (event["status"] == "counted" and ev["source"] == "intake_text"))
+            if span is not None and span not in spans:
+                spans.append(span)
+        row = {key: event[key] for key in sorted(_DATA_EVENT)}
+        if row["status"] == "counted" and (not all_found or row["category"] is None):
+            row.update(status="held", reason="Counted data could not be fully located in retained source evidence. Review the source documentation.")
+            complete = False
+        events.append({**row, "evidence_spans": spans, "evidence_complete": all_found})
+    # Do not recalculate the engine's MDM level from an incomplete display.
+    display = {**{key: list(raw[key]) if key == "qualifying_categories" else raw[key]
+                  for key in sorted(_DATA_SUMMARY)}, "events": events}
+    return {**display, "evidence_complete": complete and _data_summary_matches(display)}
+
 
 def _anchored_evidence(
     s: CodeSuggestion, bundle: VisitBundle,
@@ -276,12 +538,20 @@ def build_billing_tab_view(
         if rulepack else
         {"rulepack": None, "complete": None, "results": [], "attestation_block": None}
     )
+    em = _em_block(card, ws, bundle)
+    # A held explanation must not become code evidence merely to stay visible.
+    ledger_only = (next((_data_review(s, bundle) for s in considered if s.kind == CodeKind.EM), None)
+                   if em is None else None)
+    clinical_only = (next((_clinical_review(s, bundle) for s in considered if s.kind == CodeKind.EM), None)
+                     if em is None else None)
 
     return {
         "visit_id": bundle.encounter_id,
         "generated_at": generated_at,
         "engine_version": engine_version,
-        "em": _em_block(card, ws, bundle),
+        "em": em,
+        **({"data_review": ledger_only} if ledger_only is not None else {}),
+        **({"clinical_review": clinical_only} if clinical_only is not None else {}),
         "icd_candidates": icd,
         "diagnosis_sequencing": sequencing.public,
         "cpt_candidates": cpt,
@@ -314,6 +584,8 @@ def _em_block(card, ws, bundle: VisitBundle) -> Optional[dict[str, Any]]:
         return next((n.split(":", 1)[1] for n in s.notes if n.startswith(prefix)), None)
 
     minutes = note("em_total_time_minutes:")
+    data_review = _data_review(s, bundle)
+    clinical_review = _clinical_review(s, bundle)
     return {
         "suggested_level": s.code,
         "provider_selected_level": bundle.submitted_em_code,
@@ -335,6 +607,8 @@ def _em_block(card, ws, bundle: VisitBundle) -> Optional[dict[str, Any]]:
                               if s.code in line and line.split()[0] in
                               ("DOWNGRADE", "CAPTURE", "HOLD", "REJECT")],
         "copy_text": s.code if s.disposition == Disposition.CAPTURED else None,
+        **({"data_review": data_review} if data_review is not None else {}),
+        **({"clinical_review": clinical_review} if clinical_review is not None else {}),
     }
 
 
@@ -344,9 +618,9 @@ def _element_span(
     """The span supporting one MDM element, or None.
 
     The coding agent tags each E/M evidence span with what it supports, so the
-    right quote can be shown against the right element. Returning None where
-    there is no span — the data element currently has none — is the point: a
-    reviewer must not see the risk quote presented as evidence for problems.
+    right quote can be shown against the right element. Data activities have a
+    separate multi-event ledger; a single quote cannot explain all its units.
+    A reviewer must not see the risk quote presented as evidence for problems.
     """
     wanted = {"risk": "MDM risk: ", "problems": "MDM problems: "}.get(element)
     if not wanted:

@@ -1,0 +1,32 @@
+{
+  "encounter": {"signedNote": "😀 CBC ordered.\nHome log reviewed.", "transcript": "", "intake": ""},
+  "raw": {
+    "rule_version": "office-mdm-data.2026-09-30.v1", "level": "straightforward",
+    "category_one_units": 1, "independent_historian": false, "independent_interpretation": false,
+    "external_discussion": false, "qualifying_categories": [],
+    "events": [
+      {"id": "data-1", "action": "test_order", "subject": "CBC", "status": "counted", "category": "category_one",
+       "reason": "Unique test order.", "evidence": [{"source": "signed_note", "quote": "CBC ordered."}]},
+      {"id": "data-2", "action": "test_result_review", "subject": "CBC", "status": "duplicate", "category": "category_one",
+       "reason": "Same unique test already counted.", "evidence": [{"source": "signed_note", "quote": "CBC ordered."}]},
+      {"id": "data-3", "action": "unclassified", "subject": "Home log", "status": "held", "category": null,
+       "reason": "Home log does not establish a unique qualifying test.", "evidence": [{"source": "signed_note", "quote": "Home log reviewed."}]}
+    ]
+  },
+  "display": {
+    "rule_version": "office-mdm-data.2026-09-30.v1", "level": "straightforward",
+    "category_one_units": 1, "independent_historian": false, "independent_interpretation": false,
+    "external_discussion": false, "qualifying_categories": [], "evidence_complete": true,
+    "events": [
+      {"id": "data-1", "action": "test_order", "subject": "CBC", "status": "counted", "category": "category_one",
+       "reason": "Unique test order.", "evidence_complete": true,
+       "evidence_spans": [{"source": "signed_note", "text": "CBC ordered.", "loc": {"start": 2, "end": 14}}]},
+      {"id": "data-2", "action": "test_result_review", "subject": "CBC", "status": "duplicate", "category": "category_one",
+       "reason": "Same unique test already counted.", "evidence_complete": true,
+       "evidence_spans": [{"source": "signed_note", "text": "CBC ordered.", "loc": {"start": 2, "end": 14}}]},
+      {"id": "data-3", "action": "unclassified", "subject": "Home log", "status": "held", "category": null,
+       "reason": "Home log does not establish a unique qualifying test.", "evidence_complete": true,
+       "evidence_spans": [{"source": "signed_note", "text": "Home log reviewed.", "loc": {"start": 15, "end": 33}}]}
+    ]
+  }
+}

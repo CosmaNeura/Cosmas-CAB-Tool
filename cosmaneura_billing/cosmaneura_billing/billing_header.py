@@ -13,6 +13,7 @@ import re
 from uuid import UUID, uuid4
 
 from .icd10_validity import valid_human_icd10
+from .billing_tab import valid_clinical_review, valid_data_review
 
 SCHEMA = "provider-billing-header.v1"
 FACT_KEYS = ("visit_type", "patient_type", "modality", "patient_location",
@@ -20,6 +21,7 @@ FACT_KEYS = ("visit_type", "patient_type", "modality", "patient_location",
 OFFICE_EM = frozenset(("99202", "99203", "99204", "99205", "99212", "99213", "99214", "99215"))
 DIAGNOSIS_ORDER_DECISION = "@diagnosis-order"  # Reserved; impossible as a code-row ID.
 MAX_REVISIONS = 100
+MAX_EVIDENCE = 320  # All data/clinical anchors plus the original 80 references.
 
 
 class BillingHeaderError(ValueError):
@@ -171,7 +173,7 @@ def check_source(stored, expected_source):
 
 
 def _references(value, known, minimum=0):
-    sequence(value, 80)
+    sequence(value, MAX_EVIDENCE)
     require(len(value) >= minimum and all(isinstance(item, str) for item in value))
     require(len(set(value)) == len(value) and set(value) <= known)
 
@@ -182,14 +184,21 @@ def validate_generated(generated, stored):
     This is not a replacement for running the billing pipeline. No generated
     payload is accepted directly from a user-facing save request.
     """
-    closed(generated, ("facts", "evidence", "suggestions", "flags", "policy", "generation"))
+    keys = ("facts", "evidence", "suggestions", "flags", "policy", "generation")
+    optional = tuple(key for key in ("dataReview", "clinicalReview")
+                     if type(generated) is dict and key in generated)
+    closed(generated, (*keys, *optional))
+    if "dataReview" in generated:
+        require(valid_data_review(generated["dataReview"], stored.bundle))
+    if "clinicalReview" in generated:
+        require(valid_clinical_review(generated["clinicalReview"], stored.bundle))
     provenance = closed(generated["generation"], ("engineVersion", "runId", "inferenceMode"))
     text(provenance["engineVersion"], 100)
     uuid(provenance["runId"])
     text(provenance["inferenceMode"], 80)
     documents = {doc["id"]: doc for doc in source_documents(stored)}
     evidence_ids = set()
-    for item in sequence(generated["evidence"], 80):
+    for item in sequence(generated["evidence"], MAX_EVIDENCE):
         closed(item, ("id", "source", "sourceId", "sourceVersion", "start", "end", "text", "coordinateSystem"))
         identifier(item["id"])
         require(item["id"] not in evidence_ids)

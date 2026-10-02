@@ -197,10 +197,14 @@ def generated_header(stored, result, *, engine_version: str) -> dict:
         })
     if view.get("cpt_candidates"):
         flags.append({"id": "other_services", "message": "Review additional services in the full billing view."})
+    data_review = view.get("data_review") or (view.get("em") or {}).get("data_review")
+    clinical_review = view.get("clinical_review") or (view.get("em") or {}).get("clinical_review")
     return {
         "facts": list(facts.values()), "evidence": evidence, "suggestions": suggestions,
         "flags": flags, "policy": {"status": "not_verified",
             "message": "Payer applicability and billing rules require coder review."},
         "generation": {"engineVersion": engine_version, "runId": str(uuid4()),
                        "inferenceMode": result.inference.get("inferenceMode", "unknown")},
+        **({"dataReview": data_review} if data_review is not None else {}),
+        **({"clinicalReview": clinical_review} if clinical_review is not None else {}),
     }

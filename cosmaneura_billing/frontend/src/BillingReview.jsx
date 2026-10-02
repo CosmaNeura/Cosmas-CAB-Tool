@@ -7,6 +7,10 @@ import {
 import { api } from "./api.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import MdmDataReview from "./MdmDataReview.jsx";
+import { dataSectionSummary, readDataReview } from "./mdmDataReview.js";
+import MdmClinicalReview from "./MdmClinicalReview.jsx";
+import { clinicalSectionSummary, readClinicalReview } from "./mdmClinicalReview.js";
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
 import { primaryBadge } from "./diagnosisSequencing.js";
 import {
@@ -60,8 +64,11 @@ function DocumentDisclosure({ title, text }) {
   );
 }
 
-function EmReview({ em, supportedEm, encounter }) {
-  if (!em) return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-semibold">E/M review</h2><p className="mt-2 text-sm text-slate-600">No evidence-supported E/M level was produced.</p></section>;
+function EmReview({ em, supportedEm, encounter, dataReview, clinicalReview }) {
+  if (!em) return <section aria-label="E/M review" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-semibold">E/M review</h2><p className="mt-2 text-sm text-slate-600">No evidence-supported E/M level was produced.</p><MdmDataReview review={dataReview} encounter={encounter} /><MdmClinicalReview review={clinicalReview} encounter={encounter} /></section>;
+  let clinical, data;
+  try { clinical = readClinicalReview(clinicalReview, encounter); } catch { clinical = null; }
+  try { data = readDataReview(dataReview, encounter); } catch { data = null; }
   const verifiedEvidence = (em.evidence_spans || []).filter(
     (span) => isLocatedEvidenceSpan(span, encounter),
   );
@@ -88,11 +95,19 @@ function EmReview({ em, supportedEm, encounter }) {
         {(em.mdm_facts || []).map((fact) => (
           <div key={fact.element} className="rounded-xl border border-slate-200 p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{fact.element}</p>
-            <p className="mt-1 text-sm font-semibold capitalize text-slate-900">{fact.finding || "Not established"}</p>
-            <div className="mt-2">{isLocatedEvidenceSpan(fact.evidence_span, encounter) ? <Evidence span={fact.evidence_span} /> : <p className="text-xs text-slate-500">No exactly located element-specific evidence was reported.</p>}</div>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{fact.element === "data" && dataReview !== undefined
+              ? data ? dataSectionSummary(data) : "Data evidence not verified"
+              : clinicalReview !== undefined && ["problems", "risk"].includes(fact.element)
+                ? clinical ? clinicalSectionSummary(clinical[fact.element]) : "Clinical evidence not verified"
+                : fact.finding || "Not established"}</p>
+            <div className="mt-2">{fact.element === "data" && em.data_review ? <p className="text-xs text-slate-500">See the data-review ledger below for counted, duplicate, and held items.</p>
+              : clinicalReview !== undefined && ["problems", "risk"].includes(fact.element) ? <p className="text-xs text-slate-500">See the clinical-review ledger below for the original decisions and source evidence.</p>
+                : isLocatedEvidenceSpan(fact.evidence_span, encounter) ? <Evidence span={fact.evidence_span} /> : <p className="text-xs text-slate-500">No exactly located element-specific evidence was reported.</p>}</div>
           </div>
         ))}
       </div>
+      <MdmDataReview review={dataReview} encounter={encounter} />
+      <MdmClinicalReview review={clinicalReview} encounter={encounter} />
       {verifiedEvidence.length > 0 && (
         <details className="group mt-4 rounded-xl border border-slate-200 bg-slate-50">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"><ChevronDown size={15} className="transition group-open:rotate-180" aria-hidden="true" />All E/M evidence ({verifiedEvidence.length})</summary>
@@ -447,7 +462,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
           ) : result ? (
             <>
               <div className={`rounded-xl border p-4 ${completenessBlocked ? "border-rose-200 bg-rose-50 text-rose-900" : completenessOverridden ? "border-violet-200 bg-violet-50 text-violet-950" : completenessReady ? "border-sky-200 bg-sky-50 text-sky-950" : "border-amber-200 bg-amber-50 text-amber-950"}`}><div className="flex gap-3">{completenessBlocked ? <Ban size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : completenessReady ? <ShieldCheck size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> : <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />}<div><p className="font-semibold">{completenessBlocked ? "Prepared review has unresolved completeness blockers" : completenessOverridden ? "Prepared for human review after reasoned completeness override — not transmitted" : completenessReady ? "Prepared for human review — not transmitted" : "Completeness is not verified — manual review required"}</p><p className="mt-1 text-sm">Decision support only. A provider and coder remain responsible for the final billing decision.</p></div></div></div>
-              <EmReview em={result.em} supportedEm={supportedEm} encounter={encounter} />
+              <EmReview em={result.em} supportedEm={supportedEm} encounter={encounter} dataReview={result.em?.data_review ?? result.data_review} clinicalReview={result.em?.clinical_review ?? result.clinical_review} />
               <DiagnosisSequencingNotice value={result.diagnosis_sequencing} />
               <div className="grid gap-5 lg:grid-cols-2"><CandidateGroup title="ICD-10-CM candidates" candidates={icdCandidates} primaryCode={primaryDiagnosis} primaryLabel={primaryLabel} onCopy={copyText} /><CandidateGroup title="CPT and E/M candidates" candidates={cptCandidates} onCopy={copyText} /></div>
               {result.withheld_without_evidence > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result.withheld_without_evidence} candidate{result.withheld_without_evidence === 1 ? " was" : "s were"} withheld because verified evidence was unavailable.</div>}

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, factKeys, fieldAuthor, finishHeaderRequest, headerDraft, headerProposals, ownsHeaderRequest, headerReviewRequest, headerSourceKey, missingHeaderBaseline, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, headerDecisionIds, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes,  } from "./billingHeader.js";
@@ -400,4 +401,62 @@ test("sequencing copy distinguishes pending, accepted and rejected review with o
   assert.equal(diagnosisOrderReviewText(view), "Awaiting separate coder acceptance.");
   view.signoff = {...signed, expectedSource: {...signed.expectedSource, noteVersion: "other"}};
   assert.equal(diagnosisOrderReviewText(view), "Awaiting separate coder acceptance.");
+});
+
+test("optional original data ledger is source-bound, exported and excluded from human drafts", () => {
+  const {encounter, view} = fixture();
+  const ledger = JSON.parse(readFileSync(new URL("../../tests/fixtures/mdm_data_review.json", import.meta.url))).display;
+  for (const event of ledger.events) event.evidence_spans = [{source: "signed_note", text: "café", loc: {start: 2, end: 7}}];
+  view.header.dataReview = ledger;
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.match(exportBillingHeader(view, encounter), /ORIGINAL PIPELINE DATA REVIEW/);
+  assert.match(exportBillingHeader(view, encounter), /characters 2–7: café/);
+  assert.equal(Object.hasOwn(headerDraft(view), "dataReview"), false);
+  assert.throws(() => exportBillingHeader(view), /invalid-header-response/);
+  view.header.suggestions = [];
+  view.header.dataReview = {...structuredClone(ledger), category_one_units: 0, events: [structuredClone(ledger.events[2])]};
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.match(exportBillingHeader(view, encounter), /held: Unclassified data/);
+  assert.doesNotMatch(exportBillingHeader(view, encounter), /EM 99213/);
+  view.header.dataReview = ledger;
+  ledger.events[0].evidence_spans[0].text = "invented";
+  assert.throws(() => readBillingHeader(view, encounter));
+  assert.throws(() => exportBillingHeader(view, encounter));
+});
+
+test("clinical ledger remains original, requires source at export and cannot enter a draft", () => {
+  const {encounter, view} = fixture();
+  const ledger = JSON.parse(readFileSync(new URL("../../tests/fixtures/mdm_clinical_review.json", import.meta.url))).display;
+  for (const name of ["problems", "risk"]) for (const event of ledger[name].events) {
+    event.evidence_spans = [{source: "signed_note", text: "café", loc: {start: 2, end: 7}}];
+  }
+  view.header.clinicalReview = ledger;
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.match(exportBillingHeader(view, encounter), /ORIGINAL PIPELINE CLINICAL REVIEW/);
+  assert.equal(Object.hasOwn(headerDraft(view), "clinicalReview"), false);
+  assert.throws(() => exportBillingHeader(view), /invalid-header-response/);
+  ledger.risk.events[0].evidence_spans[0].text = "invented";
+  assert.throws(() => readBillingHeader(view, encounter), /invalid-clinical-review/);
+  assert.throws(() => exportBillingHeader(view, encounter), /invalid-clinical-review/);
+  for (const value of [null, undefined, {}]) {
+    view.header.clinicalReview = value;
+    assert.throws(() => readBillingHeader(view, encounter));
+  }
+});
+
+test("expanded reader retains all 320 exact references and rejects overflow", () => {
+  const {encounter, view} = fixture();
+  const lines = Array.from({length: 320}, (_, i) => `Synthetic source assertion ${i}.`);
+  encounter.signedNote = lines.join("\n");
+  let start = 0;
+  view.header.evidence = lines.map((line, i) => {
+    const row = {...view.header.evidence[0], id: `e${i}`, text: line, start, end: start + line.length};
+    start = row.end + 1; return row;
+  });
+  view.header.suggestions[0].evidenceIds = view.header.evidence.map((e) => e.id);
+  assert.equal(readBillingHeader(view, encounter), view);
+  assert.equal(headerDraft(view).codes[0].evidenceIds.length, 320);
+  assert.match(exportBillingHeader(view), /Synthetic source assertion 319\./);
+  view.header.evidence.push({...view.header.evidence[0], id: "overflow"});
+  assert.throws(() => readBillingHeader(view, encounter));
 });

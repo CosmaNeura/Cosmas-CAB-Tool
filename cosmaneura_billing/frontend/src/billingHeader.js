@@ -1,4 +1,6 @@
 // Validate the whole header against the currently displayed source before render.
+import { dataReviewText, readDataReview } from "./mdmDataReview.js";
+import { clinicalReviewText, readClinicalReview } from "./mdmClinicalReview.js";
 import { validMapping, validMappingOutcomes, mappingReviewText } from "./diagnosisMapping.js";
 export const diagnosisOrderDecisionId = "@diagnosis-order";
 export const factKeys = ["visit_type", "patient_type", "modality", "patient_location",
@@ -16,6 +18,8 @@ const actorValid = (actor) => actor && uuid(actor.id) && text(actor.name, 100)
   && ["provider", "coder", "admin"].includes(actor.role);
 const timeValid = (v) => text(v, 40) && Number.isFinite(Date.parse(v));
 
+const maxEvidence = 320; // Preserve all original data/clinical source references.
+
 export function readBillingHeader(view, encounter) {
   if (view === null) return null;
   const h = view?.header, pin = encounter.headerSource;
@@ -28,7 +32,7 @@ export function readBillingHeader(view, encounter) {
     docs.set(doc.id, {kind: doc.kind, version: doc.version,
       text: doc.kind === "transcript" ? encounter.transcript : encounter.intake});
   }
-  require(list(h.evidence, 80));
+  require(list(h.evidence, maxEvidence));
   const evidence = new Set();
   for (const e of h.evidence) {
     const doc = docs.get(e.sourceId);
@@ -39,7 +43,7 @@ export function readBillingHeader(view, encounter) {
       && Array.from(doc.text).slice(e.start, e.end).join("") === e.text);
     evidence.add(e.id);
   }
-  const refs = (v, min = 1) => list(v, 80) && v.length >= min
+  const refs = (v, min = 1) => list(v, maxEvidence) && v.length >= min
     && new Set(v).size === v.length && v.every((r) => evidence.has(r));
   require(list(h.facts, 9) && h.facts.length === factKeys.length);
   const keys = new Set();
@@ -61,6 +65,8 @@ export function readBillingHeader(view, encounter) {
     && (!Object.hasOwn(f, "evidenceIds") || refs(f.evidenceIds)))
     && h.policy?.status === "not_verified" && text(h.policy.message, 700)
     && text(h.generation?.inferenceMode, 80) && uuid(h.generation?.runId));
+  if (Object.hasOwn(h, "dataReview")) { require(h.dataReview != null); readDataReview(h.dataReview, encounter); }
+  if (Object.hasOwn(h, "clinicalReview")) { require(h.clinicalReview != null); readClinicalReview(h.clinicalReview, encounter); }
   require(Number.isInteger(view.revisionNumber) && view.revisionNumber >= 0 && view.revisionNumber <= 100);
   if (view.revisionNumber === 0) require(view.revision === null);
   else {
@@ -241,8 +247,9 @@ export function headerReviewRequest(view, feedback, decisions, acknowledged, bas
 }
 
 export function exportBillingHeader(view, encounter) {
-  // A human sequence must export against the same verified source as the view.
-  if (proposedDiagnosisOrder(view).length
+  // Original ledgers and human decisions require the same source validation as render.
+  if (Object.hasOwn(view.header, "dataReview") || Object.hasOwn(view.header, "clinicalReview")
+    || proposedDiagnosisOrder(view).length
     || headerDraft(view).codes.some((row) => Object.hasOwn(row, "mapping"))
     || view.signoff?.humanProposalDecisions?.some((d) => d.id === diagnosisOrderDecisionId)) require(encounter != null);
   if (encounter) readBillingHeader(view, encounter);
@@ -260,6 +267,8 @@ export function exportBillingHeader(view, encounter) {
   }
   rows.push("", "ORIGINAL PIPELINE SUGGESTIONS — retain original evidence");
   for (const code of h.suggestions) rows.push(`${code.kind} ${code.code}: ${code.label} [${code.evidenceIds.join(", ")}]`, `  ${code.basis}`);
+  if (h.dataReview) rows.push("", "ORIGINAL PIPELINE DATA REVIEW — unchanged by header edits", dataReviewText(h.dataReview));
+  if (h.clinicalReview) rows.push("", "ORIGINAL PIPELINE CLINICAL REVIEW — unchanged by header edits", clinicalReviewText(h.clinicalReview, encounter));
   if (view.revision) {
     rows.push("", "CURRENT CODE PROPOSALS — human edits are not engine validation");
     for (const code of draft.codes) {
