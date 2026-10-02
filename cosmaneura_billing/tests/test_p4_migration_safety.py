@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from cosmaneura_billing.migrations import migration_body
+from postgres_test_support import isolated_database
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,7 +244,7 @@ def test_live_postgres_upgrade_preserves_p3_row_and_enforces_p4_contract():
     message_release_id = uuid4()
     review_release_id = uuid4()
 
-    with psycopg.connect(TEST_DSN, autocommit=True) as conn:
+    with isolated_database(TEST_DSN, "p4") as dsn, psycopg.connect(dsn, autocommit=True) as conn:
         if "test" not in (conn.info.dbname or "").casefold():
             pytest.fail(
                 "COSMANEURA_TEST_DATABASE_URL must name a disposable test database"
@@ -268,8 +269,8 @@ def test_live_postgres_upgrade_preserves_p3_row_and_enforces_p4_contract():
                 prepare=False,
             )
 
-        # Exercise both directions without changing the schema that other test
-        # modules observe: PostgreSQL DDL and all fixture rows roll back together.
+        # Exercise both directions on the historical 002/003 boundary in a private
+        # database. Later shared-schema foreign keys must not be dropped or bypassed.
         conn.execute("BEGIN")
         try:
             conn.execute(migration_body(DOWN_SQL), prepare=False)

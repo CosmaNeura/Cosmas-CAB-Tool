@@ -32,17 +32,11 @@ TABLES = ["chase_communication_" + name for name in ("policy_decisions", "consen
 def schema(foundation_schema):
     if not DSN:
         return
-    with psycopg.connect(DSN, autocommit=True) as db:
-        if db.execute("SELECT to_regprocedure('cosmaneura_record_accepted_delivery_attempt(uuid)')").fetchone()[0] is None:
-            db.execute((Path(__file__).resolve().parents[1] / "migrations/005_accepted_delivery_attempt.up.sql").read_text(), prepare=False)
-        if db.execute("SELECT to_regclass('chase_communication_provider_events')").fetchone()[0] is None:
-            db.execute((Path(__file__).resolve().parents[1] / "migrations/012_chase_communications_dispatch.up.sql").read_text(), prepare=False)
-        if db.execute("SELECT to_regclass('chase_communication_cancellations')").fetchone()[0] is None:
-            db.execute((Path(__file__).resolve().parents[1] / "migrations/015_chase_communications_cancellation.up.sql").read_text(), prepare=False)
-        if db.execute("SELECT to_regclass('chase_communication_unknown_resolutions')").fetchone()[0] is None:
-            db.execute((Path(__file__).resolve().parents[1] / "migrations/016_chase_communications_unknown_resolution.up.sql").read_text(), prepare=False)
-        if db.execute("SELECT to_regclass('chase_communication_event_reviews')").fetchone()[0] is None:
-            db.execute((Path(__file__).resolve().parents[1] / "migrations/017_chase_communications_event_review.up.sql").read_text(), prepare=False)
+    with psycopg.connect(DSN) as db:
+        # The foundation fixture installs the complete canonical SMS dependency set.
+        for table in TABLES + ["chase_communication_review_sources",
+                               "chase_communication_unassigned_sources"]:
+            assert db.execute("SELECT to_regclass(%s)", (table,)).fetchone()[0], table
 
 
 class FakeVendor:
@@ -72,7 +66,7 @@ def lane():
         for suffix in ("policy_decisions", "consent_decisions", "provider_events", "dispatch_checks"):
             db.execute(sql.SQL("GRANT USAGE,SELECT ON SEQUENCE {} TO {}").format(
                 sql.Identifier("chase_communication_" + suffix + "_sequence_no_seq"), sql.Identifier(lane.role)))
-        db.execute(sql.SQL("GRANT SELECT ON chase_attempts,chase_communication_review_sources TO {}").format(sql.Identifier(lane.role)))
+        db.execute(sql.SQL("GRANT SELECT ON chase_attempts,chase_communication_review_sources,chase_communication_unassigned_sources TO {}").format(sql.Identifier(lane.role)))
         db.execute(sql.SQL("GRANT UPDATE(state) ON chase_items TO {}").format(sql.Identifier(lane.role)))
         db.execute(sql.SQL("GRANT EXECUTE ON FUNCTION cosmaneura_chase_admin_allowed(uuid,uuid) TO {}").format(sql.Identifier(lane.role)))
     lane.snapshot = seed_case(lane, observed=datetime.now(timezone.utc).isoformat())
@@ -447,7 +441,7 @@ def test_actual_worker_login_dispatches_and_cannot_authorize(lane):
         ):
             db.execute(sql.SQL(statement + " TO {}").format(sql.Identifier(worker)))
     ready(lane)
-    worker_store = PostgresCommunicationsStore(make_conninfo(DSN, user=worker),
+    worker_store = PostgresCommunicationsStore(make_conninfo(DSN, user=worker, password=settings.chase_worker_database_password),
         practice_id=lane.practice, purpose_consent_enabled=True)
     worker_service = CommunicationsDispatcher(worker_store, policy=lane.policy,
         sender=lane.sender, roster=DirectContractList(refs=[], version="test"), adapter=lane.adapter)
@@ -457,7 +451,7 @@ def test_actual_worker_login_dispatches_and_cannot_authorize(lane):
     assert lane.service.case_view(lane.case)["suppression"]["sms"] is True
     fails("communications_store_unavailable", lambda: worker_service.approve_policy(
         decision_id=str(uuid4()), actor_tenant_id=lane.tenant, actor_id=lane.actor))
-    with psycopg.connect(make_conninfo(DSN, user=worker)) as db:
+    with psycopg.connect(make_conninfo(DSN, user=worker, password=settings.chase_worker_database_password)) as db:
         assert db.execute("SELECT has_table_privilege(current_user,'encounters','SELECT')").fetchone()[0] is False
         assert db.execute("SELECT has_table_privilege(current_user,'chase_communication_authorizations','INSERT')").fetchone()[0] is False
 

@@ -34,7 +34,7 @@ def complete_schema(foundation_schema):
     if not DSN:
         return
     with psycopg.connect(DSN) as db:
-        # The locked migration runner must have installed the final schema first.
+        # The shared fixture must have installed the complete canonical SMS schema.
         for table in READ_TABLES + ["chase_communication_unassigned_sources"]:
             assert db.execute("SELECT to_regclass(%s)", (table,)).fetchone()[0], table
 

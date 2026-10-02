@@ -28,8 +28,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+PRACTICES = {}
+
+
 def _store(practice_id: str = "practice-a") -> PostgresChaseStore:
-    return PostgresChaseStore(TEST_DSN, practice_id=practice_id)
+    return PostgresChaseStore(TEST_DSN, practice_id=PRACTICES[practice_id])
 
 
 def _item(patient_ref: str = "SYNTHETIC-1", chase_id: str = "chase-pg-1") -> ChaseItem:
@@ -73,13 +76,17 @@ def _schema():
 
 
 @pytest.fixture(autouse=True)
-def _empty_tables():
+def _isolated_practices(monkeypatch):
     if not TEST_DSN:
         yield
         return
+    # Keep prior modules' append-only evidence intact; each test owns new keys.
+    practices = {name: name + "-" + uuid4().hex
+                 for name in ("practice-a", "practice-b", "api-restart")}
+    for alias, practice_id in practices.items():
+        monkeypatch.setitem(PRACTICES, alias, practice_id)
     with psycopg.connect(TEST_DSN, autocommit=True) as conn:
-        conn.execute("TRUNCATE chase_items CASCADE")
-        for practice_id in ("practice-a", "practice-b", "api-restart"):
+        for practice_id in practices.values():
             conn.execute(
                 "SELECT set_config('cosmaneura.practice_id', %s, false)",
                 (practice_id,),
@@ -211,7 +218,7 @@ def test_staff_action_receipt_is_exactly_once_and_audit_id_is_random():
     )
 
     assert replayed is not None and replayed.touches == 1
-    assert checked_transactions == ["practice-a"]
+    assert checked_transactions == [PRACTICES["practice-a"]]
     UUID(store.audit_resource_id("chase-pg-1"))
     with pytest.raises(ChaseActionConflict):
         store.mutate(
@@ -242,7 +249,7 @@ def test_api_restart_reads_the_same_postgres_worklist(monkeypatch, tmp_path):
     monkeypatch.setenv("COSMANEURA_ENV", "test")
     monkeypatch.setenv("COSMANEURA_CHASE_STORE", "postgres")
     monkeypatch.setenv("COSMANEURA_CHASE_DATABASE_URL", TEST_DSN)
-    monkeypatch.setenv("COSMANEURA_PRACTICE_ID", "api-restart")
+    monkeypatch.setenv("COSMANEURA_PRACTICE_ID", PRACTICES["api-restart"])
     api.get_chase_context.cache_clear()
 
     settings = api.get_settings()
