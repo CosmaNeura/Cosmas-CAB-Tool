@@ -86,6 +86,7 @@ export default function App() {
   const [encountersLoaded, setEncountersLoaded] = useState(false);
   const [selected, setSelected] = useState(null);
   const [encounterStatuses, setEncounterStatuses] = useState({});
+  const [coderReviewLocked, setCoderReviewLocked] = useState(false);
 
   const updateEncounterStatus = useCallback((encounterId, patch) => {
     setEncounterStatuses((current) => ({
@@ -191,7 +192,7 @@ export default function App() {
             aria-label="Workspace"
           >
             {views.includes("provider") && (
-              <button type="button" aria-current={view === "provider" ? "page" : undefined} className={tab(view === "provider")} onClick={() => setView("provider")}>
+              <button type="button" disabled={coderReviewLocked && view === "coder"} aria-current={view === "provider" ? "page" : undefined} className={`${tab(view === "provider")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => setView("provider")}>
                 <Stethoscope size={15} />Provider
               </button>
             )}
@@ -201,25 +202,12 @@ export default function App() {
               </button>
             )}
             {views.includes("chase") && (
-              <button type="button" aria-current={view === "chase" ? "page" : undefined} className={tab(view === "chase")} onClick={() => setView("chase")}>
+              <button type="button" disabled={coderReviewLocked && view === "coder"} aria-current={view === "chase" ? "page" : undefined} className={`${tab(view === "chase")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => setView("chase")}>
                 <CreditCard size={15} />Card chase
               </button>
             )}
           </nav>
-          {view === "coder" && encounters.length > 0 && (
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              Encounter
-              <select value={selected || ""} onChange={(e) => setSelected(e.target.value)}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm shadow-sm">
-                <option value="">Choose an encounter</option>
-                {encounters.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.id}{e.submittedEm ? ` · submitted ${e.submittedEm}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          {coderReviewLocked && view === "coder" && <p role="status" className="text-xs font-medium text-amber-800">Resolve this frozen coder review before leaving. Unknown outcomes must use the exact retry.</p>}
         </div>
 
         {health === null ? (
@@ -253,13 +241,16 @@ export default function App() {
             onSelect={setSelected}
             onStatusChange={updateEncounterStatus}
           />
-        ) : !selected ? (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center">
-            <p className="font-medium text-slate-900">Choose an encounter for coder review</p>
-            <p className="mt-1 text-sm text-slate-600">No recommendation is accepted until a coder makes an explicit decision.</p>
-          </div>
         ) : (
-          <CoderReview encounterId={selected} live={Boolean(health)} />
+          <CoderReview
+            encounterId={selected}
+            encounters={encounters}
+            live={Boolean(health)}
+            statuses={encounterStatuses}
+            onSelect={setSelected}
+            onStatusChange={updateEncounterStatus}
+            onNavigationLockChange={setCoderReviewLocked}
+          />
         )}
 
         <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
