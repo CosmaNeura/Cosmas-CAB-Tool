@@ -10,15 +10,11 @@ Run: python prove_no_upcode.py
 from cosmaneura_billing.agents import ComplianceGuardrailAgent
 from cosmaneura_billing.consensus_fuzz import run_consensus_fuzz
 from cosmaneura_billing.guardrail_fuzz import run_fuzz
+from cosmaneura_billing.corpus.mdm_cases import qualified_case
 from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 
 # Documentation that supports at most a moderate (99214) visit.
-facts_supporting_99214 = {
-    "problems": [{"name": "Hematochezia", "status": "new", "uncertain_prognosis": True,
-                  "quote": "blood per rectum"}],
-    "data_reviewed": [{"category": "review_external_labs", "item": "CBC"}],
-    "risk": {"level": "moderate", "quote": "refer for colonoscopy"},
-}
+facts_supporting_99214, qualified_evidence, _ = qualified_case(4)
 
 # --------------------------------------------------------------------------- #
 # 1. The guardrail downgrades an over-level.
@@ -27,7 +23,7 @@ facts_supporting_99214 = {
 inflated = CodeSuggestion(
     kind=CodeKind.EM, code="99215", label="Office visit, high MDM",
     disposition=Disposition.CAPTURED,
-    evidence=[Evidence("signed_note", "refer for colonoscopy", "risk")],
+    evidence=qualified_evidence,
 )
 
 result, audit = ComplianceGuardrailAgent().run(facts_supporting_99214, [inflated], new_patient=False)
@@ -38,6 +34,7 @@ print("attempted code :", "99215")
 print("final code     :", final.code)
 print("audit          :", audit[0])
 assert final.code == "99214", "GUARDRAIL FAILED: an over-level survived!"
+assert final.disposition == Disposition.CAPTURED, "Positive source-qualified path became a vacuous hold"
 assert "DOWNGRADE" in audit[0]
 print("\nPASS — the guardrail downgraded the over-level to the supported ceiling.")
 
@@ -82,5 +79,5 @@ print("        single-engine code is never captured · C4 a vetoed code stays")
 print("        rejected · C5 the second engine never introduces an E/M code ·")
 print("        plus every guardrail invariant above, on the merged output)")
 
-print("\nThe pipeline is structurally incapable of billing above documented MDM,")
-print("with one extraction engine or two.")
+print("\nGuardrail and consensus invariants hold against the supplied fact ceiling.")
+print("This checks monotonicity, not clinical accuracy or source-fact validity.")

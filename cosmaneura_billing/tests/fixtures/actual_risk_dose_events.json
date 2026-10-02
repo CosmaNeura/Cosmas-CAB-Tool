@@ -1,0 +1,37 @@
+{
+  "sourceInputsSha256": "24ac0d264a76651fc92a98704e67f52e2aaab4de6d61665b379c9ced28ae7ae8",
+  "sourceObjectPath": "cases[index=5|9].extractions[0].mdm_risk_events[0]",
+  "canonicalHashDefinition": "UTF-8 json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)",
+  "cases": [
+    {
+      "caseId": "SYN-CAB-20260930-05",
+      "sourceContextObjectSha256": "d5b285f31c38f1dc89c2a6099ec43d7c3652d8bbc41fb096938f25b708e5b174",
+      "signedNoteUtf8Sha256": "810556d06ca3c2f0de499a09a940a068447654289047d34739785292680d75c0",
+      "factsExtractionObjectSha256": "d3a5c5ea477c09539c46adf810fb2a03a9a6c9c3214b7fb16f2e217d9ad4fd28",
+      "riskEventSha256": "cb66c04acb3433e7e689e3a6b916d4221b5ac0dd55e1821ff26c085f9325cbb7",
+      "riskEvent": {
+        "action": "medication_management",
+        "subject": "prednisone 40 mg by mouth daily",
+        "source": "signed_note",
+        "action_quote": "Prescribe prednisone 40 mg by mouth daily for five days; counsel about sleep disturbance, mood effects and possible transient glucose elevation.",
+        "decision_quote": "Prescribe prednisone 40 mg by mouth daily for five days; counsel about sleep disturbance, mood effects and possible transient glucose elevation.",
+        "qualification_quote": ""
+      }
+    },
+    {
+      "caseId": "SYN-CAB-20260930-09",
+      "sourceContextObjectSha256": "e4fab5bd83d8bcc5cc3acc189f534d858c8c52ca6fd272d8985e94d063a3ee75",
+      "signedNoteUtf8Sha256": "ee5fac5077b3d11cd90d5e56e2c38c65c57291293018539ec330b7e07907a347",
+      "factsExtractionObjectSha256": "6412ce4a20496469399650280c15e8573d1ceaa8a65dd43bc841eefafbd80490",
+      "riskEventSha256": "1c494cc77d4e4456492994f9068fa4da43381eb81caeef1fca24391dca86650d",
+      "riskEvent": {
+        "action": "medication_management",
+        "subject": "levothyroxine 75 micrograms daily",
+        "source": "signed_note",
+        "action_quote": "After reviewing adherence and administration, continue levothyroxine 75 micrograms daily rather than increasing the dose today. Take it consistently with water on an empty stomach and separate iron by at least four hours.",
+        "decision_quote": "After reviewing adherence and administration, continue levothyroxine 75 micrograms daily rather than increasing the dose today.",
+        "qualification_quote": "A decision to continue the prescription is documented; no dose increase, high-risk intervention or intensive toxicity-monitoring program is claimed."
+      }
+    }
+  ]
+}

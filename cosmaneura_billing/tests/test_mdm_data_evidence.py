@@ -1,9 +1,19 @@
 """Data levels require distinct completed work, not extracted category labels."""
+from copy import deepcopy
+from dataclasses import asdict
+import json
 
 import pytest
 
+from cosmaneura_billing.agents.coding import CodingAgent, _facts_to_em
+from cosmaneura_billing.agents.compliance_guardrail import ComplianceGuardrailAgent
+from cosmaneura_billing.agents.consensus import merge_facts
+from cosmaneura_billing.knowledge.icd10_ccsr import ICD10CCSR
+from cosmaneura_billing.llm import MockLLM
 from cosmaneura_billing.mdm_data import qualify_mdm_data
-from cosmaneura_billing.schemas import VisitBundle
+from cosmaneura_billing.orchestrator import BillingOrchestrator
+from cosmaneura_billing.schemas import CodeKind, VisitBundle
+from cosmaneura_billing.settings import Settings
 
 
 def bundle(note, **changes):
@@ -337,3 +347,70 @@ def test_clipped_historian_qualification_cannot_remove_denied_need():
     assert result["category_one_units"] == 0
     assert result["events"][0]["status"] == "held"
     assert any(a["quote"].startswith("No confirmatory") for a in result["events"][0]["evidence"])
+
+
+def test_held_event_evidence_cannot_authorize_capture_of_an_unrelated_code():
+    quote = "I reviewed my medication list today."
+    source = bundle(quote)
+    ledger = qualify_mdm_data([event("TSH", "test_result_review", quote)], source)
+    assert ledger.events[0].evidence
+    assert not ledger.evidence()
+    facts = {"problems": [{"name": "invented problem", "status": "new"}], "risk": {"level": "moderate"}}
+    from cosmaneura_billing.schemas import CodeSuggestion, Disposition
+    code = CodeSuggestion(CodeKind.EM, "99214", "Office visit", evidence=ledger.evidence(), data_review=ledger.public)
+    guarded, _ = ComplianceGuardrailAgent().run(facts, [code], new_patient=False)
+    assert guarded[0].disposition == Disposition.REVIEW
+
+
+def test_even_counted_data_alone_cannot_authorize_unsubstantiated_problem_and_risk():
+    quote = "I ordered CBC, TSH and A1c today."
+    raw = [event(t, "test_order", quote) for t in ("CBC", "TSH", "A1c")]
+    ledger = qualify_mdm_data(raw, bundle(quote))
+    facts = {"problems": [{"name": "invented problem", "status": "new"}], "risk": {"level": "moderate"},
+             "mdm_data_events": raw, "_qualified_mdm_data": ledger}
+    from cosmaneura_billing.schemas import CodeSuggestion, Disposition
+    code = CodeSuggestion(CodeKind.EM, "99214", "Office visit", evidence=ledger.evidence(), data_review=ledger.public)
+    guarded, _ = ComplianceGuardrailAgent().run(facts, [code], new_patient=False)
+    assert guarded[0].disposition == Disposition.REVIEW
+
+
+def test_legacy_categories_and_raw_json_counts_cannot_set_data_level():
+    raw = {"problems": [{"name": "rash", "status": "new"}], "risk": {"level": "straightforward"},
+           "data_reviewed": [{"category": str(i), "item": "CBC"} for i in range(10)],
+           "_qualified_mdm_data": {"level": "high"}, "data_review": {"level": "high"}}
+    assert _facts_to_em(raw, new_patient=False).elements["data"] == "straightforward"
+
+
+class FactsLLM(MockLLM):
+    def __init__(self, events):
+        self.events = events
+
+    def complete_json(self, **kwargs):
+        text = "Asthma is in moderate exacerbation; I evaluated it and adjusted treatment."
+        return {"chief_complaint": "asthma", "mdm_problem_events": [{"name": "asthma", "source": "signed_note",
+                    "identity_quote": text, "addressed_quote": text, "status_quote": text}], "mdm_risk_events": [],
+                "mdm_data_events": deepcopy(self.events)} if "extract_clinical_facts" in kwargs["user"] else {"diagnoses": []}
+
+
+def test_full_pipeline_uses_same_immutable_ledger_and_retains_exact_event_evidence():
+    quote = "I ordered CBC, TSH and A1c today."
+    raw = [event(t, "test_order", quote) for t in ("CBC", "TSH", "A1c")]
+    source = bundle("Asthma is in moderate exacerbation; I evaluated it and adjusted treatment. " + quote)
+    kb = ICD10CCSR()
+    facts, suggestions = CodingAgent(FactsLLM(raw), kb).run(source)
+    assert _facts_to_em(facts, new_patient=False).code == "99214"
+    merged, _ = merge_facts(facts, {"mdm_data_events": [], "_qualified_mdm_data": {"level": "high"}}, new_patient=False)
+    assert _facts_to_em(merged, new_patient=False).code == "99214"
+    tampered = {**facts, "mdm_data_events": raw + [raw[0]]}
+    assert _facts_to_em(tampered, new_patient=False).elements["data"] == "straightforward"
+    suggestions[0].code = "99215"
+    guarded, _ = ComplianceGuardrailAgent().run(facts, suggestions, new_patient=False)
+    assert guarded[0].code == "99214"
+    settings = Settings(preferences_enabled=False, azure_openai_enabled=False,
+                        azure_language_enabled=False, azure_language_shadow_enabled=False)
+    result = BillingOrchestrator(llm=FactsLLM(raw), icd10=kb, settings=settings).process(source)
+    proposed = next(s for s in result.provider_card.captured_codes + result.provider_card.declined_codes if s.kind == CodeKind.EM)
+    assert proposed.code == "99214" and proposed.data_review["level"] == "moderate"
+    assert {e.rationale for e in proposed.evidence if e.rationale.startswith("MDM data:")} == {"MDM data: mdm-data-1", "MDM data: mdm-data-2", "MDM data: mdm-data-3"}
+    assert all(e.quote in source.signed_note for e in proposed.evidence)
+    assert "_qualified_mdm_data" not in json.dumps(asdict(result))

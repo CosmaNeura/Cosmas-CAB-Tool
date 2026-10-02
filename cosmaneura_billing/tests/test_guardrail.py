@@ -1,21 +1,17 @@
 """The core compliance invariant: the guardrail can keep, downgrade, or remove —
 never raise a level, add a code, or capture a code without evidence."""
 from cosmaneura_billing.agents import ComplianceGuardrailAgent
+from cosmaneura_billing.corpus.mdm_cases import qualified_case
 from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 
-FACTS_99214 = {
-    "problems": [{"name": "Hematochezia", "status": "new", "uncertain_prognosis": True,
-                  "quote": "blood per rectum"}],
-    "data_reviewed": [{"category": "review_external_labs", "item": "CBC"}],
-    "risk": {"level": "moderate", "quote": "refer for colonoscopy"},
-}
+FACTS_99214, QUALIFIED_EVIDENCE, _ = qualified_case(4)
 
 
 def _em(code, evidence=True, disposition=Disposition.CAPTURED):
     return CodeSuggestion(
         kind=CodeKind.EM, code=code, label=f"Office visit {code}",
         disposition=disposition,
-        evidence=[Evidence("signed_note", "refer for colonoscopy", "risk")] if evidence else [],
+        evidence=list(QUALIFIED_EVIDENCE) if evidence else [],
     )
 
 

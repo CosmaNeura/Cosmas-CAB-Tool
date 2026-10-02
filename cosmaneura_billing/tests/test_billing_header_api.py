@@ -24,14 +24,14 @@ def client(tmp_path):
         yield client
 
 
-def intent(client, **extra):
-    detail = client.post("/api/encounters/detail", json={"encounterId": ENCOUNTER})
+def intent(client, *, encounter_id=ENCOUNTER, **extra):
+    detail = client.post("/api/encounters/detail", json={"encounterId": encounter_id})
     assert detail.status_code == 200
-    return {"encounterId": ENCOUNTER, "expectedSource": detail.json()["headerSource"], **extra}
+    return {"encounterId": encounter_id, "expectedSource": detail.json()["headerSource"], **extra}
 
 
-def generate(client, payload=None):
-    response = client.post(BASE + "/generate", json=payload or intent(client, operationId=str(uuid4())))
+def generate(client, payload=None, *, encounter_id=ENCOUNTER):
+    response = client.post(BASE + "/generate", json=payload or intent(client, encounter_id=encounter_id, operationId=str(uuid4())))
     assert response.status_code == 200, response.text
     return response.json()["view"]
 
@@ -39,7 +39,7 @@ def generate(client, payload=None):
 def edit_intent(view, **extra):
     draft = create_draft(view["header"], view["revision"])
     draft["facts"]["patient_location"] = "Synthetic patient confirmed home location"
-    return {"encounterId": ENCOUNTER, "expectedSource": view["header"]["expectedSource"],
+    return {"encounterId": view["header"]["expectedSource"]["encounterId"], "expectedSource": view["header"]["expectedSource"],
             "headerId": view["header"]["headerId"], "expectedRevision": view["revisionNumber"],
             "operationId": str(uuid4()), "draft": draft, "reason": "Staff review of synthetic visit", **extra}
 
@@ -52,7 +52,10 @@ def test_pipeline_generated_baseline_anchored_and_note_unchanged(client):
     assert view["revision"] is None and view["revisionNumber"] == 0
     assert header["generation"]["inferenceMode"] == "mock"
     assert header["suggestions"] and all(c["evidenceIds"] for c in header["suggestions"])
-    assert any(c["code"] == "99214" for c in header["suggestions"])
+    # The unchanged demo lacks source-qualified clinical complexity. It must
+    # retain its decision explanations without inventing an E/M recommendation.
+    assert not any(c["kind"] == "EM" for c in header["suggestions"])
+    assert any("E/M level is unestablished" in flag["message"] for flag in header["flags"])
     assert not any(c["code"] == "Z80.0" for c in header["suggestions"])
     assert header["expectedSource"] == source_snapshot(source)
     assert source.bundle == before
@@ -198,6 +201,10 @@ def test_enabled_header_store_is_rechecked_for_readiness(client, monkeypatch):
 
 
 def test_held_engine_code_is_not_an_editable_generated_proposal(client, monkeypatch):
+    from cosmaneura_billing.corpus.mdm_cases import fixture_llm, qualified_case
+    _, _, source = qualified_case(4)
+    client.app.state.orchestrator.coding.llm = fixture_llm()
+    client.app.state.encounter_store.upsert(source, source="synthetic_fixture")
     from cosmaneura_billing import billing_header_runtime as runtime
     original = runtime.build_billing_tab_view
     def held(*args, **kwargs):
@@ -206,7 +213,7 @@ def test_held_engine_code_is_not_an_editable_generated_proposal(client, monkeypa
         result["em"]["status_reason"] = "Synthetic held output requires review."
         return result
     monkeypatch.setattr(runtime, "build_billing_tab_view", held)
-    header = generate(client)["header"]
+    header = generate(client, encounter_id=source.encounter_id)["header"]
     assert not any(row["kind"] == "EM" for row in header["suggestions"])
     assert not any(row["kind"] == "EM" for row in create_draft(header)["codes"])
     held_flag = next(row for row in header["flags"] if "Synthetic held output requires review." in row["message"])

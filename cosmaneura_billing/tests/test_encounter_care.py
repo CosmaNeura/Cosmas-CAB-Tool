@@ -1,13 +1,15 @@
-"""Direct encounter-care proof; pipeline effects are deferred to C6."""
+"""Current encounter-care proof and its full-pipeline necessity boundary."""
 from copy import deepcopy
 from dataclasses import replace
 
 import pytest
 
 from cosmaneura_billing import encounter_care as care
+from cosmaneura_billing.agents.coding import CodingAgent
+from cosmaneura_billing.agents.compliance_guardrail import ComplianceGuardrailAgent
 from cosmaneura_billing.mdm_data import qualify_mdm_data
 from cosmaneura_billing.mdm_problems import qualify_problems
-from cosmaneura_billing.schemas import VisitBundle
+from cosmaneura_billing.schemas import CodeKind, Disposition, VisitBundle
 
 
 ASSESSMENT = "Assessment is abdominal pain with cause unconfirmed, plus a request for preconception counseling."
@@ -158,3 +160,38 @@ def test_every_component_of_the_private_proof_is_bound(tamper):
         d = facts["_qualified_mdm_data"]
         facts["_qualified_mdm_data"] = replace(d, events=(replace(d.events[0], status="held"),))
     assert not proof.supports(facts, evidence)
+
+
+class Extraction:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def complete_json(self, **kwargs):
+        return deepcopy(self.raw) if "extract_clinical_facts" in kwargs["user"] else {"diagnoses": []}
+
+
+@pytest.mark.parametrize("time", [False, True])
+def test_encounter_work_never_substitutes_for_a_level_pathway(time):
+    bundle, raw = inputs(time=time)
+    facts, suggestions = CodingAgent(Extraction(raw), None).run(bundle)
+    em = next(s for s in suggestions if s.kind == CodeKind.EM)
+    before = em.code
+    output, _ = ComplianceGuardrailAgent().run(facts, suggestions, new_patient=False)
+    assert em in output and em.code == before
+    assert em.necessity_supported
+    assert em.disposition == (Disposition.CAPTURED if time else Disposition.REVIEW)
+    assert not facts["_qualified_problems"].established
+
+
+def test_raw_json_cannot_claim_private_care_and_lost_evidence_removes_explanation():
+    bundle, raw = inputs(time=True)
+    facts, suggestions = CodingAgent(Extraction(raw), None).run(bundle)
+    em = next(s for s in suggestions if s.kind == CodeKind.EM)
+    guard = ComplianceGuardrailAgent()
+    guard.run(facts, suggestions, new_patient=False)
+    assert em.disposition == Disposition.CAPTURED and care.EXPLANATION in em.rationale
+    em.evidence = [e for e in em.evidence if not e.rationale.startswith("Encounter care ")]
+    facts["_qualified_encounter_care"] = {"established": True}
+    guard.run(facts, suggestions, new_patient=False)
+    assert em.disposition == Disposition.REVIEW and not em.necessity_supported
+    assert care.EXPLANATION not in em.rationale

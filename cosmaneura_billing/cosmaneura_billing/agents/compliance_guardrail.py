@@ -5,7 +5,7 @@ Invariants this agent enforces (and that no other agent may relax):
   * It can move a code from REVIEW -> CAPTURED, or REVIEW/CAPTURED -> REJECTED,
     and it can DOWNGRADE an E/M level. It can NEVER raise a level, add a code,
     or promote a code that lacks a documentation span.
-  * An E/M code may not exceed the MDM ceiling supported by the documentation.
+  * An E/M code may not exceed its supported MDM or total-time pathway.
   * Every captured diagnosis must link to a documented sign/symptom/finding
     (medical necessity).
 
@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import re
 
-from .coding import _facts_to_em
+from .coding import _facts_to_em, qualified_em_support, sanitize_facts
+from ..mdm_problems import QualifiedProblems
+from ..encounter_care import EXPLANATION as ENCOUNTER_CARE_EXPLANATION, QualifiedEncounterCare
 from ..schemas import CodeKind, CodeSuggestion, Disposition
 
 # An office-visit E/M code is exactly five digits and nothing else. Parsing the
@@ -57,8 +59,7 @@ class ComplianceGuardrailAgent:
         new_patient: bool,
     ) -> tuple[list[CodeSuggestion], list[str]]:
         audit: list[str] = []
-        ceiling = _facts_to_em(facts, new_patient=new_patient).code
-        ceiling_lvl = _level(ceiling) or 0
+        facts = sanitize_facts(facts)
 
         for s in suggestions:
             if s.disposition == Disposition.REJECTED:
@@ -84,6 +85,9 @@ class ComplianceGuardrailAgent:
                 continue
 
             if s.kind == CodeKind.EM:
+                calculated = _facts_to_em(facts, new_patient=new_patient, evidence=s.evidence)
+                ceiling = calculated.code
+                ceiling_lvl = _level(ceiling) or 0
                 lvl = _level(s.code)
                 if lvl is None:
                     # Fail closed: we cannot verify an unparseable code against
@@ -98,10 +102,59 @@ class ComplianceGuardrailAgent:
                     audit.append(
                         f"DOWNGRADE {s.code} -> {ceiling}: documentation supports at most {ceiling}.")
                     s.code, s.label = ceiling, f"Office visit capped at supported level ({ceiling})"
-                s.necessity_supported = bool(facts.get("problems"))
+                path_changed = any(n.startswith("em_pathway:") and n != f"em_pathway:{calculated.pathway}"
+                                   or n.startswith("em_mdm_code:") and n != f"em_mdm_code:{calculated.mdm_code}"
+                                   for n in s.notes)
+                if lvl > ceiling_lvl or path_changed:
+                    # The displayed pathway must describe the retained support,
+                    # not the original extraction whose evidence was removed.
+                    s.rationale = (f"{calculated.explanation}. Elements -> {calculated.elements}. "
+                                   "Guardrail recalculated from retained qualified evidence.")
+                    s.notes = [n for n in s.notes if not n.startswith((
+                        "em_pathway:", "em_mdm_code:", "em_total_time_minutes:",
+                        "MDM ceiling for this documentation:", "MDM-only level from qualified elements:"))]
+                    s.notes.extend([f"em_pathway:{calculated.pathway}",
+                                    f"em_mdm_code:{calculated.mdm_code}"])
+                    if s.code == calculated.code:
+                        s.label = calculated.label
+                    if calculated.pathway == "total_time" and calculated.total_time_minutes:
+                        s.notes.append(f"em_total_time_minutes:{calculated.total_time_minutes}")
+                problems = facts.get("_qualified_problems")
+                s.necessity_supported = (isinstance(problems, QualifiedProblems)
+                    and problems.matches(facts["mdm_problem_events"])
+                    and problems.supports_addressed(s.evidence))
+                care = facts.get("_qualified_encounter_care")
+                encounter_care = (isinstance(care, QualifiedEncounterCare)
+                                  and care.supports(facts, s.evidence))
+                # This proof is about the encounter, not an MDM element or a
+                # diagnosis. The independent level/evidence gate below stays.
+                s.rationale = s.rationale.replace(" " + ENCOUNTER_CARE_EXPLANATION, "")
+                if encounter_care and not s.necessity_supported:
+                    s.rationale += " " + ENCOUNTER_CARE_EXPLANATION
+                s.necessity_supported = s.necessity_supported or encounter_care
+                elements, time_supported = qualified_em_support(facts, s.evidence)
+                supported = (calculated.pathway == "total_time" and time_supported) or (
+                    len(elements.intersection(calculated.met_by)) >= 2)
+                if not supported:
+                    # Every authorizing element needs its OWN retained source
+                    # evidence. A true data or problem quote cannot supply an
+                    # absent risk fact; fallback straightforward is not proof.
+                    s.disposition = Disposition.REVIEW
+                    s.label = "Office visit: E/M level unestablished"
+                    s.rationale = (
+                        "E/M level is unestablished: fewer than two qualified MDM elements "
+                        "and no qualified total-time pathway. Held for clinical support review."
+                    )
+                    time_hold = next((n.removeprefix("em_time_held:") for n in s.notes
+                                      if n.startswith("em_time_held:")), "")
+                    if time_hold:
+                        s.rationale += f" Time not used: {time_hold}"
+                    audit.append(f"HOLD    {s.code}: fewer than two qualified MDM elements or no qualified time pathway; review clinical support.")
+                    continue
                 if s.has_evidence and s.necessity_supported:
                     s.disposition = Disposition.CAPTURED
-                    audit.append(f"CAPTURE {s.code}: within MDM ceiling, evidence attached.")
+                    basis = "documented total time" if calculated.pathway == "total_time" else "qualified MDM elements"
+                    audit.append(f"CAPTURE {s.code}: supported by {basis}; current-care evidence attached.")
                 else:
                     s.disposition = Disposition.REVIEW
                     audit.append(f"HOLD    {s.code}: missing evidence or necessity; provider to confirm.")

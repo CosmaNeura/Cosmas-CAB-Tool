@@ -35,7 +35,7 @@ def test_full_pipeline_codes_have_exact_evidence_spans():
     ]
     assert payload["human_verification_required"] is True
     assert payload["enabled"] is False
-    assert {"99214", "K62.5"} <= {row["code"] for row in payload["codes"]}
+    assert {"K62.5", "K59.00", "R19.7"} == {row["code"] for row in payload["codes"]}
     assert len(payload["codes"]) == len(result.provider_card.captured_codes)
 
     sources = {
@@ -55,11 +55,7 @@ def test_full_pipeline_codes_have_exact_evidence_spans():
 
 def test_missing_and_invalid_evidence_fail_closed():
     result = BillingOrchestrator().process(SAMPLE_VISIT)
-    em, primary, constipation, diarrhea = (
-        result.biller_worksheet.em_code,
-        *result.biller_worksheet.diagnoses,
-    )
-    em.evidence = []
+    primary, constipation, diarrhea = result.biller_worksheet.diagnoses
     primary.evidence = [Evidence(
         "signed_note", "INTERMITTENT HEMATOCHEZIA", "normalized-only match",
     )]
@@ -70,7 +66,7 @@ def test_missing_and_invalid_evidence_fail_closed():
 
     _, payload = _build(result)
     assert payload["codes"] == []
-    assert payload["withheld_counts"]["suggested_without_exact_evidence"] == 4
+    assert payload["withheld_counts"]["suggested_without_exact_evidence"] == 3
 
 
 def test_held_and_removed_are_reasoned_noncopyable_decisions():
@@ -81,9 +77,24 @@ def test_held_and_removed_are_reasoned_noncopyable_decisions():
     denied = reviews["Family history of malignant neoplasm of digestive organs"]
     assert denied["status"] == "removed"
     assert denied["action"] == "do_not_use"
-    assert all(row["code"] == "(unresolved)" for row in reviews.values())
+    assert denied["code"] == reviews["Obesity"]["code"] == "(unresolved)"
+    held_em = next(row for row in reviews.values() if row["kind"] == "evaluation_management")
+    assert held_em["code"] == "99212"
+    assert held_em["status"] == "held"
+    assert held_em["action"] == "provider_review_required"
+    assert held_em["description"] == "Office visit: E/M level unestablished"
+    assert "E/M level is unestablished" in held_em["status_reason"]
+    assert "MDM = straightforward" not in held_em["status_reason"]
+    assert "met by" not in held_em["status_reason"]
     assert all(row["status_reason"] and row["copy_text"] is None for row in reviews.values())
-    assert not ({"E66.8", "Z80.0"} & set(payload["copy_all"].split()))
+    assert all(row["selectable"] is False for row in reviews.values())
+    assert not ({"E66.8", "Z80.0", "99212"} & set(payload["copy_all"].split()))
+    assert "99212" not in {row["code"] for row in payload["codes"]}
+    for row in reviews.values():
+        assert row["evidence_spans"]
+        for span in row["evidence_spans"]:
+            source = getattr(SAMPLE_VISIT, span["source"])
+            assert source[span["loc"]["start"]:span["loc"]["end"]] == span["text"]
 
     result.provider_card.declined_codes.append(CodeSuggestion(
         kind=CodeKind.ICD10,
@@ -118,7 +129,7 @@ def test_cross_surface_conflicts_fail_closed():
 
 def test_degraded_result_hides_every_code_decision():
     result = BillingOrchestrator().process(SAMPLE_VISIT)
-    expected = len(result.provider_card.captured_codes + result.provider_card.declined_codes)
+    expected = sum(bool(s.evidence) for s in result.provider_card.captured_codes + result.provider_card.declined_codes)
     result.degraded = Degradation("test_degradation", "Synthetic degraded result.")
     _, payload = _build(result)
     assert payload["status"] == "degraded"

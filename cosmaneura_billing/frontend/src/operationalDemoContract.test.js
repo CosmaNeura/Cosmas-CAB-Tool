@@ -34,7 +34,7 @@ test("suggestion posture, copy mismatch, and missing evidence fail closed", () =
     const codes = visibleSuggestedCodes(payload, documents).map(({ code }) => code);
     if (payload.enabled === true || payload.human_verification_required === false
         || payload.pipeline.stages[0] !== "CodingAgent") assert.deepEqual(codes, []);
-    else assert.ok(!codes.includes("99214"));
+    else assert.ok(!codes.includes(suggestedGolden.payload.codes[0].code));
   }
 });
 

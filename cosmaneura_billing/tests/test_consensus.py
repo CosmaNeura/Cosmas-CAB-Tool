@@ -11,16 +11,12 @@ import pytest
 from cosmaneura_billing.agents import ComplianceGuardrailAgent, ConsensusAgent
 from cosmaneura_billing.agents.coding import _facts_to_em
 from cosmaneura_billing.agents.consensus import merge_facts, merge_suggestions
+from cosmaneura_billing.corpus.mdm_cases import qualified_case
 from cosmaneura_billing.schemas import (
     CodeKind, CodeSuggestion, Disposition, Evidence,
 )
 
-FACTS_99214 = {
-    "problems": [{"name": "Hematochezia", "status": "new", "uncertain_prognosis": True,
-                  "quote": "blood per rectum"}],
-    "data_reviewed": [{"category": "review_external_labs", "item": "CBC"}],
-    "risk": {"level": "moderate", "quote": "refer for colonoscopy"},
-}
+FACTS_99214, _, _ = qualified_case(4)
 
 
 def dx(code, label="dx", disposition=Disposition.REVIEW, engine="", quote="blood per rectum"):

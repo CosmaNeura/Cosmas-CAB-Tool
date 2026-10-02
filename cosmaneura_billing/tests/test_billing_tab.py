@@ -6,8 +6,8 @@ The acceptance criteria are taken verbatim from the requirements synthesis §3 F
   * no code renders without >= 1 exactly located evidence span
   * held/removed always carry a reason
   * dedupe verified (a multi-mapped finding renders once)
-  * golden test on the demo encounter: 99214 surfaced with evidence over the
-    selected 99213; the patient-denied family-history code rejected;
+  * golden test on the demo encounter: unsupported E/M remains held;
+    the patient-denied family-history code rejected;
     documented-but-unaddressed obesity held
   * zero mutation of the clinical note object
 """
@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from cosmaneura_billing.api import app
 from cosmaneura_billing.billing_tab import build_billing_tab_view
 from cosmaneura_billing.corpus.demo import SAMPLE_VISIT
+from cosmaneura_billing.corpus.mdm_cases import fixture_llm, qualified_case
 from cosmaneura_billing.orchestrator import BillingOrchestrator
 from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 
@@ -29,6 +30,16 @@ def _view(bundle=SAMPLE_VISIT):
     return build_billing_tab_view(
         bundle, result, engine_version=ENGINE_VERSION,
         generated_at="2026-08-17T00:00:00Z")
+
+
+def _qualified_result():
+    _, _, source = qualified_case(4)
+    return source, BillingOrchestrator(llm=fixture_llm()).process(source)
+
+
+def _qualified_view():
+    source, result = _qualified_result()
+    return build_billing_tab_view(source, result, engine_version=ENGINE_VERSION)
 
 
 def _all_candidates(view):
@@ -73,7 +84,7 @@ def test_rejected_code_renders_only_with_exact_decision_evidence():
         "text": quote,
         "loc": {"start": start, "end": start + len(quote)},
     }]
-    assert view["withheld_without_evidence"] == 0
+    assert view["withheld_without_evidence"] == 0  # care-only E/M evidence now permits held review
     assert view["withheld_without_reason"] == 0
 
 
@@ -147,7 +158,7 @@ def test_verified_but_unlocatable_evidence_is_not_a_rendering_anchor():
 
 
 def test_em_code_without_an_exact_anchor_is_suppressed():
-    result = BillingOrchestrator().process(SAMPLE_VISIT)
+    source, result = _qualified_result()
     em = next(
         suggestion for suggestion in result.provider_card.captured_codes
         if suggestion.kind == CodeKind.EM
@@ -155,7 +166,7 @@ def test_em_code_without_an_exact_anchor_is_suppressed():
     em.evidence = []
 
     view = build_billing_tab_view(
-        SAMPLE_VISIT, result, engine_version=ENGINE_VERSION,
+        source, result, engine_version=ENGINE_VERSION,
         generated_at="2026-08-17T00:00:00Z",
     )
 
@@ -174,13 +185,19 @@ def test_golden_demo_encounter():
     """The engine's answer on the demo visit, as specced."""
     view = _view()
 
-    # 99214 surfaced over the provider's selected 99213, with evidence
+    # Current-care evidence makes the candidate reviewable, but does not
+    # establish two MDM elements or a time pathway in the unchanged demo note.
     em = view["em"]
-    assert em["suggested_level"] == "99214"
+    assert em["suggested_level"] == "99212"
     assert em["provider_selected_level"] == "99213"
-    assert em["status"] == "suggested"
-    assert em["evidence_spans"]
-    assert em["pathway"] == "mdm_2of3"
+    assert em["status"] == "held"
+    assert em["copy_text"] is None
+    assert any("fewer than two qualified MDM elements" in reason
+               for reason in em["guardrail_actions"])
+    assert em["mdm_facts"] == []
+    assert "E/M level is unestablished" in em["status_reason"]
+    assert "MDM = straightforward" not in em["status_reason"]
+    assert "met by" not in em["status_reason"]
 
     # Patient explicitly denied the family history. The tempting code is
     # visibly removed, with that exact denial anchored as decision evidence.
@@ -278,19 +295,20 @@ def test_coverage_ordering_never_drops_a_documented_code():
 # MDM facts and evidence attribution
 # --------------------------------------------------------------------------- #
 def test_mdm_facts_cover_the_three_elements():
-    facts = {f["element"]: f for f in _view()["em"]["mdm_facts"]}
+    facts = {f["element"]: f for f in _qualified_view()["em"]["mdm_facts"]}
     assert set(facts) == {"problems", "data", "risk"}
-    assert facts["risk"]["finding"] == "moderate"
+    assert facts["problems"]["finding"] == "moderate"
+    assert facts["risk"]["finding"] == "straightforward"
 
 
 def test_mdm_element_evidence_is_not_borrowed_from_another_element():
     """The risk quote must not be presented as evidence for `problems`. Where an
     element has no span of its own, the span is null rather than wrong."""
-    facts = {f["element"]: f for f in _view()["em"]["mdm_facts"]}
+    facts = {f["element"]: f for f in _qualified_view()["em"]["mdm_facts"]}
     risk_span = facts["risk"]["evidence_span"]
     problems_span = facts["problems"]["evidence_span"]
-    assert risk_span is not None
-    assert problems_span is None or problems_span["text"] != risk_span["text"]
+    assert risk_span is None
+    assert problems_span is not None
     # the data element has no evidence span in the engine today; say so honestly
     assert facts["data"]["evidence_span"] is None
 
@@ -307,11 +325,11 @@ def test_filtered_evidence_does_not_shift_mdm_element_attribution():
         evidence=[
             Evidence(
                 "signed_note", "INTERMITTENT HEMATOCHEZIA",
-                "supports the risk element",
+                "MDM risk: mdm-risk-1",
             ),
             Evidence(
                 "signed_note", "intermittent hematochezia",
-                "supports the problem element",
+                "MDM problems: mdm-problem-1",
             ),
         ],
     )
@@ -325,7 +343,7 @@ def test_filtered_evidence_does_not_shift_mdm_element_attribution():
 
 
 def test_guardrail_actions_are_surfaced_for_the_em_code():
-    actions = _view()["em"]["guardrail_actions"]
+    actions = _qualified_view()["em"]["guardrail_actions"]
     assert actions and any("99214" in a for a in actions)
 
 
@@ -364,11 +382,36 @@ def test_copy_all_contains_only_suggested_codes():
     suggested = {c["code"] for c in _all_candidates(view) if c["status"] == "suggested"}
     assert set(copy_all) == suggested
     assert "Z80.0" not in copy_all, "a removed code must never reach the clipboard"
+    assert "99212" not in copy_all, "a held E/M must never reach the clipboard"
 
 
 def test_only_suggested_candidates_have_copy_text():
     for cand in _all_candidates(_view()):
         assert cand["copy_text"] == (cand["code"] if cand["status"] == "suggested" else None)
+
+
+def test_em_summary_copy_controls_follow_captured_held_and_removed_dispositions():
+    """Exercise display state changes on a genuinely qualified pipeline E/M."""
+    for disposition, status in ((Disposition.CAPTURED, "suggested"),
+                                (Disposition.REVIEW, "held"),
+                                (Disposition.REJECTED, "removed")):
+        source, result = _qualified_result()
+        candidate = next(c for c in result.provider_card.captured_codes if c.kind == CodeKind.EM)
+        candidate.disposition = disposition
+        if disposition != Disposition.CAPTURED:
+            candidate.rationale = "Synthetic disposition check for display controls."
+        view = build_billing_tab_view(source, result, engine_version=ENGINE_VERSION)
+        expected_copy = candidate.code if disposition == Disposition.CAPTURED else None
+        assert view["em"]["status"] == status
+        assert view["em"]["copy_text"] == expected_copy
+        assert (candidate.code in view["copy_all"].split()) == (expected_copy is not None)
+        row = next(c for c in view["cpt_candidates"] if c["code"] == candidate.code)
+        assert row["status"] == status
+        assert row["copy_text"] == expected_copy
+        assert row["evidence_spans"]
+        for span in row["evidence_spans"]:
+            document = getattr(source, span["source"])
+            assert document[span["loc"]["start"]:span["loc"]["end"]] == span["text"]
 
 
 # --------------------------------------------------------------------------- #
@@ -400,7 +443,9 @@ def test_billing_tab_endpoint():
     }).json()
     assert body["visit_id"] == "ENC-100237"
     assert body["generated_at"] == "2026-08-17T00:00:00Z"
-    assert body["em"]["suggested_level"] == "99214"
+    assert body["em"]["status"] == "held"
+    assert body["em"]["copy_text"] is None
+    assert body["em"]["mdm_facts"] == []
     assert body["inferenceMode"] == "mock"
     assert body["encounterVersion"] == 1
     assert body["clinical_note_modified"] is False

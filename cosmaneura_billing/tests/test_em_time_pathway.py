@@ -115,16 +115,14 @@ def test_hallucinated_time_quote_cannot_raise_the_level():
 
 
 def test_time_below_the_mdm_level_never_lowers_it():
-    facts = {"chief_complaint": "", "problems": [
-                {"name": "chest pain", "status": "new", "uncertain_prognosis": True,
-                 "quote": ""}],
-             "data_reviewed": [{"category": "labs"}, {"category": "imaging"},
-                               {"category": "historian"}],
-             "risk": {"level": "high", "quote": ""},
-             "total_time_minutes": 11,
-             "total_time_quote": "Total time: 11 minutes."}
-    em = _em(_bundle("Total time: 11 minutes."), facts)
-    assert em.code == "99214"   # moderate/moderate/high -> 2-of-3 at moderate
+    from dataclasses import replace
+    from cosmaneura_billing.corpus.mdm_cases import qualified_case
+    facts, _, source = qualified_case(4)
+    time = "Total physician time on the date of service: 11 minutes."
+    raw = {k: v for k, v in facts.items() if not k.startswith("_")}
+    raw.update(total_time_minutes=11, total_time_quote=time)
+    em = _em(replace(source, signed_note=source.signed_note + "\n\n" + time), raw)
+    assert em.code == "99214"   # independently source-qualified problems/data
     assert "em_pathway:mdm_2of3" in em.notes
 
 

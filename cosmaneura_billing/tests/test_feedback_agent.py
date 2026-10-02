@@ -42,3 +42,9 @@ def test_event_without_patient_benefit_is_dropped():
     e = FeedbackEvent(kind=FeedbackKind.CARE_QUALITY, target=FeedbackTarget.PROVIDER,
                       message="do more things", patient_benefit="   ")
     assert agent._assert_patient_benefit(e) is False
+
+
+def test_raw_referral_driver_cannot_generate_unverified_care_directive():
+    facts = {"risk": {"drivers": ["refer for colonoscopy"]}}
+    events = FeedbackAgent().run(facts, [], [], submitted_em_code=None)
+    assert not any(e.kind == FeedbackKind.CARE_QUALITY for e in events)

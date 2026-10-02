@@ -49,8 +49,9 @@ def test_agent_attaches_prior_and_flags_high_rate_codes():
 
 
 def test_pipeline_carries_prior_into_worksheet():
-    from cosmaneura_billing.corpus.demo import SAMPLE_VISIT
-    result = BillingOrchestrator().process(SAMPLE_VISIT)
+    from cosmaneura_billing.corpus.mdm_cases import fixture_llm, qualified_case
+    _, _, source = qualified_case(4)
+    result = BillingOrchestrator(llm=fixture_llm()).process(source)
     em = result.biller_worksheet.em_code
     assert any(n.startswith("denial_prior:") for n in em.notes)
 
