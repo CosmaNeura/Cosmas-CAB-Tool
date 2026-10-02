@@ -192,10 +192,34 @@ def validate_generated(generated, stored):
         require(valid_data_review(generated["dataReview"], stored.bundle))
     if "clinicalReview" in generated:
         require(valid_clinical_review(generated["clinicalReview"], stored.bundle))
-    provenance = closed(generated["generation"], ("engineVersion", "runId", "inferenceMode"))
+    operational = stored.source == "athena_staff_review_operational"
+    provider_model = (stored.source == "provider_completed_note"
+                      and type(generated["generation"]) is dict
+                      and generated["generation"].get("inferenceMode") == "azure_openai")
+    provenance = closed(generated["generation"], ("engineVersion", "runId", "inferenceMode",
+                         *(("modelInputProof",) if operational or provider_model else ())))
     text(provenance["engineVersion"], 100)
     uuid(provenance["runId"])
     text(provenance["inferenceMode"], 80)
+    if operational or provider_model:
+        proof = closed(provenance["modelInputProof"], ("schemaVersion", "policyId", "policySha256",
+                       "sourceSha256", "serviceSha256", "expiresAt",
+                       *(("sourceOperationId", "sourceAdmissionSha256") if provider_model else ())))
+        require(proof["schemaVersion"] == ("cab-model-input-proof.v2" if provider_model
+                                           else "cab-model-input-proof.v1"))
+        if provider_model:
+            uuid(proof["sourceOperationId"])
+            require(isinstance(proof["sourceAdmissionSha256"], str)
+                    and re.fullmatch(r"[a-f0-9]{64}", proof["sourceAdmissionSha256"]))
+        uuid(proof["policyId"])
+        for key in ("policySha256", "sourceSha256", "serviceSha256"):
+            require(isinstance(proof[key], str) and re.fullmatch(r"[a-f0-9]{64}", proof[key]))
+        require(proof["sourceSha256"] == digest(source_snapshot(stored)))
+        text(proof["expiresAt"], 40)
+        try:
+            require(datetime.fromisoformat(proof["expiresAt"].replace("Z", "+00:00")).tzinfo is not None)
+        except ValueError:
+            raise BillingHeaderError() from None
     documents = {doc["id"]: doc for doc in source_documents(stored)}
     evidence_ids = set()
     for item in sequence(generated["evidence"], MAX_EVIDENCE):

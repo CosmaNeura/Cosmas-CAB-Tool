@@ -62,7 +62,7 @@ def application(owner, context, tmp_path, calls, *, national=False):
 
 
 @pytest.mark.parametrize("role", ["Admin", "BillingStaff"])
-def test_staff_contact_api_applies_exact_selection_replays_and_keeps_billing_unavailable(tmp_path, role):
+def test_staff_contact_api_applies_exact_selection_replays_and_advertises_billing(tmp_path, role):
     owner, context, actor, _, _ = prepare_api(role=role)
     calls = []
     first = application(owner, context, tmp_path, calls)
@@ -73,7 +73,7 @@ def test_staff_contact_api_applies_exact_selection_replays_and_keeps_billing_una
         assert a.get("/api/session").json()["capabilities"]["athenaReview"] is True
         task = a.post("/api/chase/task", json={"chaseId": CASE})
         assert task.status_code == 200, task.text
-        assert task.json()["athenaReview"] == {"available": True, "mode": "configured", "billingAvailable": False}
+        assert task.json()["athenaReview"] == {"available": True, "mode": "configured", "billingAvailable": True}
         current = a.post("/api/athena/card-chase", json={"chaseId": CASE}).json()
         assert current["view"]["revision"] == 0 and current["connection"]["readAllowed"] and not calls
         command = {"chaseId": CASE, "operationId": str(uuid4()), "expectedRevision": 0,
@@ -96,8 +96,8 @@ def test_staff_contact_api_applies_exact_selection_replays_and_keeps_billing_una
         assert retry.status_code == 200 and retry.json()["view"] == saved["view"]
         assert retry.json()["operationReceipt"]["replayed"] and len(calls) == source_calls
         for path in ("/api/athena/billing/read", "/api/athena/billing/apply"):
-            assert a.post(path, json={"chaseId": CASE}).status_code == 404
-        assert not any("/api/athena/billing/" in path for path in first.openapi()["paths"])
+            assert a.post(path, json={"chaseId": CASE}).status_code == 422
+        assert {"/api/athena/billing/read", "/api/athena/billing/apply"} <= set(first.openapi()["paths"])
         assert a.get("/api/ready").status_code == b.get("/api/ready").status_code == 200
     assert first.state.chase_context is composed
     with TestClient(first, headers=headers(actor)) as reopened:

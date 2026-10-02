@@ -22,7 +22,7 @@ durable persistence boundary succeed.
 from __future__ import annotations
 
 import base64
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import hmac
@@ -55,11 +55,12 @@ from .completeness import OverrideRequiresReason, applicable_rulepack, check_not
 from .corpus.acibench import load_acibench
 from .corpus.demo import SAMPLE_VISIT
 from .llm import describe_client
-from .orchestrator import BillingOrchestrator
+from .orchestrator import BillingOrchestrator, InferenceInputPolicyError
 from .primary_diagnosis import result_primary
 from .persistence import (
-    MemoryEncounterStore, PersistenceUnavailable, PostgresFeedbackStore,
+    MemoryEncounterStore, PersistenceUnavailable, PostgresEncounterStore, PostgresFeedbackStore,
     PostgresMembershipStore, ReviewerNotAuthorized, StaleEncounter,
+    ATHENA_REVIEW_OPERATIONAL_SOURCE, DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES,
     READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES, UnknownEncounter, postgres_services,
 )
 from .preferences import PreferenceStore
@@ -836,6 +837,14 @@ def readiness(request: Request):
         request.app.state.access_audit_store.healthcheck()
         request.app.state.encounter_store.healthcheck()
         request.app.state.feedback_store.healthcheck()
+        model_policy = request.app.state.model_data_policy
+        if model_policy is not None and "provider_completed_note" in model_policy.document.get("sources", {}):
+            with request.app.state.encounter_store.context.connection() as conn:
+                row = conn.execute("""SELECT has_function_privilege(current_user,
+                    to_regprocedure('public.cosmaneura_provider_model_source(uuid,uuid,text,text)'),
+                    'EXECUTE') AS allowed""").fetchone()
+                if not row or row["allowed"] is not True:
+                    raise RuntimeError("provider model source reader unavailable")
         if request.app.state.billing_header_store is not None:
             request.app.state.billing_header_store.healthcheck()
         if _request_settings(request).communications_enabled:
@@ -869,17 +878,28 @@ def list_encounters(request: Request) -> list[dict[str, Any]]:
         "id": b.encounter_id,
         "encounterType": b.encounter_type,
         "submittedEm": b.submitted_em_code,
-        **_encounter_data_policy(row),
+        **_encounter_data_policy(row, request),
     } for row in _request_encounter_store(request).all() for b in [row.bundle]]
 
 
-def _encounter_data_policy(stored) -> dict[str, Any]:
+def _encounter_data_policy(stored, request=None) -> dict[str, Any]:
+    from .model_admission import MODEL_SCOPED_SOURCES
     is_synthetic_demo = stored.source in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+    policy = {"allowed": False, "reason": "operational_source_model_not_approved"}
+    if stored.source in MODEL_SCOPED_SOURCES and request is not None:
+        try:
+            with _inference_scope(request, stored):
+                policy = {"allowed": True, "reason": None}
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
     return {
         "dataClass": (
             stored.source if is_synthetic_demo else "operational"
         ),
         "readOnly": is_synthetic_demo,
+        **({"inferencePolicy": policy}
+           if stored.source in MODEL_SCOPED_SOURCES else {}),
     }
 
 
@@ -898,13 +918,58 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
     a stored encounter. A caller cannot opt an ad-hoc payload into the synthetic
     class and an encounter ID prefix has no authority over this decision.
     """
-    if not _request_settings(request).azure_openai_synthetic_only:
-        return
+    from .model_admission import requires_model_scope
+    settings = _request_settings(request)
+    scoped = stored is not None and requires_model_scope(settings, stored.source)
+    # Source read/storage approval never grants model-service disclosure.
+    if (scoped
+            and (getattr(request.app.state, "model_data_policy", None) is None
+                 or (stored.source == ATHENA_REVIEW_OPERATIONAL_SOURCE
+                     and settings.azure_openai_synthetic_only))):
+        raise HTTPException(status_code=403, detail="operational_source_model_not_approved")
     if (
-        stored is None
-        or stored.source not in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+        settings.azure_openai_synthetic_only and not scoped
+        and (stored is None or stored.source not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES)
     ):
         raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
+    if (getattr(request.app.state, "model_data_policy", None) is not None and not scoped
+            and (stored is None or stored.source not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES)):
+        raise HTTPException(403, "model_data_policy_requires_reviewed_source")
+
+
+@contextmanager
+def _inference_scope(request, stored):
+    """Resolve source/model authority from the actual stored encounter and actor."""
+    from .billing_header import HeaderActor
+    from .model_admission import ModelAdmissionError, operational_scope, requires_model_scope
+    _require_inference_input_allowed(request, stored=stored)
+    settings = _request_settings(request)
+    if not requires_model_scope(settings, stored.source):
+        yield None
+        return
+    principal = _request_principal(request)
+    encounter_store = _request_encounter_store(request)
+    role = next((role for role in ("Admin", "Coder", "Provider")
+                 if principal.has_any_role((role,))), None)
+    if (not isinstance(encounter_store, PostgresEncounterStore) or role is None
+            or principal.practice_id != settings.practice_id):
+        raise HTTPException(403, "operational_source_model_not_approved")
+    actor = HeaderActor(principal.tenant_id, principal.user_id,
+                        f"{role} {principal.user_id[:8]}", role)
+    try:
+        with operational_scope(request.app.state.model_data_policy, settings=settings,
+                stored=stored, actor=actor, context=encounter_store.context) as permit:
+            yield permit
+    except (ModelAdmissionError, InferenceInputPolicyError):
+        raise HTTPException(403, "operational_source_model_not_approved") from None
+
+
+def _process_stored(request, stored, *, orchestrator=None):
+    with _inference_scope(request, stored) as permit:
+        return (orchestrator or _request_orchestrator(request)).process(
+            stored.bundle, user_id=_request_principal(request).user_id,
+            input_provenance=stored.source, **({"input_scope": permit} if permit else {}),
+        )
 
 
 @router.post("/api/encounters/detail")
@@ -921,20 +986,16 @@ def get_encounter(request: Request, req: EncounterRequest) -> dict[str, Any]:
             "submittedEm": b.submitted_em_code, "intake": b.intake_text,
             "transcript": b.transcript, "signedNote": b.signed_note,
             "placeOfService": b.place_of_service,
-            **_encounter_data_policy(stored), **header_source}
+            **_encounter_data_policy(stored, request), **header_source}
 
 
 @router.post("/api/encounters/billing")
 def bill_stored(request: Request, req: EncounterRequest) -> dict[str, Any]:
     _require_view(request, "provider")
     stored = _get_stored_encounter(request, req.encounterId)
-    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
-    principal = _request_principal(request)
-    result = _request_orchestrator(request).process(
-        bundle, user_id=principal.user_id, input_provenance=stored.source,
-    )
-    return {**_billing_json(bundle, result), **_encounter_data_policy(stored)}
+    result = _process_stored(request, stored)
+    return {**_billing_json(bundle, result), **_encounter_data_policy(stored, request)}
 
 
 @router.post("/api/billing")
@@ -960,13 +1021,10 @@ def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
     _require_view(request, "coder")
     signing_key = _request_review_signing_key(request)
     stored = _get_stored_encounter(request, req.encounterId)
-    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
     orch = _request_orchestrator(request)
     uid = _request_principal(request).user_id
-    result = orch.process(
-        bundle, user_id=uid, input_provenance=stored.source,
-    )
+    result = _process_stored(request, stored, orchestrator=orch)
     view = _coder_view_json(bundle, result, uid)
     view["encounterVersion"] = stored.version
     view["reviewContext"] = _issue_review_context(
@@ -975,7 +1033,7 @@ def coder_view(request: Request, req: EncounterRequest) -> dict[str, Any]:
         signing_key=signing_key,
         recommendation_manifest=_coder_recommendation_manifest(view),
     )
-    view.update(_encounter_data_policy(stored))
+    view.update(_encounter_data_policy(stored, request))
     # attach learned-history hints so the reviewer sees why a code was
     # refined or held ("you've declined this 3x")
     prefs = orch.preferences.for_user(uid)
@@ -994,20 +1052,15 @@ def billing_tab(request: Request, req: BillingTabRequest) -> dict[str, Any]:
     reference. The clinical note is never altered — this is a view over it."""
     _require_view(request, "provider")
     stored = _get_stored_encounter(request, req.encounterId)
-    _require_inference_input_allowed(request, stored=stored)
     bundle = stored.bundle
-    result = _request_orchestrator(request).process(
-        bundle,
-        user_id=_request_principal(request).user_id,
-        input_provenance=stored.source,
-    )
+    result = _process_stored(request, stored)
     return {
         **build_billing_tab_view(
             bundle, result, engine_version=_ENGINE_VERSION,
             generated_at=req.generatedAt,
         ),
         "encounterVersion": stored.version,
-        **_encounter_data_policy(stored),
+        **_encounter_data_policy(stored, request),
     }
 
 
@@ -1507,7 +1560,7 @@ def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
         result["communications"] = {"available": True, "mode": "durable"}
     if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
         result["athenaReview"] = {"available": True, "mode": _request_settings(request).athena_review_mode,
-                                 "billingAvailable": False}
+                                 "billingAvailable": True}
     return result
 
 
@@ -2216,6 +2269,8 @@ def create_app(
         lifespan=_lifespan,
     )
     application.state.settings = config
+    from .model_admission import parse_policy
+    application.state.model_data_policy = parse_policy(config.model_data_policy_json)
     # Local-only ephemeral keys invalidate reviews after restart. Durable or
     # deployed runtimes require the same configured secret across all replicas.
     application.state.review_context_signing_key = (
@@ -2236,13 +2291,6 @@ def create_app(
     configure_header(application, config, selected_encounters)
     from .athena_review_routes import configure_athena, router as athena_router
     configure_athena(application, config, application.state.chase_context, selected_encounters)
-    # Keep billing imports unavailable until their model-input boundary is
-    # integrated. Reuse the reviewed handlers without changing the core router.
-    athena_contact_router = APIRouter(routes=[
-        route for route in athena_router.routes
-        if route.path in {"/api/athena/card-chase", "/api/athena/card-chase/read",
-                          "/api/athena/card-chase/apply"}
-    ])
     application.state.atomic_feedback_audit = bool(
         postgres
         and selected_feedback is postgres.feedback
@@ -2305,7 +2353,7 @@ def create_app(
     application.include_router(communications_router)
     application.include_router(router)
     application.include_router(header_router)
-    application.include_router(athena_contact_router)
+    application.include_router(athena_router)
 
     async def persistence_unavailable(_request: Request, _exc: PersistenceUnavailable):
         return JSONResponse(

@@ -228,6 +228,8 @@ class AzureOpenAILLM:
             raise SettingsError(
                 "Azure OpenAI endpoint, deployment, and model must be configured"
             )
+        self._managed_identity_client_id = config.azure_client_id
+        self._injected_client = client is not None
         self.max_retries = max_retries
         self.timeout = timeout
         self._clock = clock or time.monotonic
@@ -256,6 +258,24 @@ class AzureOpenAILLM:
             self._credential = credential
             self._network_errors = (TimeoutError, *network_errors)
         self._client = client
+        self._transport_client = client
+        self._transport_identity = self._operational_transport_identity(verify_transport=False)
+
+    def _operational_transport_identity(self, *, verify_transport=True):
+        from .model_admission import ModelAdmissionError
+        identity = {"endpoint": self.endpoint, "deployment": self.deployment,
+                    "model": self.model, "apiVersion": self.api_version,
+                    "managedIdentityClientId": self._managed_identity_client_id}
+        if hasattr(self, "_transport_identity") and (
+            identity != self._transport_identity or self._client is not self._transport_client
+        ):
+            raise ModelAdmissionError()
+        if verify_transport and not self._injected_client and (
+            str(self._client.base_url) != self.endpoint.rstrip("/") + "/openai/"
+            or self._client.default_query.get("api-version") != self.api_version
+        ):
+            raise ModelAdmissionError()
+        return identity
 
     @staticmethod
     def _build_client(
@@ -472,6 +492,8 @@ class AzureOpenAILLM:
         for attempt in range(self.max_retries + 1):
             if attempt:
                 time.sleep(min(2 ** attempt, 30))
+            from .model_admission import check_model_request
+            check_model_request(self)  # After backoff, before token acquisition/HTTP; never retried.
             started_at = self._clock_value()
             payload: Any | None = None
             try:

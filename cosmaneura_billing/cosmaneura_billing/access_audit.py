@@ -30,6 +30,8 @@ _ATHENA_ROUTES = {
     "/api/athena/card-chase": "athena.view",
     "/api/athena/card-chase/read": "athena.refresh",
     "/api/athena/card-chase/apply": "athena.apply",
+    "/api/athena/billing/read": "athena.billing_read",
+    "/api/athena/billing/apply": "athena.billing_apply",
 }
 _CHASE_POLICY_MUTATIONS = frozenset({
     "/api/chase/policy/create",

@@ -18,7 +18,7 @@ from .knowledge.procedures import ProcedureRules
 from .preferences import PreferenceStore, apply_preferences
 from .primary_diagnosis import resolve_primary
 from .llm import LLMClient, describe_client, get_default_client
-from .persistence import READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+from .persistence import DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES
 from .schemas import (
     BillerWorksheet, BillingResult, CodeKind, CodeSuggestion, Degradation,
     Disposition, FeedbackKind, ProviderCard, VisitBundle,
@@ -178,14 +178,34 @@ class BillingOrchestrator:
         user_id: str | None = None,
         *,
         input_provenance: str | None = None,
+        input_scope=None,
     ) -> BillingResult:
+        from .model_admission import ModelAdmissionError, pipeline_scope, requires_model_scope, PROVIDER_SOURCE
+        from .llm import AzureOpenAILLM
+        provider_scope = input_provenance == PROVIDER_SOURCE and (
+            requires_model_scope(self.settings, input_provenance) or isinstance(self.llm, AzureOpenAILLM)
+            or self.secondary_coding is not None or self.ta4h is not None or self.shadow_runner is not None)
         if (
             self.settings.azure_openai_synthetic_only
-            and input_provenance not in READ_ONLY_SYNTHETIC_ENCOUNTER_SOURCES
+            and input_provenance not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES
+            and not provider_scope
         ):
             raise InferenceInputPolicyError(
                 "model inference requires reserved stored synthetic provenance"
             )
+        from .persistence import ATHENA_REVIEW_OPERATIONAL_SOURCE
+        if (getattr(self.settings, "model_data_policy_json", "")
+                and input_provenance not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES
+                and input_provenance != ATHENA_REVIEW_OPERATIONAL_SOURCE and not provider_scope):
+            raise ModelAdmissionError()
+        if input_provenance == ATHENA_REVIEW_OPERATIONAL_SOURCE or provider_scope:
+            with pipeline_scope(input_scope, self, bundle, input_provenance):
+                return self._process(bundle, user_id)
+        if input_scope is not None:
+            raise ModelAdmissionError()
+        return self._process(bundle, user_id)
+
+    def _process(self, bundle: VisitBundle, user_id: str | None) -> BillingResult:
         new_patient = "new" in bundle.encounter_type
 
         facts, suggestions, consensus_audit = self._extract(bundle, new_patient)

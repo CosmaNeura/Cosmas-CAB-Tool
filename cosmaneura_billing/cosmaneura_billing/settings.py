@@ -474,6 +474,7 @@ class Settings:
     # Offline deterministic stand-in, for demos and tests only. Never valid in a
     # deployed environment, where it would present mock output as engine output.
     azure_language_mock: bool = False
+    model_data_policy_json: str = field(default="", repr=False, metadata={"secret": True})
 
     auth_mode: str = "disabled"
     entra_tenant_id: str = ""
@@ -619,6 +620,14 @@ class Settings:
             raise SettingsError(
                 "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY must be a boolean"
             )
+        if not isinstance(self.model_data_policy_json, str) or len(self.model_data_policy_json) > 8192:
+            raise SettingsError("COSMANEURA_MODEL_DATA_POLICY_JSON is invalid")
+        if self.model_data_policy_json:
+            from .model_admission import parse_policy
+            try:
+                parse_policy(self.model_data_policy_json)
+            except ValueError:
+                raise SettingsError("COSMANEURA_MODEL_DATA_POLICY_JSON is invalid") from None
         if self.azure_openai_synthetic_only and not self.azure_openai_enabled:
             raise SettingsError(
                 "COSMANEURA_AZURE_OPENAI_SYNTHETIC_ONLY requires "
@@ -1256,6 +1265,7 @@ class Settings:
             athena_storage_id=env.get("COSMANEURA_ATHENA_STORAGE_ID", ""),
             athena_client_id=env.get("COSMANEURA_ATHENA_CLIENT_ID", ""),
             athena_client_secret=env.get("COSMANEURA_ATHENA_CLIENT_SECRET", ""),
+            model_data_policy_json=env.get("COSMANEURA_MODEL_DATA_POLICY_JSON", ""),
             review_context_signing_key=env.get("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY", ""),
             communications_enabled=_parse_bool(env, "COSMANEURA_COMMUNICATIONS_ENABLED", False),
             communications_enabled_channels=_parse_communications_channels(env),

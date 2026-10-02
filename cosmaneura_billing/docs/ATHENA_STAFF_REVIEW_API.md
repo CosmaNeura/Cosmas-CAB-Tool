@@ -1,7 +1,8 @@
 # Staff contact and insurance review API
 
 This integration exposes POST /api/athena/card-chase,
-/api/athena/card-chase/read and /api/athena/card-chase/apply. Admin and BillingStaff
+/api/athena/card-chase/read, /api/athena/card-chase/apply,
+/api/athena/billing/read and /api/athena/billing/apply. Admin and BillingStaff
 need current practice membership and the existing configured Entra session.
 Coder/Provider roles do not gain access. All three routes use the normal
 minimum-necessary access audit.
@@ -30,12 +31,21 @@ US phone numbers require explicit US country confirmation. Selected contact
 destinations always have unknown consent; they neither enroll nor send messages.
 Retries retain the same exact operation payload and current server revision.
 
-Task athenaReview is {available:true, mode:"configured", billingAvailable:false}
-when enabled for authorized staff. Session capabilities.athenaReview is true for
-those same staff. Billing discovery/import routes are not mounted in this slice;
-importing a note and admitting its model input is a separate integration. This
-API does not declare a note finished or signed and never writes back to Athena.
-The dashboard contact controls are a separate frontend integration.
+Task athenaReview advertises billingAvailable:true for enabled staff. After
+reviewing contacts, staff can discover encounters, review an exact note and confirm
+a finished note/context before local import. A source status is an observation,
+not a CAB declaration that a clinician signed the note. No EHR write occurs.
+
+Operational imported text cannot reach a model without a separate
+COSMANEURA_MODEL_DATA_POLICY_JSON. Its closed v1/v2 contract is parsed by
+model_admission.parse_policy; no HTTP request can supply policy authority.
+The exact policy binds actual database/login, member, source and Azure service.
+Source read/storage grants never transfer this authority. An empty, expired or
+mismatched policy reports inferencePolicy.allowed:false while preserving source
+and existing header access. The global synthetic-only latch still blocks Athena
+operational text. New headers retain modelInputProof; exact replay requires no
+new model call. Policy removal requires retiring old replicas that loaded it.
+Provider source admission remains unavailable without its later025 integration.
 
 Local proof uses synthetic fixtures, a new owned database and fake read-only
 source transport. Hosted configuration, secrets, data-handling approval and
