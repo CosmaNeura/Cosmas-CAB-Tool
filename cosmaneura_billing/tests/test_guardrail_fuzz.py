@@ -8,21 +8,17 @@ import pytest
 
 from cosmaneura_billing.agents import ComplianceGuardrailAgent
 from cosmaneura_billing.guardrail_fuzz import em_level, run_fuzz
+from cosmaneura_billing.corpus.mdm_cases import qualified_case
 from cosmaneura_billing.schemas import CodeKind, CodeSuggestion, Disposition, Evidence
 
 # Documentation supporting at most a moderate (99214) visit.
-FACTS_99214 = {
-    "problems": [{"name": "Hematochezia", "status": "new", "uncertain_prognosis": True,
-                  "quote": "blood per rectum"}],
-    "data_reviewed": [{"category": "review_external_labs", "item": "CBC"}],
-    "risk": {"level": "moderate", "quote": "refer for colonoscopy"},
-}
+FACTS_99214, QUALIFIED_EVIDENCE, _ = qualified_case(4)
 
 
 def _em(code, disposition=Disposition.CAPTURED, evidence=True):
     return CodeSuggestion(
         kind=CodeKind.EM, code=code, label="Office visit", disposition=disposition,
-        evidence=[Evidence("signed_note", "refer for colonoscopy", "risk")] if evidence else [])
+        evidence=list(QUALIFIED_EVIDENCE) if evidence else [])
 
 
 # --------------------------------------------------------------------------- #
@@ -52,9 +48,7 @@ def test_modifier_suffixed_code_is_not_upcoded():
 def test_annotated_code_cannot_bypass_the_ceiling():
     """`99214 (telehealth)` parsed as level 0, so it never tripped the ceiling
     check and was captured above what the documentation supported."""
-    facts_99213 = {**FACTS_99214, "risk": {"level": "low", "quote": "reassurance"},
-                   "problems": [{"name": "Constipation", "status": "established",
-                                 "quote": "constipation"}]}
+    facts_99213, _, _ = qualified_case(3)
     out, _ = ComplianceGuardrailAgent().run(
         facts_99213, [_em("99214 (telehealth)")], new_patient=False)
     assert out[0].disposition != Disposition.CAPTURED, (
@@ -92,7 +86,7 @@ def test_clamp_is_monotonic_and_bounded():
         out, _ = agent.run(FACTS_99214, [_em(code)], new_patient=False)
         levels.append(em_level(out[0].code))
     assert levels == sorted(levels), f"clamp is not monotonic in the input: {levels}"
-    assert max(levels) <= 4, f"a proposal escaped the 99214 ceiling: {levels}"
+    assert max(levels) == 4, f"qualified moderate path missing or escaped: {levels}"
 
 
 def test_empty_facts_cannot_support_any_capture():

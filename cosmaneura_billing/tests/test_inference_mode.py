@@ -31,7 +31,7 @@ OTHER_ENCOUNTER = (
 def test_mock_answers_for_the_demo_encounter():
     facts = MockLLM().complete_json(
         system="", user=f"TASK: extract_clinical_facts\n\n{SAMPLE_VISIT.intake_text}")
-    assert facts.get("problems"), "the mock must still cover the encounter it models"
+    assert facts.get("mdm_problem_events"), "the mock must still cover the encounter it models"
 
 
 def test_mock_returns_nothing_for_another_encounter():
@@ -92,7 +92,7 @@ def test_coder_view_carries_inference_mode_and_degraded():
     ).json()
     assert demo["inferenceMode"] == "mock"
     assert demo["degraded"] is None
-    assert demo["em"]["code"] == "99214"
+    assert demo["em"] is None  # fixture risk/complexity is not established
 
     other = next(i for i in ids if i != SAMPLE_VISIT.encounter_id)
     view = client.post(

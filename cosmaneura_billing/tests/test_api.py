@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import cosmaneura_billing.api as api
 from cosmaneura_billing.auth import AuthPrincipal
+from cosmaneura_billing.corpus.demo import SAMPLE_VISIT
 from cosmaneura_billing.persistence import (
     ATHENA_PREVIEW_SYNTHETIC_SOURCE,
     StoredEncounter,
@@ -220,17 +221,20 @@ def test_stored_billing_matches_contract(client):
         "/api/encounters/billing", json={"encounterId": "ENC-100237"},
     ).json()
     assert j["encounterId"] == "ENC-100237"
-    assert j["em"]["code"] == "99214"
+    assert j["em"] is None
     assert j["primary"]["code"] == "K62.5"
-    em = next(c for c in j["captured"] if c["kind"] == "EM")
-    assert em["correctedFrom"] == "99213"
-    assert em["disposition"] == "captured"
-    assert em["evidence"] and {"source", "quote"} <= set(em["evidence"][0])
+    em = next(c for c in j["declined"] if c["kind"] == "EM")
+    assert em["disposition"] == "needs_review"
+    assert em["code"] == "99212"
+    assert em["evidence"]
+    assert all(e["source"] == "signed_note" and e["quote"] in SAMPLE_VISIT.signed_note
+               for e in em["evidence"])
+    assert all(c["kind"] != "EM" for c in j["captured"])
     assert any(c["code"] == "(unresolved)" and c["disposition"] == "rejected"
                for c in j["declined"])
     assert j["requiresSignoff"] is True
     assert all({"action", "code", "detail"} <= set(a) for a in j["audit"])
-    assert any(a["action"] == "CAPTURE" and a["code"] == "99214" for a in j["audit"])
+    assert any(a["action"] == "HOLD" and a["code"] == "99212" for a in j["audit"])
     assert all("patientBenefit" in f for f in j["feedback"])
     assert j["revenueIntegrityNote"]
 
@@ -253,13 +257,16 @@ def test_coder_view_contract(client):
     assert cv["encounterVersion"] == 1
     assert cv["reviewContext"]
     assert cv["submittedEm"] == "99213"
-    assert cv["em"]["code"] == "99214" and cv["em"]["why"]
-    assert cv["em"]["kind"] == "EM"
-    assert cv["em"]["evidenceSpans"]
-    assert {"source", "text", "loc"} <= set(cv["em"]["evidenceSpans"][0])
+    assert cv["em"] is None
     assert [d["code"] for d in cv["dx"]] == ["K62.5", "K59.00", "R19.7"]
     assert all(d["kind"] == "ICD10" and d["evidenceSpans"] for d in cv["dx"])
-    assert {w["code"] for w in cv["withheld"]} == {"(unresolved)"}
+    assert {w["code"] for w in cv["withheld"]} == {"(unresolved)", "99212"}
+    held_em = next(w for w in cv["withheld"] if w["kind"] == "EM")
+    assert held_em["status"] == "held"
+    assert held_em["evidenceSpans"]
+    assert all(s["source"] == "signed_note" and s["text"] in SAMPLE_VISIT.signed_note
+               for s in held_em["evidenceSpans"])
+    assert all(d["kind"] != "EM" for d in _accept_all_recommendations(cv))
     assert {w["status"] for w in cv["withheld"]} == {"rejected", "held"}
     assert all(w["why"] for w in cv["withheld"])
     assert all(w["kind"] in {"EM", "ICD10", "PROCEDURE", "MODIFIER"}
@@ -277,7 +284,7 @@ def test_feedback_roundtrip_and_summary(client):
         "review_context": view["reviewContext"],
         "encounter_version": 1,
         "submitted_em": "99213",
-        "engine_em": "99214", "final_em": "99214",
+        "engine_em": None, "final_em": None,
         "decisions": [
             *_accept_all_recommendations(view),
             {"kind": "ICD10", "engine_code": None, "action": "add",
@@ -307,7 +314,7 @@ def test_feedback_roundtrip_and_summary(client):
     assert conflict.status_code == 409
     s = client.get("/api/feedback/summary").json()
     assert s["encounters"] == 1
-    assert s["summary"]["em_exact_agreement"] == 1.0
+    assert s["summary"]["em_exact_agreement"] == 0.0  # no E/M was issued or confirmed
     assert s["tuningBacklog"][0]["reason"] == "dx_missed_by_engine"
     assert s["goldRows"] == 1
 
@@ -434,8 +441,8 @@ def test_feedback_derives_em_summary_fields_when_client_omits_them(client):
     assert response.status_code == 200
     stored = client.app.state.feedback_store.load()[0]
     assert stored.submitted_em == "99213"
-    assert stored.engine_em == "99214"
-    assert stored.final_em == "99214"
+    assert stored.engine_em is None
+    assert stored.final_em is None
 
 
 def test_feedback_rejects_a_stale_encounter_version(client):
@@ -455,8 +462,8 @@ def test_feedback_rejects_a_stale_encounter_version(client):
         "review_context": view["reviewContext"],
         "encounter_id": "ENC-100237",
         "encounter_version": stored.version,
-        "engine_em": "99214",
-        "final_em": "99214",
+        "engine_em": None,
+        "final_em": None,
         "decisions": _accept_all_recommendations(view),
     })
 
@@ -512,8 +519,13 @@ def test_feedback_summary_empty(client):
 
 
 def test_billing_carries_denial_prior(client):
+    from cosmaneura_billing.corpus.mdm_cases import fixture_llm, qualified_case
+    _, _, source = qualified_case(4)
+    client.get("/api/health")
+    client.app.state.orchestrator.coding.llm = fixture_llm()
+    client.app.state.encounter_store.upsert(source, source="synthetic_fixture")
     j = client.post(
-        "/api/encounters/billing", json={"encounterId": "ENC-100237"},
+        "/api/encounters/billing", json={"encounterId": source.encounter_id},
     ).json()
     em = next(c for c in j["captured"] if c["kind"] == "EM")
     assert 0.0 < em["denialPrior"] < 0.10
@@ -568,8 +580,8 @@ def test_reviewer_rejections_influence_future_runs_for_that_reviewer(tmp_path):
             "review_id": f"10000000-0000-4000-8000-{i:012d}",
             "review_context": smith_review_context,
             "encounter_id": "ENC-100237", "encounter_version": 1,
-            "engine_em": "99214",
-            "final_em": "99214", "decisions": completed_decisions})
+            "engine_em": None,
+            "final_em": None, "decisions": completed_decisions})
         assert response.status_code == 200
 
     j = client.post(

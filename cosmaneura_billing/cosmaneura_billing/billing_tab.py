@@ -334,7 +334,7 @@ def _em_block(card, ws, bundle: VisitBundle) -> Optional[dict[str, Any]]:
         "guardrail_actions": [line for line in ws.audit_trail
                               if s.code in line and line.split()[0] in
                               ("DOWNGRADE", "CAPTURE", "HOLD", "REJECT")],
-        "copy_text": s.code,
+        "copy_text": s.code if s.disposition == Disposition.CAPTURED else None,
     }
 
 
@@ -348,11 +348,11 @@ def _element_span(
     there is no span — the data element currently has none — is the point: a
     reviewer must not see the risk quote presented as evidence for problems.
     """
-    wanted = {"risk": "risk", "problems": "problem"}.get(element)
+    wanted = {"risk": "MDM risk: ", "problems": "MDM problems: "}.get(element)
     if not wanted:
         return None
     for ev, span in _anchored_evidence(s, bundle):
-        if wanted in (ev.rationale or "").lower():
+        if (ev.rationale or "").startswith(wanted):
             return span
     return None
 

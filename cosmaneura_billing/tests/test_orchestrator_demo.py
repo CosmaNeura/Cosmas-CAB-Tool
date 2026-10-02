@@ -1,7 +1,7 @@
 """End-to-end pipeline on the demo encounter (offline MockLLM).
 
 This is the ported run_demo.py, with the printed claims turned into assertions:
-under-coding corrected to 99214, the contradicted family-history code rejected,
+unsupported E/M complexity held, the contradicted family-history code rejected,
 the unaddressed obesity finding held, and every capture backed by evidence.
 """
 import pytest
@@ -16,11 +16,11 @@ def result():
     return BillingOrchestrator().process(SAMPLE_VISIT)
 
 
-def test_em_undercoding_corrected(result):
-    em = result.biller_worksheet.em_code
-    assert em is not None
-    assert em.code == "99214"
-    assert em.disposition == Disposition.CAPTURED
+def test_em_requires_documented_complexity_not_legacy_new_problem_flag(result):
+    assert result.biller_worksheet.em_code is None
+    em = next(s for s in result.provider_card.declined_codes if s.kind == CodeKind.EM)
+    assert em.code == "99212" and em.disposition == Disposition.REVIEW
+    assert em.clinical_review["risk"]["events"] == []
 
 
 def test_primary_diagnosis_is_rectal_hemorrhage(result):
@@ -51,7 +51,7 @@ def test_every_captured_code_has_evidence(result):
 
 def test_audit_trail_covers_every_decision(result):
     audit = "\n".join(result.biller_worksheet.audit_trail)
-    for token in ("CAPTURE 99214", "CAPTURE K62.5", "REJECT", "HOLD"):
+    for token in ("HOLD    99212", "CAPTURE K62.5", "REJECT", "HOLD"):
         assert token in audit
 
 
@@ -59,10 +59,9 @@ def test_worksheet_requires_signoff_when_codes_held(result):
     assert result.biller_worksheet.requires_provider_signoff is True
 
 
-def test_coding_education_event_names_both_levels(result):
+def test_no_coding_education_from_unsupported_risk_assumption(result):
     edu = [e for e in result.feedback_events if e.kind == FeedbackKind.CODING_EDUCATION]
-    assert edu, "under-coded encounter should produce a coding-education nudge"
-    assert "99213" in edu[0].message and "99214" in edu[0].message
+    assert not edu
 
 
 def test_every_person_facing_event_states_patient_benefit(result):

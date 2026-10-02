@@ -270,7 +270,8 @@ class BillingOrchestrator:
         integrity_note = (
             f"{n_cap} codes captured ({n_dx} dx + E/M), each linked to documentation. "
             f"{len(rejected)} rejected as unsupported, {len(review)} held for provider confirmation. "
-            "Captured set reflects documented, medically-necessary care only; no code exceeds its MDM ceiling."
+            "Captured suggestions retain documentation evidence; E/M is checked against "
+            "its qualified MDM or documented total-time pathway. Human review remains required."
         )
 
         return BillingResult(
@@ -290,7 +291,7 @@ class BillingOrchestrator:
         """
         if getattr(self.llm, "mode", None) != "mock":
             return None
-        if facts.get("problems"):
+        if facts.get("problems") or facts.get("mdm_problem_events"):
             return None
         return Degradation(
             reason="offline_model_unsupported_encounter",

@@ -8,15 +8,16 @@ from test_billing_header_api import client, generate, edit_intent, BASE, ENCOUNT
 
 
 def request_for(client, view):
+    encounter_id = view["header"]["expectedSource"]["encounterId"]
     object.__setattr__(client.app.state.settings, "development_roles", ("Coder",))
-    engine_response = client.post("/api/encounters/coder-view", json={"encounterId": ENCOUNTER})
+    engine_response = client.post("/api/encounters/coder-view", json={"encounterId": encounter_id})
     assert engine_response.status_code == 200, engine_response.text
     engine = engine_response.json()
     rows = ([engine["em"]] if engine["em"] else []) + engine["dx"]
-    return {"encounterId": ENCOUNTER, "expectedSource": view["header"]["expectedSource"],
+    return {"encounterId": encounter_id, "expectedSource": view["header"]["expectedSource"],
         "headerId": view["header"]["headerId"], "expectedRevision": view["revisionNumber"],
         "acknowledged": True, "humanProposalDecisions": [],
-        "feedback": {"encounter_id": ENCOUNTER, "encounter_version": engine["encounterVersion"],
+        "feedback": {"encounter_id": encounter_id, "encounter_version": engine["encounterVersion"],
             "review_id": str(uuid4()), "review_context": engine["reviewContext"],
             "final_em": engine["em"]["code"] if engine["em"] else None,
             "decisions": [{"kind": row["kind"], "engine_code": row["code"],
@@ -71,10 +72,17 @@ def test_regular_feedback_is_not_silently_promoted_to_header_signoff(client):
 
 @pytest.mark.parametrize("mode", ["reject", "retain_icd", "retain_em", "empty"])
 def test_real_signed_current_manifest_drift_recovers_without_rewriting_header(client, monkeypatch, mode):
+    encounter_id = ENCOUNTER
+    if mode == "retain_em":
+        from cosmaneura_billing.corpus.mdm_cases import fixture_llm, qualified_case
+        _, _, qualified_source = qualified_case(4)
+        client.app.state.orchestrator.coding.llm = fixture_llm()
+        client.app.state.encounter_store.upsert(qualified_source, source="synthetic_fixture")
+        encounter_id = qualified_source.encounter_id
     store = MemoryHeaderFeedbackAdapter(client.app.state.billing_header_store)
     client.app.state.feedback_store = store
-    baseline = generate(client)
-    source = deepcopy(client.app.state.encounter_store.get(ENCOUNTER))
+    baseline = generate(client, encounter_id=encounter_id)
+    source = deepcopy(client.app.state.encounter_store.get(encounter_id))
     saved = client.post(BASE + "/save", json=edit_intent(baseline))
     assert saved.status_code == 200
     view = saved.json()["view"]
@@ -109,7 +117,7 @@ def test_real_signed_current_manifest_drift_recovers_without_rewriting_header(cl
     reviewed = response.json()["view"]
     assert reviewed["header"] == baseline["header"] and reviewed["revision"] == view["revision"]
     assert reviewed["signoff"]["baselineDecisions"] == sorted(payload["baselineDecisions"], key=lambda d: d["id"])
-    assert client.app.state.encounter_store.get(ENCOUNTER) == source and store.count() == 1
+    assert client.app.state.encounter_store.get(encounter_id) == source and store.count() == 1
     assert client.post(BASE + "/signoff", json=payload).json()["replayed"] is True
     assert any(e.action == "billing_header.signoff" and e.status == 200
                for e in client.app.state.access_audit_store.events)

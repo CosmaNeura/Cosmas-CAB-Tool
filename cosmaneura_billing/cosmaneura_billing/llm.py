@@ -582,7 +582,7 @@ class MockLLM:
     """Returns canned, realistic structured output keyed on a task tag.
 
     Every agent prompt begins with a line ``TASK: <tag>`` so the mock can route.
-    The payloads encode the clinically-correct answer for the demo encounter
+    The payloads encode source facts for the demo encounter
     (26yo male, hematochezia + constipation + diarrhea, BMI ~37.6, colonoscopy
     referral). Every quote is verbatim from the demo documentation, because the
     evidence verifier (``evidence.py``) checks quotes against the actual text —
@@ -637,26 +637,24 @@ class MockLLM:
     def _extract_clinical_facts(self) -> dict[str, Any]:
         return {
             "chief_complaint": "Rectal bleeding with bowel changes; patient anxious about colon cancer",
-            "problems": [
-                {"name": "Hematochezia / rectal bleeding", "status": "new, undiagnosed",
-                 "acuity": "acute", "uncertain_prognosis": True,
-                 "quote": "When I eat spicy food, I poop blood ... I poop a little bit of blood"},
-                {"name": "Constipation", "status": "new", "acuity": "chronic-intermittent",
-                 "quote": "Sometimes when I have constipation as well"},
-                {"name": "Diarrhea", "status": "new", "acuity": "recurrent",
-                 "quote": "I do have diarrhea often"},
+            "mdm_problem_events": [
+                {"name": name, "source": "signed_note", "identity_quote": quote,
+                 "addressed_quote": quote, "status_quote": ""}
+                for name, quote in (
+                    ("Hematochezia", "Hematochezia - refer for diagnostic colonoscopy, FOBT today"),
+                    ("Constipation", "Constipation - dietary fiber, hydration"),
+                    ("Diarrhea", "Diarrhea - monitor"))
             ],
-            "data_reviewed": [
-                {"item": "Outside CBC / blood tests reviewed", "category": "review_external_labs",
-                 "quote": "I got blood tests done last night. Please find my reports attached."},
-                {"item": "Stool occult blood test ordered", "category": "order_test"},
+            "mdm_data_events": [
+                {"action": action, "subject": subject, "source": "signed_note",
+                 "identity_quote": quote, "action_quote": quote, "qualification_quote": ""}
+                for action, subject, quote in (
+                    ("test_result_review", "CBC", "Data: reviewed outside CBC (no anemia)."),
+                    ("test_order", "fecal occult blood test", "Ordered fecal occult blood test."))
             ],
-            "risk": {
-                "level": "moderate",
-                "drivers": ["Decision to refer for diagnostic colonoscopy (invasive procedure)",
-                            "Undiagnosed new problem with uncertain prognosis"],
-                "quote": "refer you for a colonoscopy to be safe",
-            },
+            # A referral alone establishes neither a surgery decision nor its
+            # management risk. The source contains no qualifying risk claim.
+            "mdm_risk_events": [],
             "vitals": {"bmi": 37.6, "documented": True, "addressed_in_plan": False,
                        "quote": "5 feet and 9 inches tall and weigh 255 pounds"},
             "family_history_colon_cancer": False,

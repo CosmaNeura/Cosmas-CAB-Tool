@@ -1,0 +1,260 @@
+{
+  "sourceInputsSha256": "24ac0d264a76651fc92a98704e67f52e2aaab4de6d61665b379c9ced28ae7ae8",
+  "cases": [
+    {
+      "index": 10,
+      "source": {
+        "encounter_id": "SYN-CAB-20260930-10",
+        "patient_age": 26,
+        "patient_sex": "F",
+        "encounter_type": "office_new",
+        "place_of_service": "11",
+        "intake_text": "",
+        "transcript": "",
+        "signed_note": "SYNTHETIC TEST NOTE \u2014 SYN-CAB-20260930-10\nSYNTHETIC COMPLETED VISIT \u2014 2026-09-30. Practice CAB-FIXTURE-PRACTICE; clinician CAB-FIXTURE-CLINICIAN-01. This encounter is newly authored except for explicitly labeled imported history. Signed status is a fixture convention; no clinician actually reviewed or signed this case.\n\nNew patient, office visit, POS 11, Reproductive Endocrinology. The patient is a 26-year-old woman seeking another pregnancy and asking whether tubal reconstruction could restore fertility. In the authored history she has cycles every 40\u201375 days for eight months, light chin hair growth, and difficulty identifying a fertile window. She has not undergone reversal and understands that ovulation tracking alone cannot overcome tubal interruption. There is no current pelvic pain, heavy bleeding, galactorrhea, severe headache, or visual change. A home pregnancy test yesterday was negative by her report; no pregnancy test was performed here.\n\nImported history records bilateral tubal ligation on 2025-11-02, hypertension, and BMI 30.3 on 2026-04-04. Blood pressure at that historical visit was 153/116. An open medication row lists amlodipine/hydrochlorothiazide/olmesartan. Today's authored reconciliation confirms one combination tablet daily; adherence and current use are fictional additions, not established by the source row. The original tubal operative report and any residual tubal length are unavailable.\n\nToday's authored examination shows BP 136/86, repeat 134/84, pulse 78, weight 89 kg, and a comfortable, conversant patient. Abdomen is soft and nontender. Mild terminal chin hair is present without rapid virilization. Pelvic examination was deferred by agreement because she has no acute pelvic symptoms and imaging is planned. No imaging, specimen collection, or procedure was performed.\n\nAssessment is a desire for fertility restoration after documented sterilization, with oligomenorrhea requiring evaluation for ovulatory dysfunction. Polycystic ovary syndrome remains a differential diagnosis; obesity and irregular cycles alone do not establish it. Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services. Results are pending. We will obtain the operative report before discussing reconstruction suitability, potential ectopic pregnancy risk, and realistic chances of conception. There is no surgical booking or clearance today.\n\nWe discussed gradual nutrition and activity changes without making weight loss a promise of restored fertility. Because the current antihypertensive includes olmesartan, I advised deferring conception attempts until her prescribing clinician transitions treatment and confirms blood-pressure stability; a medication review within one week was recommended. No antihypertensive was stopped or prescribed at this visit. Begin an over-the-counter prenatal vitamin with folic acid. Return in four weeks with cycle records, testing, and operative documentation. New severe pain, fainting, or bleeding with a positive pregnancy test warrants urgent assessment.\n\nTotal eligible physician/QHP time on this date was 44 minutes: 8 reviewing selected records, 27 obtaining history, examining and counseling, and 9 placing orders and documenting. Staff, waiting, travel, separately reported procedures, and work on other dates are excluded.",
+        "provider_specialty": "Reproductive Endocrinology",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      },
+      "extractions": [
+        {
+          "chief_complaint": "Seeking another pregnancy and asking whether tubal reconstruction could restore fertility",
+          "family_history_quote": "",
+          "mdm_data_events": [
+            {
+              "action": "test_order",
+              "subject": "TSH",
+              "source": "signed_note",
+              "identity_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "action_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "qualification_quote": ""
+            },
+            {
+              "action": "test_order",
+              "subject": "prolactin",
+              "source": "signed_note",
+              "identity_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "action_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "qualification_quote": ""
+            },
+            {
+              "action": "test_order",
+              "subject": "total testosterone",
+              "source": "signed_note",
+              "identity_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "action_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "qualification_quote": ""
+            },
+            {
+              "action": "test_order",
+              "subject": "pelvic ultrasound",
+              "source": "signed_note",
+              "identity_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "action_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "qualification_quote": ""
+            }
+          ],
+          "mdm_problem_events": [
+            {
+              "name": "desire for fertility restoration after documented sterilization",
+              "source": "signed_note",
+              "identity_quote": "Assessment is a desire for fertility restoration after documented sterilization, with oligomenorrhea requiring evaluation for ovulatory dysfunction.",
+              "addressed_quote": "We will obtain the operative report before discussing reconstruction suitability, potential ectopic pregnancy risk, and realistic chances of conception.",
+              "status_quote": "The original tubal operative report and any residual tubal length are unavailable."
+            },
+            {
+              "name": "oligomenorrhea requiring evaluation for ovulatory dysfunction",
+              "source": "signed_note",
+              "identity_quote": "Assessment is a desire for fertility restoration after documented sterilization, with oligomenorrhea requiring evaluation for ovulatory dysfunction.",
+              "addressed_quote": "Orders placed today are TSH, prolactin, total testosterone, and pelvic ultrasound through outside services.",
+              "status_quote": "Polycystic ovary syndrome remains a differential diagnosis; obesity and irregular cycles alone do not establish it."
+            },
+            {
+              "name": "hypertension",
+              "source": "signed_note",
+              "identity_quote": "Imported history records bilateral tubal ligation on 2025-11-02, hypertension, and BMI 30.3 on 2026-04-04.",
+              "addressed_quote": "Because the current antihypertensive includes olmesartan, I advised deferring conception attempts until her prescribing clinician transitions treatment and confirms blood-pressure stability; a medication review within one week was recommended.",
+              "status_quote": ""
+            },
+            {
+              "name": "obesity",
+              "source": "signed_note",
+              "identity_quote": "Polycystic ovary syndrome remains a differential diagnosis; obesity and irregular cycles alone do not establish it.",
+              "addressed_quote": "We discussed gradual nutrition and activity changes without making weight loss a promise of restored fertility.",
+              "status_quote": ""
+            }
+          ],
+          "mdm_risk_events": [
+            {
+              "action": "medication_management",
+              "subject": "olmesartan",
+              "source": "signed_note",
+              "action_quote": "Because the current antihypertensive includes olmesartan, I advised deferring conception attempts until her prescribing clinician transitions treatment and confirms blood-pressure stability; a medication review within one week was recommended.",
+              "decision_quote": "No antihypertensive was stopped or prescribed at this visit.",
+              "qualification_quote": ""
+            },
+            {
+              "action": "medication_management",
+              "subject": "over-the-counter prenatal vitamin with folic acid",
+              "source": "signed_note",
+              "action_quote": "Begin an over-the-counter prenatal vitamin with folic acid.",
+              "decision_quote": "Begin an over-the-counter prenatal vitamin with folic acid.",
+              "qualification_quote": "Begin an over-the-counter prenatal vitamin with folic acid."
+            }
+          ],
+          "total_time_minutes": 44,
+          "total_time_quote": "Total eligible physician/QHP time on this date was 44 minutes: 8 reviewing selected records, 27 obtaining history, examining and counseling, and 9 placing orders and documenting.",
+          "vitals": {
+            "blood_pressure": "136/86",
+            "repeat_blood_pressure": "134/84",
+            "pulse": 78,
+            "weight_kg": 89
+          }
+        },
+        {
+          "diagnoses": [
+            {
+              "concept": "Encounter for fertility restoration evaluation after sterilization",
+              "primary": true,
+              "quote": "Assessment is a desire for fertility restoration after documented sterilization, with oligomenorrhea requiring evaluation for ovulatory dysfunction."
+            },
+            {
+              "concept": "Oligomenorrhea",
+              "primary": false,
+              "quote": "Assessment is a desire for fertility restoration after documented sterilization, with oligomenorrhea requiring evaluation for ovulatory dysfunction."
+            },
+            {
+              "concept": "Hypertension",
+              "primary": false,
+              "quote": "Imported history records bilateral tubal ligation on 2025-11-02, hypertension, and BMI 30.3 on 2026-04-04."
+            },
+            {
+              "concept": "Obesity",
+              "primary": false,
+              "quote": "Polycystic ovary syndrome remains a differential diagnosis; obesity and irregular cycles alone do not establish it."
+            }
+          ]
+        }
+      ],
+      "signedNoteSha256": "ecbb71ba87f548dcd8b0ce512d551d2bf5f651c5669160683f0ab66a102c4cc0",
+      "sourceResultSha256": "957371205848c98b754d1db114a12d56557e7db4138f121831ae39268d9b1a9b",
+      "extractionObjectSha256": [
+        "bdb04e1bb3445e84e6b073a7af0c7243e9dfde23cf007ca39920a63350a45634",
+        "0cb6e8c3ba0aa52937c646807895c6eb65be8a12c0d9310b74e2c8860887b199"
+      ],
+      "baselineEmCode": "99203",
+      "baselineCapturedDiagnoses": [
+        "E66.9",
+        "N91.5"
+      ]
+    },
+    {
+      "index": 11,
+      "source": {
+        "encounter_id": "SYN-CAB-20260930-11",
+        "patient_age": 31,
+        "patient_sex": "F",
+        "encounter_type": "telehealth_established",
+        "place_of_service": "10",
+        "intake_text": "",
+        "transcript": "",
+        "signed_note": "SYNTHETIC TEST NOTE \u2014 SYN-CAB-20260930-11\nSYNTHETIC COMPLETED VISIT \u2014 2026-09-30. Practice CAB-FIXTURE-PRACTICE; clinician CAB-FIXTURE-CLINICIAN-01. This encounter is newly authored except for explicitly labeled imported history. Signed status is a fixture convention; no clinician actually reviewed or signed this case.\n\nEstablished patient, synchronous audio-video visit while the patient is at home, POS 10, Obstetrics and Gynecology. The patient is a 31-year-old woman requesting guidance on when she can try to conceive again following a recent first-trimester loss. Her established relationship with this fictional practice is authored. The fictional patient was at home in Virginia and the fictional clinician was in the clinic in Virginia. Video connection and consent are documented within the fixture.\n\nImported history lists miscarriage beginning 2026-09-06 without a recorded stop date. The associated pregnancy and fetal-complication rows end 2026-09-20. A fetal-viability ultrasound procedure is listed on 2026-09-06, but no interpretive report confirming location or completion is available. RhD passive immunization is recorded on 2026-09-20; there is also an older childbirth record. Those structured entries do not prove a completed miscarriage or establish today's pregnancy status.\n\nIn today's authored account, she describes expectant management, passage of tissue about two weeks ago, and bleeding that stopped five days ago. A home urine pregnancy test yesterday remained faintly positive. She denies abdominal or shoulder pain, dizziness, fever, foul discharge, or current bleeding. She has not resumed intercourse since the loss. Before this pregnancy, cycles were every 28\u201332 days, and she conceived after three months of trying. She reports no other pregnancy losses. These reproductive details are authored additions. An imported vaginal-ring medication remains open dated; she now reports stopping it before conception, and the historical stop date remains unverified.\n\nOn the authored video assessment she appears comfortable, speaks normally, and is intermittently tearful while discussing the loss. No abdominal or pelvic examination, vital signs, formal depression instrument, or laboratory testing was performed. She describes support at home and denies thoughts of self-harm; grief is acknowledged without assigning a psychiatric diagnosis.\n\nAssessment is recent pregnancy loss with completion and current pregnancy location unconfirmed, plus a request for preconception counseling. I ordered quantitative serum hCG through a local laboratory and a transvaginal ultrasound for prompt outpatient assessment. If hCG is detectable, a repeat level in 48 hours is planned; trend and imaging must be interpreted together. No results are available today. Follow-up is arranged within two days to review initial findings and confirm the next step. Persistent trophoblastic tissue or ectopic pregnancy cannot be ruled out by this remote visit.\n\nAvoid attempts at conception until the current pregnancy has been resolved and the evaluation reviewed. After resolution, discuss readiness and start a prenatal vitamin containing 400\u2013800 micrograms of folic acid. One reported loss does not establish recurrent pregnancy loss or infertility. No fertility medication, uterine procedure, or empiric hormone treatment was provided. New one-sided pain, shoulder pain, fainting, fever, or heavy bleeding requires urgent in-person evaluation.\n\nTotal eligible physician/QHP time today was 26 minutes: 4 reviewing selected records, 18 in history and counseling, and 4 ordering and documenting. Staff time, waiting, connection setup, separately reported procedures, and work on other dates are excluded.",
+        "provider_specialty": "Obstetrics and Gynecology",
+        "submitted_em_code": null,
+        "submitted_icd10": []
+      },
+      "extractions": [
+        {
+          "chief_complaint": "Guidance on when she can try to conceive again following a recent first-trimester loss.",
+          "family_history_quote": "",
+          "mdm_data_events": [
+            {
+              "action": "test_order",
+              "subject": "quantitative serum hCG",
+              "source": "signed_note",
+              "identity_quote": "I ordered quantitative serum hCG through a local laboratory and a transvaginal ultrasound for prompt outpatient assessment.",
+              "action_quote": "I ordered quantitative serum hCG through a local laboratory and a transvaginal ultrasound for prompt outpatient assessment.",
+              "qualification_quote": ""
+            },
+            {
+              "action": "test_order",
+              "subject": "transvaginal ultrasound",
+              "source": "signed_note",
+              "identity_quote": "I ordered quantitative serum hCG through a local laboratory and a transvaginal ultrasound for prompt outpatient assessment.",
+              "action_quote": "I ordered quantitative serum hCG through a local laboratory and a transvaginal ultrasound for prompt outpatient assessment.",
+              "qualification_quote": ""
+            }
+          ],
+          "mdm_problem_events": [
+            {
+              "name": "recent pregnancy loss",
+              "source": "signed_note",
+              "identity_quote": "Assessment is recent pregnancy loss with completion and current pregnancy location unconfirmed, plus a request for preconception counseling.",
+              "addressed_quote": "I ordered quantitative serum hCG through a local laboratory and a transvaginal ultrasound for prompt outpatient assessment.",
+              "status_quote": "Persistent trophoblastic tissue or ectopic pregnancy cannot be ruled out by this remote visit."
+            },
+            {
+              "name": "preconception counseling",
+              "source": "signed_note",
+              "identity_quote": "Assessment is recent pregnancy loss with completion and current pregnancy location unconfirmed, plus a request for preconception counseling.",
+              "addressed_quote": "Avoid attempts at conception until the current pregnancy has been resolved and the evaluation reviewed. After resolution, discuss readiness and start a prenatal vitamin containing 400\u2013800 micrograms of folic acid.",
+              "status_quote": "One reported loss does not establish recurrent pregnancy loss or infertility."
+            },
+            {
+              "name": "grief",
+              "source": "signed_note",
+              "identity_quote": "She describes support at home and denies thoughts of self-harm; grief is acknowledged without assigning a psychiatric diagnosis.",
+              "addressed_quote": "She describes support at home and denies thoughts of self-harm; grief is acknowledged without assigning a psychiatric diagnosis.",
+              "status_quote": "On the authored video assessment she appears comfortable, speaks normally, and is intermittently tearful while discussing the loss."
+            }
+          ],
+          "mdm_risk_events": [
+            {
+              "action": "individualized_management",
+              "subject": "attempts at conception",
+              "source": "signed_note",
+              "action_quote": "Avoid attempts at conception until the current pregnancy has been resolved and the evaluation reviewed.",
+              "decision_quote": "Avoid attempts at conception until the current pregnancy has been resolved and the evaluation reviewed.",
+              "qualification_quote": ""
+            },
+            {
+              "action": "medication_management",
+              "subject": "prenatal vitamin containing 400\u2013800 micrograms of folic acid",
+              "source": "signed_note",
+              "action_quote": "After resolution, discuss readiness and start a prenatal vitamin containing 400\u2013800 micrograms of folic acid.",
+              "decision_quote": "After resolution, discuss readiness and start a prenatal vitamin containing 400\u2013800 micrograms of folic acid.",
+              "qualification_quote": ""
+            }
+          ],
+          "total_time_minutes": 26,
+          "total_time_quote": "Total eligible physician/QHP time today was 26 minutes: 4 reviewing selected records, 18 in history and counseling, and 4 ordering and documenting. Staff time, waiting, connection setup, separately reported procedures, and work on other dates are excluded.",
+          "vitals": {}
+        },
+        {
+          "diagnoses": [
+            {
+              "concept": "Recent pregnancy loss with completion and current pregnancy location unconfirmed",
+              "primary": true,
+              "quote": "Assessment is recent pregnancy loss with completion and current pregnancy location unconfirmed, plus a request for preconception counseling."
+            },
+            {
+              "concept": "Encounter for preconception counseling",
+              "primary": false,
+              "quote": "Assessment is recent pregnancy loss with completion and current pregnancy location unconfirmed, plus a request for preconception counseling."
+            }
+          ]
+        }
+      ],
+      "signedNoteSha256": "7d2966dd3c55a8b7321a5f4b5b81cef5543a052ad9525543b35935bb590ad2f9",
+      "sourceResultSha256": "cf349335e505ca1488302df45a76fdf4db0ee4fec593af2d559e8fb634f50931",
+      "extractionObjectSha256": [
+        "3a15a90e359f5aa8ddb4bfe2d22da7a7833ac4d58f49f583a267189ab3b07b32",
+        "e99e81d7e8ffb2fcf49be6f278bb73d3c11baee799a7c89db4caaf3d2476153e"
+      ],
+      "baselineEmCode": "99213",
+      "baselineCapturedDiagnoses": [
+        "Z31.69"
+      ]
+    }
+  ]
+}

@@ -1,8 +1,20 @@
-"""Direct problem/order ownership; full-engine and corpus replay stay in C6."""
+"""Problem/order ownership with cached source evidence and full-engine controls."""
+from copy import deepcopy
+from dataclasses import asdict, replace
+from pathlib import Path
+import hashlib
+import json
+
 import pytest
 
 from cosmaneura_billing import mdm_problems as problems
-from cosmaneura_billing.schemas import VisitBundle
+from cosmaneura_billing.agents.coding import CodingAgent
+from cosmaneura_billing.agents.compliance_guardrail import ComplianceGuardrailAgent
+from cosmaneura_billing.knowledge.icd10_ccsr import ICD10CCSR
+from cosmaneura_billing.llm import MockLLM
+from cosmaneura_billing.orchestrator import BillingOrchestrator
+from cosmaneura_billing.schemas import CodeKind, Disposition, VisitBundle
+from cosmaneura_billing.settings import Settings
 
 
 def example(action, *, second=None, suffix=None, later=""):
@@ -105,3 +117,96 @@ def test_later_current_order_retraction_cannot_be_clipped():
     q = example("I ordered an ultrasound for prompt outpatient assessment.",
                 later="Correction: that order was cancelled today.")
     assert not q.has_addressed and not q.addressed_evidence()
+
+
+FIXTURE = json.loads((Path(__file__).parent / "fixtures/diagnostic_order_care.json").read_text())
+
+
+CASES = {case["index"]: case for case in FIXTURE["cases"]}
+
+
+class CachedObjects(MockLLM):
+    def __init__(self, case):
+        self.objects = case["extractions"]
+        self.calls = []
+
+    def complete_json(self, **kwargs):
+        name = "extract_clinical_facts" if "extract_clinical_facts" in kwargs["user"] else "propose_diagnoses"
+        self.calls.append(name)
+        return deepcopy(self.objects[0 if name == "extract_clinical_facts" else 1])
+
+
+@pytest.fixture(scope="module")
+def catalogue():
+    return ICD10CCSR()
+
+
+@pytest.mark.parametrize("number", [10, 11])
+def test_unchanged_sources_keep_problem_holds_and_levels_with_separate_encounter_care(number, catalogue):
+    case = deepcopy(CASES[number]); before = deepcopy(case)
+    bundle = VisitBundle(**case["source"])
+    raw = case["extractions"][0]["mdm_problem_events"]
+    assert hashlib.sha256(bundle.signed_note.encode()).hexdigest() == case["signedNoteSha256"]
+    qualified = problems.qualify_problems(raw, bundle)
+    assert qualified.public["rule_version"] == "office-mdm-problems.2026-09-30.v4"
+    assert not qualified.has_addressed and not qualified.established
+    assert not qualified.addressed_evidence() and not qualified.supports_addressed([])
+    llm = CachedObjects(case)
+    result = BillingOrchestrator(llm=llm, icd10=catalogue, settings=Settings(
+        preferences_enabled=False, azure_openai_enabled=False,
+        azure_language_enabled=False, azure_language_shadow_enabled=False)).process(bundle)
+    suggestions = result.provider_card.captured_codes + result.provider_card.declined_codes
+    em = next(s for s in suggestions if s.kind == CodeKind.EM)
+    # The committed prior output is a comparison baseline, not a code selector.
+    assert em.code == case["baselineEmCode"]
+    assert em.disposition == Disposition.CAPTURED
+    assert em.necessity_supported and "em_pathway:total_time" in em.notes
+    assert "individual problem linkage remains unresolved" in em.rationale
+    assert all(e["status"] == "held" for e in em.clinical_review["problems"]["events"])
+    assert em.clinical_review["risk"]["rule_version"].endswith(".v3")
+    assert sorted(s.code for s in result.provider_card.captured_codes if s.kind == CodeKind.ICD10) == case["baselineCapturedDiagnoses"]
+    assert llm.calls == ["extract_clinical_facts", "propose_diagnoses"]
+    assert asdict(bundle) == case["source"] and case == before
+
+
+def single_problem_case():
+    identity = "Assessment is abdominal pain with cause unconfirmed."
+    action = "I ordered an ultrasound for prompt outpatient assessment."
+    time = "Total physician time on the date of service: 26 minutes."
+    bundle = VisitBundle("synthetic-single-problem-order", 30, "F", "office_established", "11",
+                         signed_note=identity + " " + action + "\n\n" + time)
+    raw = {"chief_complaint": "Abdominal pain evaluation", "mdm_problem_events": [dict(
+        name="abdominal pain", source="signed_note", identity_quote=identity,
+        addressed_quote=action, status_quote=identity)], "mdm_risk_events": [],
+        "mdm_data_events": [], "total_time_minutes": 26, "total_time_quote": time}
+    return {"source": asdict(bundle), "extractions": [raw, {"diagnoses": []}]}
+
+
+@pytest.mark.parametrize("tamper", [None, "lost-identity", "wrong-role", "raw-owner"])
+def test_order_care_needs_complete_retained_source_and_raw_identity(tamper, catalogue):
+    case = single_problem_case(); bundle = VisitBundle(**case["source"])
+    if tamper is None:
+        result = BillingOrchestrator(llm=CachedObjects(case), icd10=catalogue, settings=Settings(
+            preferences_enabled=False, azure_openai_enabled=False,
+            azure_language_enabled=False, azure_language_shadow_enabled=False)).process(bundle)
+        em = next(s for s in result.provider_card.captured_codes if s.kind == CodeKind.EM)
+        assert em.necessity_supported and "em_pathway:total_time" in em.notes
+        assert all(e["status"] == "held" for e in em.clinical_review["problems"]["events"])
+        qualified = problems.qualify_problems(case["extractions"][0]["mdm_problem_events"], bundle)
+        proof = qualified.addressed_evidence_groups()[0]
+        assert len(proof) == 2 and all(e.rationale == "Current clinical work: mdm-problem-1" for e in proof)
+        assert qualified.supports_addressed(em.evidence) and not qualified.supports_addressed(proof[:1])
+        return
+    facts, suggestions = CodingAgent(CachedObjects(case), catalogue).run(bundle)
+    em = next(s for s in suggestions if s.kind == CodeKind.EM)
+    proof = [e for e in em.evidence if e.rationale.startswith("Current clinical work:")]
+    assert len(proof) == 2
+    if tamper == "lost-identity":
+        em.evidence.remove(proof[0])
+    elif tamper == "wrong-role":
+        em.evidence = [replace(e, rationale="MDM problems: mdm-problem-1") if e in proof else e for e in em.evidence]
+    else:
+        facts["mdm_problem_events"][0]["name"] = "hypothyroidism"
+    result, _ = ComplianceGuardrailAgent().run(facts, [em], new_patient=False)
+    assert result[0].disposition == Disposition.REVIEW
+    assert not result[0].necessity_supported

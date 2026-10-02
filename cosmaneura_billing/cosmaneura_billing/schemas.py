@@ -85,6 +85,10 @@ class CodeSuggestion:
     # primary engine ran, so single-engine output is unchanged).
     source_engine: str = ""                     # "primary" | "ta4h" | "both"
     agreement: str = ""                         # "both" | "primary_only" | "ta4h_only"
+    # Explanation only; deterministic leveling uses a private source-qualified
+    # object, never this JSON ledger or a model-provided count.
+    data_review: dict | None = None
+    clinical_review: dict | None = None
 
     @property
     def has_evidence(self) -> bool:

@@ -37,18 +37,14 @@ class FeedbackAgent:
                 patient_benefit="Complete documentation reflects the care actually delivered.",
             ))
 
-        # 2) Care-quality follow-up -> provider, framed around the patient
-        risk = facts.get("risk", {})
-        if any("colonoscop" in d.lower() for d in risk.get("drivers", [])):
-            events.append(FeedbackEvent(
-                kind=FeedbackKind.CARE_QUALITY, target=FeedbackTarget.PROVIDER,
-                message="Rectal bleeding in this patient warrants completing the colonoscopy you "
-                        "ordered. Consider flagging the patient for navigation/follow-up so it isn't lost.",
-                patient_benefit="Timely completion of an indicated diagnostic study; closes the loop on bleeding.",
-            ))
+        # A raw risk-driver label is not evidence of a completed order or an
+        # indication for further care. Do not manufacture clinical directives.
 
         # 3) Intake completeness -> the intake agent (improves the next history)
-        problem_names = " ".join(p.get("name", "").lower() for p in facts.get("problems", []))
+        from ..mdm_problems import QualifiedProblems
+        problems = facts.get("_qualified_problems")
+        problem_names = " ".join(e.subject.lower() for e in problems.events if e.addressed) \
+            if isinstance(problems, QualifiedProblems) and problems.matches(facts.get("mdm_problem_events")) else ""
         if "bleed" in problem_names or "hematochezia" in problem_names:
             events.append(FeedbackEvent(
                 kind=FeedbackKind.INTAKE_COMPLETENESS, target=FeedbackTarget.INTAKE_AGENT,

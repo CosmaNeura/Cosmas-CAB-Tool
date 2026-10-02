@@ -52,7 +52,7 @@ def test_secondary_engine_failure_degrades_to_single_engine():
     result = BillingOrchestrator(ta4h=BrokenTA4H()).process(SAMPLE_VISIT)
     audit = "\n".join(result.biller_worksheet.audit_trail)
     assert "secondary extraction engine unavailable" in audit
-    assert result.biller_worksheet.em_code.code == "99214"
+    assert result.biller_worksheet.em_code is None
 
 
 def test_secondary_evidence_cannot_replace_fabricated_primary_evidence():
@@ -133,7 +133,7 @@ def test_secondary_failure_audit_never_includes_exception_text():
 # The no-upcode invariant holds with two engines
 # --------------------------------------------------------------------------- #
 def test_em_level_identical_with_and_without_the_second_engine(single, dual):
-    assert dual.biller_worksheet.em_code.code == single.biller_worksheet.em_code.code == "99214"
+    assert dual.biller_worksheet.em_code is single.biller_worksheet.em_code is None
 
 
 def test_second_engine_captures_no_code_the_first_did_not(single, dual):
