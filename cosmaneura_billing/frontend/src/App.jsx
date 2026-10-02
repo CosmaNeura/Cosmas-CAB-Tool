@@ -255,7 +255,8 @@ export default function App() {
 
         <p className="mt-6 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
           <Info size={12} />
-          Prepared billing guidance only — no EHR, Athena, clearinghouse, payer, or patient transmission occurred.
+          {view === "chase" ? "Staff review governs outreach. Check each message's delivery status in Communications."
+            : "Prepared billing guidance only — no EHR, Athena, clearinghouse, payer, or patient transmission occurred."}
         </p>
       </div>
     </div>
