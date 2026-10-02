@@ -36,3 +36,13 @@ review and bounded PR; no independent review gate is asserted.
 
 Recovery: remove provider model policy and retire prior app revisions; retain025
 and immutable source/header history. No downgrade that bypasses admission.
+
+## Source-context integration repair
+
+The local browser exposed a missing detail projection: the immutable provider
+manifest had service date/completion, but the API did not invoke the existing
+source-context reader. Add the exact final projection and complete original
+two-case API contract, plus restricted-PostgreSQL detail assertions. This does
+not change source/header hashes or model authority. Preserve the earlier
+88-case pass as prior validation and rerun the affected API cases only. The
+frontend browser resumes after its already-passing fixture handoff phase.

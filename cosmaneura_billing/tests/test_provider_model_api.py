@@ -30,7 +30,14 @@ def test_registered_synthetic_provider_generates_and_recovers_after_policy_remov
     target = {"encounterId": f.stored.bundle.encounter_id}
     command = {**target, "expectedSource": source_snapshot(f.stored), "operationId": str(uuid4())}
     assert client.get("/api/ready").status_code == 200
-    assert client.post("/api/encounters/detail", json=target).json()["inferencePolicy"] == {"allowed": True, "reason": None}
+    detail = client.post("/api/encounters/detail", json=target).json()
+    assert detail["inferencePolicy"] == {"allowed": True, "reason": None}
+    assert detail["sourceVisitContext"] == {
+        "schemaVersion": "cab.source-visit-context.v1", "expectedSource": source_snapshot(f.stored),
+        "origin": "provider_manifest", "sourceSha256": f.receipt["receipt"]["sourceManifestSha256"],
+        "serviceDate": "2026-09-28", "noteStatus": "completed", "statusMeaning": "provider_attested",
+    }
+    assert not f.fake.calls  # Reading source metadata never generates.
     response = client.post("/api/encounters/header/generate", json=command)
     assert response.status_code == 200, response.text
     proof = response.json()["view"]["header"]["generation"]["modelInputProof"]
