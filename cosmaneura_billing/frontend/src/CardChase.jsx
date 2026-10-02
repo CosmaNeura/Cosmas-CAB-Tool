@@ -4,6 +4,8 @@ import {
   RefreshCw, Search, UserCheck,
 } from "lucide-react";
 import { api } from "./api.js";
+import CaseCommunications from "./CaseCommunications.jsx";
+import { reviewCounts } from "./communicationsEventReview.js";
 import {
   CHASE_CHANNELS, chaseAttemptTime, chaseMinutesLabel, chaseOutcomeLabel, readChaseActivity,
 } from "./chaseActivity.js";
@@ -96,13 +98,15 @@ function CaseActivity({ value }) {
 
 function FollowUpTask({
   task, loading, error, manageChase, actionBusy, actionError,
-  actionNotice, retryAction, onAction,
+  actionNotice, retryAction, onAction, onReviewCounts, onReviewLock,
 }) {
   const [outcome, setOutcome] = useState("reached");
   const [minutes, setMinutes] = useState("0");
   const [note, setNote] = useState("");
   const [confirming, setConfirming] = useState(null);
   const [panel, setPanel] = useState("summary");
+  const hasCommunications = task?.communications?.available === true && ["simulated", "durable"].includes(task.communications.mode);
+  const panels = ["summary", "activity", ...(hasCommunications ? ["communications"] : [])];
   const may = (action) => (
     manageChase && Array.isArray(task?.allowedActions)
       && task.allowedActions.includes(action)
@@ -139,15 +143,16 @@ function FollowUpTask({
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 border-b border-slate-200 px-5">
         <div role="tablist" aria-label="Case sections" className="flex gap-5">
-          {["summary", "activity"].map((name) => <button key={name} type="button" role="tab" aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} aria-controls={`case-${name}`} id={`case-${name}-tab`} onClick={() => setPanel(name)} onKeyDown={(event) => {
+          {panels.map((name) => <button key={name} type="button" role="tab" aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} aria-controls={`case-${name}`} id={`case-${name}-tab`} onClick={() => setPanel(name)} onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
-            const next = event.key === "Home" ? "summary" : event.key === "End" ? "activity" : name === "summary" ? "activity" : "summary";
+            const next = event.key === "Home" ? panels[0] : event.key === "End" ? panels.at(-1) : panels[(panels.indexOf(name) + (event.key === "ArrowRight" ? 1 : -1) + panels.length) % panels.length];
             setPanel(next); document.getElementById(`case-${next}-tab`)?.focus();
-          }} className={`border-b-2 pb-3 text-sm font-medium ${panel === name ? "border-sky-700 text-sky-800" : "border-transparent text-slate-500 hover:text-slate-900"}`}>{name === "summary" ? "Summary" : "Activity"}</button>)}
+          }} className={`border-b-2 pb-3 text-sm font-medium ${panel === name ? "border-sky-700 text-sky-800" : "border-transparent text-slate-500 hover:text-slate-900"}`}>{({summary: "Summary", activity: "Activity", communications: "Communications"})[name]}</button>)}
         </div>
       </div>
       <div id="case-activity" role="tabpanel" aria-labelledby="case-activity-tab" hidden={panel !== "activity"} className="px-5 pb-5"><CaseActivity value={task.activity} /></div>
+      {hasCommunications && <div id="case-communications" role="tabpanel" aria-labelledby="case-communications-tab" hidden={panel !== "communications"} className="px-5 pb-1"><CaseCommunications task={task} active={panel === "communications"} manageChase={manageChase} blocked={actionBusy} onReviewCounts={onReviewCounts} onReviewLock={onReviewLock} /></div>}
       <div id="case-summary" role="tabpanel" aria-labelledby="case-summary-tab" hidden={panel !== "summary"} className="p-5">
       {(() => {
         const activity = readChaseActivity(task.activity);
@@ -163,7 +168,7 @@ function FollowUpTask({
           </p>
           <p className="mt-1 font-mono text-lg text-slate-900">{task.contact.destination}</p>
           <p className="mt-1 text-xs text-sky-800">
-            Display only. The application does not dial, text, email, or open an external link.
+            Display only. Use the Communications section when available to review and authorize a text.
           </p>
         </div>
       ) : (
@@ -368,12 +373,22 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskError, setTaskError] = useState(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [reviewLocked, setReviewLocked] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [actionNotice, setActionNotice] = useState(null);
   const [retry, setRetry] = useState(null);
   const [selectedChaseId, setSelectedChaseId] = useState(null);
   const selectedChaseIdRef = useRef(null);
   const taskRequestIdRef = useRef(0);
+
+  const updateReviewCounts = (chaseId, value, refreshQueue = false) => {
+    const counts = reviewCounts(value);
+    if (!counts || selectedChaseIdRef.current !== chaseId) return;
+    setTask((current) => current?.chaseId === chaseId ? { ...current, communicationReview: counts } : current);
+    setWorklist((current) => current ? { ...current, rows: current.rows.map((row) => row.chaseId === chaseId
+      ? { ...row, communicationReview: counts } : row) } : current);
+    if (refreshQueue) load();
+  };
 
   const load = async () => {
     if (!live) return;
@@ -432,7 +447,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
   };
 
   const refresh = async () => {
-    if (!live || actionBusy) return;
+    if (!live || actionBusy || reviewLocked) return;
     const chaseId = selectedChaseIdRef.current;
     // Refresh selected-case activity too. openTaskById hides the old detail and
     // discards this response if the user selects another case while it loads.
@@ -527,11 +542,11 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
         <div><h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-950"><CreditCard size={23} className="text-sky-700" />Insurance follow-up</h1><p className="mt-1 text-sm text-slate-500">One queue for missing cards, expired plans, and eligibility exceptions.</p></div>
         <div className="flex items-center gap-5">
           <dl className="flex gap-5 text-sm">{[["Open", counts?.open], ["Needs review", counts?.needs_person], ["Unassigned", counts?.unassigned]].map(([label, value]) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="font-semibold text-slate-900">{number(value)}</dd></div>)}</dl>
-          <button onClick={refresh} disabled={loading || taskLoading || actionBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-60"><RefreshCw size={14} className={loading || taskLoading ? "animate-spin" : ""} />Refresh</button>
+          <button onClick={refresh} disabled={loading || taskLoading || actionBusy || reviewLocked} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-60"><RefreshCw size={14} className={loading || taskLoading ? "animate-spin" : ""} />Refresh</button>
         </div>
       </header>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-        {outbound && <details><summary className="cursor-pointer">{outbound.automaticContact ? "Outreach automation active" : "Manual outreach"} · Status details</summary><p className="mt-2">Outbound automation is {outbound.automaticContact ? "active" : "off"}; transport is {outbound.transport}. This surface opens manual tasks only and never sends patient messages.</p></details>}
+        {outbound && <details><summary className="cursor-pointer">{outbound.automaticContact ? "Outreach automation active" : "Manual outreach"} · Status details</summary><p className="mt-2">Outbound automation is {outbound.automaticContact ? "active" : "off"}; transport is {outbound.transport}. Manual actions only record work. Text drafts require separate staff authorization in Communications when available.</p></details>}
         {demoSeed && <details><summary className="cursor-pointer">Demo setup</summary><div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"><p>Admin only. Fixed {demoSeed.caseCount}-case synthetic pack.</p><button onClick={seedSyntheticDemo} disabled={seeding} className="rounded-md border border-slate-300 px-2 py-1 font-medium disabled:opacity-50">{seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}</button>{seedResult && <p role="status">{syntheticSeedConfirmationMessage(seedResult)}</p>}{seedError && <p role="alert">{seedError}</p>}</div></details>}
       </div>
       {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
@@ -548,7 +563,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
               {loading && !worklist ? <p className="p-5 text-sm text-slate-500">Loading follow-up work…</p> : !shown.length ? <p className="p-5 text-sm text-slate-500">{query ? "No cases match your search." : "No open tasks match this filter."}</p> : <div className="max-h-[650px] divide-y divide-slate-100 overflow-y-auto">{shown.map((row) => {
                 const [statusLabel, statusTone] = STATUS[row.state] || [row.state, "bg-slate-100 text-slate-600 ring-slate-300"];
                 return <button type="button" key={row.chaseId} onClick={() => openTask(row)} disabled={actionBusy} aria-pressed={selectedChaseId === row.chaseId} className={`grid w-full grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] items-center gap-2 border-l-[3px] px-3 py-3 text-left disabled:opacity-60 ${selectedChaseId === row.chaseId ? "border-sky-700 bg-sky-50" : "border-transparent hover:bg-slate-50"}`}>
-                  <span className="min-w-0"><span className="block truncate text-sm font-medium text-slate-900">{row.patientLabel}</span><span className="mt-1 inline-block"><Pill tone={statusTone}>{statusLabel}</Pill></span></span>
+                  <span className="min-w-0"><span className="block truncate text-sm font-medium text-slate-900">{row.patientLabel}</span><span className="mt-1 inline-block"><Pill tone={statusTone}>{statusLabel}</Pill></span>{reviewCounts(row.communicationReview)?.pending > 0 && <span className="mt-1 block text-[11px] font-medium text-amber-800">{row.communicationReview.pending} communication event{row.communicationReview.pending === 1 ? "" : "s"} to review</span>}</span>
                   <span className="text-xs text-slate-500">{row.bucket}<span className="mt-1 block text-[10px]">Priority {number(row.priority)}</span></span>
                   <span className="text-xs text-slate-500">{row.appointmentAt ? row.appointmentAt.slice(5, 10) : "—"}</span><span className="text-right text-sm font-medium text-slate-600">{number(row.touches)}</span>
                 </button>;
@@ -558,6 +573,8 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
         </section>
 
         <FollowUpTask
+          onReviewCounts={updateReviewCounts}
+          onReviewLock={setReviewLocked}
           key={task?.chaseId || "empty-task"}
           task={task}
           loading={taskLoading}
