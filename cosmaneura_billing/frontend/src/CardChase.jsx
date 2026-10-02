@@ -6,6 +6,8 @@ import {
 import { api } from "./api.js";
 import CaseCommunications from "./CaseCommunications.jsx";
 import { reviewCounts } from "./communicationsEventReview.js";
+import UnassignedTexts from "./UnassignedTexts.jsx";
+import {hasCommunicationCounts, listedCaseIds, mergeListedCounts, pollVisibleCounts, readListedCounts} from "./communicationCounts.js";
 import {
   CHASE_CHANNELS, chaseAttemptTime, chaseMinutesLabel, chaseOutcomeLabel, readChaseActivity,
 } from "./chaseActivity.js";
@@ -374,24 +376,63 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
   const [taskError, setTaskError] = useState(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [reviewLocked, setReviewLocked] = useState(false);
+  const [inboxLocked, setInboxLocked] = useState(false);
+  const [inboxRefresh, setInboxRefresh] = useState(0);
   const [actionError, setActionError] = useState(null);
   const [actionNotice, setActionNotice] = useState(null);
   const [retry, setRetry] = useState(null);
   const [selectedChaseId, setSelectedChaseId] = useState(null);
   const selectedChaseIdRef = useRef(null);
   const taskRequestIdRef = useRef(0);
+  const [countUpdate, setCountUpdate] = useState({at: null, stale: false});
+  const countState = useRef({epoch: 0, caseEpochs: new Map()});
+  countState.current = {...countState.current, worklist, bucket,
+    blocked: loading || actionBusy || reviewLocked || inboxLocked || !!retry};
+
+  useEffect(() => {
+    if (!live || !manageChase) return;
+    let epoch;
+    return pollVisibleCounts({
+      blocked: () => countState.current.blocked || !hasCommunicationCounts(countState.current.worklist),
+      read: async (signal) => {
+        epoch = countState.current.epoch;
+        const observed = epoch, caseEpochs = new Map(countState.current.caseEpochs);
+        const ids = listedCaseIds(countState.current.worklist);
+        const response = await api("/api/chase/worklist", {method: "POST", signal,
+          body: bucket ? {bucket} : {}});
+        return {epoch: observed, caseEpochs, counts: readListedCounts(response, ids)};
+      },
+      accept: ({epoch: observed, caseEpochs, counts}) => {
+        if (observed !== countState.current.epoch) return;
+        // Only badge counts change. Open task/source, ordering and edits stay put.
+        setWorklist((current) => {
+          if (observed !== countState.current.epoch) return current;
+          const newer = new Set(listedCaseIds(current).filter((id) =>
+            caseEpochs.get(id) !== countState.current.caseEpochs.get(id)));
+          return mergeListedCounts(current, counts, newer);
+        });
+        setCountUpdate({at: Date.now(), stale: false});
+      },
+      failed: () => { if (epoch === countState.current.epoch) setCountUpdate((current) => ({...current, stale: true})); },
+    });
+  }, [live, manageChase, bucket]);
+
 
   const updateReviewCounts = (chaseId, value, refreshQueue = false) => {
     const counts = reviewCounts(value);
     if (!counts || selectedChaseIdRef.current !== chaseId) return;
+    const epochs = countState.current.caseEpochs;
+    epochs.set(chaseId, (epochs.get(chaseId) || 0) + 1);
     setTask((current) => current?.chaseId === chaseId ? { ...current, communicationReview: counts } : current);
     setWorklist((current) => current ? { ...current, rows: current.rows.map((row) => row.chaseId === chaseId
       ? { ...row, communicationReview: counts } : row) } : current);
-    if (refreshQueue) load();
+    if (refreshQueue) { load(); setInboxRefresh((value) => value + 1); }
   };
 
   const load = async () => {
     if (!live) return;
+    countState.current.epoch++;
+    countState.current.caseEpochs = new Map();
     setLoading(true);
     setError(null);
     try {
@@ -400,6 +441,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
         body: bucket ? { bucket } : {},
       });
       setWorklist(result);
+      setCountUpdate({at: hasCommunicationCounts(result) ? Date.now() : null, stale: false});
     } catch (loadError) {
       setError(`Could not load insurance follow-up work: ${loadError.message}`);
     } finally {
@@ -447,7 +489,8 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
   };
 
   const refresh = async () => {
-    if (!live || actionBusy || reviewLocked) return;
+    if (!live || actionBusy || reviewLocked || inboxLocked) return;
+    setInboxRefresh((value) => value + 1);
     const chaseId = selectedChaseIdRef.current;
     // Refresh selected-case activity too. openTaskById hides the old detail and
     // discards this response if the user selects another case while it loads.
@@ -457,7 +500,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
   const submitAction = async (
     payload, successMessage, actionId = null, targetChaseId = task?.chaseId,
   ) => {
-    if (!manageChase || !targetChaseId) return;
+    if (!manageChase || !targetChaseId || inboxLocked) return;
     const chaseId = targetChaseId;
     setActionBusy(true);
     setActionError(null);
@@ -531,6 +574,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
     );
   }
 
+  const hasInbox = worklist?.communications?.available === true && worklist.communications.mode === "durable";
   const counts = worklist?.counts;
   const outbound = worklist?.outbound;
   const shown = (worklist?.rows || []).filter((row) =>
@@ -542,7 +586,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
         <div><h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-950"><CreditCard size={23} className="text-sky-700" />Insurance follow-up</h1><p className="mt-1 text-sm text-slate-500">One queue for missing cards, expired plans, and eligibility exceptions.</p></div>
         <div className="flex items-center gap-5">
           <dl className="flex gap-5 text-sm">{[["Open", counts?.open], ["Needs review", counts?.needs_person], ["Unassigned", counts?.unassigned]].map(([label, value]) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="font-semibold text-slate-900">{number(value)}</dd></div>)}</dl>
-          <button onClick={refresh} disabled={loading || taskLoading || actionBusy || reviewLocked} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-60"><RefreshCw size={14} className={loading || taskLoading ? "animate-spin" : ""} />Refresh</button>
+          <button onClick={refresh} disabled={loading || taskLoading || actionBusy || reviewLocked || inboxLocked} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-60"><RefreshCw size={14} className={loading || taskLoading ? "animate-spin" : ""} />Refresh</button>
         </div>
       </header>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
@@ -550,19 +594,27 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
         {demoSeed && <details><summary className="cursor-pointer">Demo setup</summary><div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"><p>Admin only. Fixed {demoSeed.caseCount}-case synthetic pack.</p><button onClick={seedSyntheticDemo} disabled={seeding} className="rounded-md border border-slate-300 px-2 py-1 font-medium disabled:opacity-50">{seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}</button>{seedResult && <p role="status">{syntheticSeedConfirmationMessage(seedResult)}</p>}{seedError && <p role="alert">{seedError}</p>}</div></details>}
       </div>
       {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {manageChase && hasCommunicationCounts(worklist) && <p role={countUpdate.stale ? "status" : undefined}
+        className={`mb-3 text-xs ${countUpdate.stale ? "text-amber-800" : "text-slate-500"}`}>
+        {countUpdate.stale ? "Communication counts may be out of date. Refresh the board to try again."
+          : "Communication counts update automatically while this board is visible."}
+        {countUpdate.at && <> Last updated <time dateTime={new Date(countUpdate.at).toISOString()}>{new Date(countUpdate.at).toLocaleTimeString()}</time>.</>}
+      </p>}
+      {manageChase && hasInbox && <UnassignedTexts blocked={actionBusy || reviewLocked} refreshVersion={inboxRefresh} onLock={setInboxLocked}
+        onReviewed={async () => { await load(); const selected = selectedChaseIdRef.current; if (selected) await openTaskById(selected); }} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(25rem,0.9fr)_minmax(0,1.1fr)]">
         <section aria-label="Insurance follow-up queue" className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 p-4">
             <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-900">Work queue</h2><span className="text-xs text-slate-500">{shown.length} shown</span></div>
             <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"><Search size={15} className="text-slate-400" /><input type="search" aria-label="Search cases" placeholder="Search cases…" value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></label>
-            <div className="mt-3 flex flex-wrap gap-1.5">{FILTERS.map(([value, label]) => <button type="button" key={value || "all"} onClick={() => setBucket(value)} disabled={actionBusy} aria-pressed={bucket === value} className={`rounded-md px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${bucket === value ? "bg-sky-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label}{counts ? ` · ${number(value ? counts.by_bucket?.[value] : counts.open)}` : ""}</button>)}</div>
+            <div className="mt-3 flex flex-wrap gap-1.5">{FILTERS.map(([value, label]) => <button type="button" key={value || "all"} onClick={() => setBucket(value)} disabled={actionBusy || inboxLocked} aria-pressed={bucket === value} className={`rounded-md px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${bucket === value ? "bg-sky-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label}{counts ? ` · ${number(value ? counts.by_bucket?.[value] : counts.open)}` : ""}</button>)}</div>
           </div>
           <div className="overflow-x-auto">
             <div className="min-w-[440px]">
               <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500"><span>Case / status</span><span>Reason</span><span>Visit</span><span className="text-right">Touches</span></div>
               {loading && !worklist ? <p className="p-5 text-sm text-slate-500">Loading follow-up work…</p> : !shown.length ? <p className="p-5 text-sm text-slate-500">{query ? "No cases match your search." : "No open tasks match this filter."}</p> : <div className="max-h-[650px] divide-y divide-slate-100 overflow-y-auto">{shown.map((row) => {
                 const [statusLabel, statusTone] = STATUS[row.state] || [row.state, "bg-slate-100 text-slate-600 ring-slate-300"];
-                return <button type="button" key={row.chaseId} onClick={() => openTask(row)} disabled={actionBusy} aria-pressed={selectedChaseId === row.chaseId} className={`grid w-full grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] items-center gap-2 border-l-[3px] px-3 py-3 text-left disabled:opacity-60 ${selectedChaseId === row.chaseId ? "border-sky-700 bg-sky-50" : "border-transparent hover:bg-slate-50"}`}>
+                return <button type="button" key={row.chaseId} onClick={() => openTask(row)} disabled={actionBusy || inboxLocked} aria-pressed={selectedChaseId === row.chaseId} className={`grid w-full grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] items-center gap-2 border-l-[3px] px-3 py-3 text-left disabled:opacity-60 ${selectedChaseId === row.chaseId ? "border-sky-700 bg-sky-50" : "border-transparent hover:bg-slate-50"}`}>
                   <span className="min-w-0"><span className="block truncate text-sm font-medium text-slate-900">{row.patientLabel}</span><span className="mt-1 inline-block"><Pill tone={statusTone}>{statusLabel}</Pill></span>{reviewCounts(row.communicationReview)?.pending > 0 && <span className="mt-1 block text-[11px] font-medium text-amber-800">{row.communicationReview.pending} communication event{row.communicationReview.pending === 1 ? "" : "s"} to review</span>}</span>
                   <span className="text-xs text-slate-500">{row.bucket}<span className="mt-1 block text-[10px]">Priority {number(row.priority)}</span></span>
                   <span className="text-xs text-slate-500">{row.appointmentAt ? row.appointmentAt.slice(5, 10) : "—"}</span><span className="text-right text-sm font-medium text-slate-600">{number(row.touches)}</span>
@@ -580,7 +632,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false }
           loading={taskLoading}
           error={taskError}
           manageChase={manageChase}
-          actionBusy={actionBusy}
+          actionBusy={actionBusy || inboxLocked}
           actionError={actionError}
           actionNotice={actionNotice}
           retryAction={retry ? () => submitAction(
