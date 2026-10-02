@@ -476,6 +476,12 @@ class Settings:
     state_store: str = "local"
     # Additive header storage is only required when this release control is on.
     billing_header_enabled: bool = False
+    athena_review_mode: str = "disabled"
+    athena_credential_environment: str = ""
+    athena_deployment_id: str = ""
+    athena_storage_id: str = ""
+    athena_client_id: str = field(default="", repr=False, metadata={"secret": True})
+    athena_client_secret: str = field(default="", repr=False, metadata={"secret": True})
     review_context_signing_key: str = field(
         default="", repr=False, metadata={"secret": True}
     )
@@ -729,6 +735,26 @@ class Settings:
                 or (self.review_context_signing_key and not re.fullmatch(
                     r"[!-~]{32,256}", self.review_context_signing_key))):
             raise SettingsError("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY requires 32–256 ASCII secret characters")
+        if self.athena_review_mode not in {"disabled", "mock", "preview", "configured"}:
+            raise SettingsError("COSMANEURA_ATHENA_REVIEW_MODE must be disabled, mock, preview or configured")
+        if self.athena_credential_environment not in {"", "preview", "production"}:
+            raise SettingsError("COSMANEURA_ATHENA_CREDENTIAL_ENVIRONMENT must be preview or production")
+        for identity in (self.athena_deployment_id, self.athena_storage_id):
+            if not isinstance(identity, str) or (identity and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", identity)):
+                raise SettingsError("Athena deployment and storage IDs must be empty or 1–128 ASCII identifier characters")
+        if self.athena_review_mode == "mock" and self.environment not in {"development", "test"}:
+            raise SettingsError("mock Athena reads are restricted to local development/test")
+        if self.athena_review_mode == "preview" and (
+                self.state_store != "postgres" or not self.athena_client_id or not self.athena_client_secret):
+            raise SettingsError("Athena Preview review requires PostgreSQL and configured client credentials")
+        if self.athena_review_mode == "preview" and self.athena_credential_environment == "production":
+            raise SettingsError("Athena Preview review requires Preview credentials")
+        if self.athena_review_mode == "configured" and (
+                self.state_store != "postgres" or not self.athena_client_id or not self.athena_client_secret
+                or not self.athena_credential_environment):
+            raise SettingsError("Configured Athena review requires PostgreSQL, client credentials and an explicit credential environment")
+        if self.athena_review_mode != "disabled" and self.state_store == "postgres" and self.chase_store != "postgres":
+            raise SettingsError("durable Athena review requires the shared PostgreSQL worklist")
         if self.chase_approval not in _APPROVAL_MODES:
             raise SettingsError(
                 "COSMANEURA_CHASE_APPROVAL must be per_policy or per_message"
@@ -1168,6 +1194,12 @@ class Settings:
                 env.get("COSMANEURA_STATE_STORE") or "local"
             ).strip().lower(),
             billing_header_enabled=_parse_bool(env, "COSMANEURA_BILLING_HEADER_ENABLED", False),
+            athena_review_mode=env.get("COSMANEURA_ATHENA_REVIEW_MODE", "disabled").strip().lower(),
+            athena_credential_environment=env.get("COSMANEURA_ATHENA_CREDENTIAL_ENVIRONMENT", "").strip().lower(),
+            athena_deployment_id=env.get("COSMANEURA_ATHENA_DEPLOYMENT_ID", ""),
+            athena_storage_id=env.get("COSMANEURA_ATHENA_STORAGE_ID", ""),
+            athena_client_id=env.get("COSMANEURA_ATHENA_CLIENT_ID", ""),
+            athena_client_secret=env.get("COSMANEURA_ATHENA_CLIENT_SECRET", ""),
             review_context_signing_key=env.get("COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY", ""),
             database_runtime_role=(
                 env.get("COSMANEURA_DB_RUNTIME_ROLE") or "cosmaneura_app"
