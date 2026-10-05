@@ -1,0 +1,7 @@
+{
+  "patients": [
+    {"patient_ref": "SYNTH-DC-0001"},
+    {"patient_ref": "SYNTH-DC-0002"},
+    {"patient_ref": "SYNTH-DC-0003"}
+  ]
+}
