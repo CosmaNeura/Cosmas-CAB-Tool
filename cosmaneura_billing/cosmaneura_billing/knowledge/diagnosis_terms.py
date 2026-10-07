@@ -161,7 +161,11 @@ def signature(text: str) -> frozenset[str]:
 
 
 def concept_signature(text: str) -> frozenset[str]:
-    terms = signature(text)
+    return _concept_signature_from_terms(_terms(text))
+
+
+def _concept_signature_from_terms(tokens: tuple[str, ...]) -> frozenset[str]:
+    terms = frozenset(tokens)
     # ICD-10-CM's default for an explicitly typed diabetes with no documented
     # complication is the matching 'without complications' code. This never
     # supplies an unknown type, or discards a named complication. Evidence is
@@ -185,8 +189,9 @@ def meaning_key(text: str) -> tuple[tuple[str, ...], frozenset[str]]:
     alternatives = text.split("/")
     if len(alternatives) > 1 and all(_terms(part) == _terms(alternatives[0]) for part in alternatives[1:]):
         text = alternatives[0]
-    terms = concept_signature(text)
-    positive = tuple(t for t in _terms(text) if not t.startswith("absent:") and t in terms)
+    tokens = _terms(text)
+    terms = _concept_signature_from_terms(tokens)
+    positive = tuple(t for t in tokens if not t.startswith("absent:") and t in terms)
     negative = frozenset(t for t in terms if t.startswith("absent:"))
     return positive, negative
 
