@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ShieldCheck, Stethoscope, ClipboardCheck, CreditCard, Info, Wifi, WifiOff } from "lucide-react";
 import { api } from "./api.js";
 import ProviderHeaderLaunch from "./ProviderHeaderLaunch.jsx";
@@ -96,6 +96,51 @@ function Workspace() {
   const [selected, setSelected] = useState(null);
   const [encounterStatuses, setEncounterStatuses] = useState({});
   const [coderReviewLocked, setCoderReviewLocked] = useState(false);
+  const [headerNavigation, setHeaderNavigation] = useState({ dirty: false, busy: false });
+  const [pendingNavigation, setPendingNavigation] = useState(null);
+  const headerNavigationRef = useRef({ dirty: false, busy: false });
+  const coderReviewLockedRef = useRef(false);
+
+  const updateHeaderNavigation = useCallback((state) => {
+    const next = { dirty: state?.dirty === true, busy: state?.navigationBlocked === true };
+    headerNavigationRef.current = next;
+    setHeaderNavigation((current) => current.dirty === next.dirty && current.busy === next.busy ? current : next);
+    if (!next.dirty || next.busy) setPendingNavigation(null);
+  }, []);
+  const updateCoderNavigationLock = useCallback((locked) => {
+    coderReviewLockedRef.current = locked === true;
+    setCoderReviewLocked(locked === true);
+    if (locked) setPendingNavigation(null);
+  }, []);
+
+  function navigate(target) {
+    // Recheck at confirmation time: a save may have started after the prompt opened.
+    if (headerNavigationRef.current.busy || coderReviewLockedRef.current) return;
+    setPendingNavigation(null);
+    updateHeaderNavigation({ dirty: false, busy: false });
+    if (target.kind === "encounter") setSelected(target.value);
+    else if (target.kind === "workspace") setView(target.value);
+    else if (target.kind === "handoff") window.location.assign("/?view=handoff");
+  }
+  function requestNavigation(target) {
+    if ((target.kind === "encounter" && target.value === selected)
+      || (target.kind === "workspace" && target.value === view)) return;
+    if (headerNavigationRef.current.busy || coderReviewLockedRef.current) return;
+    if (headerNavigationRef.current.dirty) setPendingNavigation(target);
+    else navigate(target);
+  }
+  const navigationLocked = headerNavigation.busy || coderReviewLocked;
+
+  useEffect(() => {
+    const warnBeforeUnload = (event) => {
+      if (!headerNavigationRef.current.dirty && !headerNavigationRef.current.busy
+        && !coderReviewLockedRef.current) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, []);
 
   const updateEncounterStatus = useCallback((encounterId, patch) => {
     setEncounterStatuses((current) => ({
@@ -203,24 +248,34 @@ function Workspace() {
             aria-label="Workspace"
           >
             {views.includes("provider") && (
-              <button type="button" disabled={coderReviewLocked && view === "coder"} aria-current={view === "provider" ? "page" : undefined} className={`${tab(view === "provider")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => setView("provider")}>
+              <button type="button" disabled={navigationLocked && view !== "provider"} aria-current={view === "provider" ? "page" : undefined} className={`${tab(view === "provider")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => requestNavigation({kind: "workspace", value: "provider"})}>
                 <Stethoscope size={15} />Provider
               </button>
             )}
             {views.includes("coder") && (
-              <button type="button" aria-current={view === "coder" ? "page" : undefined} className={tab(view === "coder")} onClick={() => setView("coder")}>
+              <button type="button" disabled={navigationLocked && view !== "coder"} aria-current={view === "coder" ? "page" : undefined} className={`${tab(view === "coder")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => requestNavigation({kind: "workspace", value: "coder"})}>
                 <ClipboardCheck size={15} />Coder review
               </button>
             )}
             {views.includes("chase") && (
-              <button type="button" disabled={coderReviewLocked && view === "coder"} aria-current={view === "chase" ? "page" : undefined} className={`${tab(view === "chase")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => setView("chase")}>
+              <button type="button" disabled={navigationLocked && view !== "chase"} aria-current={view === "chase" ? "page" : undefined} className={`${tab(view === "chase")} disabled:cursor-not-allowed disabled:opacity-50`} onClick={() => requestNavigation({kind: "workspace", value: "chase"})}>
                 <CreditCard size={15} />Card chase
               </button>
             )}
           </nav>
-          {handoffAvailable && view === "provider" && <a href="/?view=handoff" className="text-sm font-medium text-slate-600 underline">Try a synthetic note handoff</a>}
+          {handoffAvailable && view === "provider" && <a role="link" href={navigationLocked ? undefined : "/?view=handoff"} aria-disabled={navigationLocked} onClick={(event) => { event.preventDefault(); requestNavigation({kind: "handoff"}); }} className="text-sm font-medium text-slate-600 underline">Try a synthetic note handoff</a>}
+          {headerNavigation.busy && <p role="status" className="text-xs font-medium text-amber-800">A header request is pending. Finish or retry it before changing visits or workspaces.</p>}
           {coderReviewLocked && view === "coder" && <p role="status" className="text-xs font-medium text-amber-800">Resolve this frozen coder review before leaving. Unknown outcomes must use the exact retry.</p>}
         </div>
+
+        {pendingNavigation && <section role="group" aria-label="Confirm discarding header edits" className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+          <p className="font-semibold">This header has unsaved edits.</p>
+          <p className="mt-1">Discard them and {pendingNavigation.kind === "encounter" ? `open visit ${pendingNavigation.value}` : pendingNavigation.kind === "handoff" ? "open the note handoff" : `open the ${pendingNavigation.value === "chase" ? "Card chase" : pendingNavigation.value} workspace`}?</p>
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={() => setPendingNavigation(null)} className="rounded-lg border border-amber-300 bg-white px-3 py-2 font-medium">Keep editing</button>
+            <button type="button" disabled={navigationLocked} onClick={() => navigate(pendingNavigation)} className="rounded-lg border border-amber-400 px-3 py-2 font-medium disabled:opacity-50">Discard edits and continue</button>
+          </div>
+        </section>}
 
         {health === null ? (
           <p>Connecting to the billing service…</p>
@@ -251,8 +306,10 @@ function Workspace() {
             selectedId={selected}
             live={Boolean(health)}
             statuses={encounterStatuses}
-            onSelect={setSelected}
+            onSelect={(value) => requestNavigation({kind: "encounter", value})}
             onStatusChange={updateEncounterStatus}
+            onHeaderNavigationChange={updateHeaderNavigation}
+            navigationLocked={navigationLocked}
           />
         ) : (
           <CoderReview
@@ -260,9 +317,11 @@ function Workspace() {
             encounters={encounters}
             live={Boolean(health)}
             statuses={encounterStatuses}
-            onSelect={setSelected}
+            onSelect={(value) => requestNavigation({kind: "encounter", value})}
             onStatusChange={updateEncounterStatus}
-            onNavigationLockChange={setCoderReviewLocked}
+            onNavigationLockChange={updateCoderNavigationLock}
+            onHeaderNavigationChange={updateHeaderNavigation}
+            navigationLocked={navigationLocked}
           />
         )}
 
