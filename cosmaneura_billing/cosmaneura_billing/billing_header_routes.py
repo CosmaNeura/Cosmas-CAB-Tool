@@ -1,11 +1,11 @@
 """Authenticated, source-pinned generation and unreviewed header revisions."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .billing_header import BillingHeaderError, HeaderActor, check_source
 from .billing_header_runtime import generated_header
@@ -22,11 +22,21 @@ class HeaderRead(BaseModel):
     expectedSource: dict[str, Any]
 
 
-class HeaderGenerate(HeaderRead):
+class HeaderOperation(HeaderRead):
     operationId: str = Field(min_length=36, max_length=36)
 
 
-class HeaderSave(HeaderGenerate):
+class HeaderGenerate(HeaderOperation):
+    responseMode: Literal["async"] | None = None
+
+    @model_validator(mode="after")
+    def mode(self):
+        if "responseMode" in self.model_fields_set and self.responseMode is None:
+            raise ValueError("responseMode must be omitted or async")
+        return self
+
+
+class HeaderSave(HeaderOperation):
     headerId: str = Field(min_length=36, max_length=36)
     expectedRevision: int = Field(ge=0, le=100)
     draft: dict[str, Any]
@@ -53,6 +63,7 @@ class HeaderSignoff(HeaderRead):
 def configure_header(application, config, encounter_store):
     """No schema dependency or memory fallback when the feature is disabled."""
     application.state.billing_header_store = None
+    application.state.header_generation = None
     if not config.billing_header_enabled:
         return
     if config.state_store == "postgres":
@@ -63,6 +74,10 @@ def configure_header(application, config, encounter_store):
             encounter_store, practice_id=encounter_store.practice_id,
             authorize=lambda actor: actor.role in config.allowed_roles,
         )
+
+    if config.billing_header_async_enabled:
+        from .header_generation import GenerationManager
+        application.state.header_generation = GenerationManager(config)
 
 
 def _context(request, encounter_id):
@@ -109,6 +124,9 @@ def generate_header(request: Request, req: HeaderGenerate):
     try:
         stored, store, actor = _context(request, req.encounterId)
         check_source(stored, req.expectedSource)
+        manager = getattr(request.app.state, "header_generation", None)
+        if req.responseMode == "async" and manager is None:
+            raise HTTPException(409, "generation_unavailable")
         # A retry or a second Generate must not replace another user's edits.
         existing = store.generation_replay(
             req.encounterId, expected_source=req.expectedSource,
@@ -119,7 +137,34 @@ def generate_header(request: Request, req: HeaderGenerate):
         if existing:
             if isinstance(store, PostgresBillingHeaderStore):
                 request.state.audit_completion_committed = True
-            return {"view": existing, "created": False}
+            result = {"view": existing, "created": False}
+            if req.responseMode == "async":
+                result["generation"] = {"operationId": req.operationId, "status": "succeeded"}
+            return result
+        if manager is not None:
+            from .core_bridge import captured_generation
+            from .header_generation import response, command_for
+            # Preflight has current source/model authority. Child repeats it before egress.
+            with api._inference_scope(request, stored):
+                core = captured_generation(async_mode=req.responseMode == "async")
+            state = manager.submit(stored, actor, api._request_principal(request), req.operationId,
+                api._completion_event(request), core=core)
+            if state['status'] == 'succeeded' and 'job' not in state:
+                # A legacy generation may have committed after our initial replay probe.
+                store.generation_replay(req.encounterId, expected_source=req.expectedSource,
+                    operation_id=req.operationId, actor=actor, audit_completion=api._completion_event(request))
+                request.state.audit_completion_committed = True
+            if req.responseMode == "async":
+                return response(state, req.operationId, store, req.encounterId, req.expectedSource)
+            # Legacy synchronous callers join the same durable attempt, never infer twice.
+            initiated = state.get("new") is True
+            import time
+            while state["status"] == "running":
+                time.sleep(.25)
+                state = manager.store.call(command_for(stored, actor, req.operationId), "status")
+            if state["status"] != "succeeded":
+                raise HTTPException(409, "generation_" + state["status"])
+            return {"view": store.latest(req.encounterId, expected_source=req.expectedSource), "created": initiated}
         with api._inference_scope(request, stored) as permit:
             result = api._request_orchestrator(request).process(
                 stored.bundle, user_id=api._request_principal(request).user_id,
@@ -139,6 +184,21 @@ def generate_header(request: Request, req: HeaderGenerate):
         if isinstance(store, PostgresBillingHeaderStore):
             request.state.audit_completion_committed = True
         return {"view": view, "created": created}
+    except BillingHeaderError as exc:
+        raise _safe(exc) from None
+
+
+@router.post("/api/encounters/header/generation-status")
+def generation_status(request: Request, req: HeaderOperation):
+    from .header_generation import command_for, response
+    try:
+        stored, store, actor = _context(request, req.encounterId)
+        check_source(stored, req.expectedSource)
+        manager = getattr(request.app.state, "header_generation", None)
+        if manager is None:
+            raise HTTPException(404, "generation_unavailable")
+        state = manager.store.call(command_for(stored, actor, req.operationId), "status")
+        return response(state, req.operationId, store, req.encounterId, req.expectedSource)
     except BillingHeaderError as exc:
         raise _safe(exc) from None
 

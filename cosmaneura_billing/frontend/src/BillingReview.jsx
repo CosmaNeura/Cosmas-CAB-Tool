@@ -235,7 +235,7 @@ function billingErrorMessage(error) {
 }
 
 export default function BillingReview({ encounters, selectedId, live, statuses, onSelect, onStatusChange,
-  onHeaderNavigationChange, navigationLocked = false }) {
+  onHeaderNavigationChange, navigationLocked = false, headerAsync = false }) {
   const [encounter, setEncounter] = useState(null);
   const [result, setResult] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -436,7 +436,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
             {reviewError && <div className="mt-4"><ErrorNotice>{reviewError}</ErrorNotice></div>}
           </section>
 
-          {encounter.headerSource && <BillingHeader key={`${encounter.encounterId}:${encounter.headerSource.bundleSha256}:${encounter.encounterVersion}`} encounter={encounter} generationAllowed={workspaceInferenceAllowed(encounter)} onStateChange={onHeaderNavigationChange} />}
+          {encounter.headerSource && <BillingHeader asyncEnabled={headerAsync} key={`${encounter.encounterId}:${encounter.headerSource.bundleSha256}:${encounter.encounterVersion}`} encounter={encounter} generationAllowed={workspaceInferenceAllowed(encounter)} onStateChange={onHeaderNavigationChange} />}
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="completeness-heading">
             <h2 id="completeness-heading" className="text-base font-semibold text-slate-950">Documentation completeness</h2>

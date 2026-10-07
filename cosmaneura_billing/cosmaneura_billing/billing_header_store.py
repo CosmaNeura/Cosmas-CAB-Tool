@@ -80,7 +80,7 @@ class _Store(SignoffStoreMixin):
         unit.audit(audit_completion, actor, action, record["headerId"])
 
     def create(self, encounter_id, *, expected_source, generated, actor, operation_id,
-               audit_completion=None, before_insert=None):
+               audit_completion=None, before_insert=None, after_create=None):
         actor = _actor(actor)
         domain.uuid(operation_id)
         intent = self._intent("create", encounter_id, expected_source, actor)
@@ -107,6 +107,8 @@ class _Store(SignoffStoreMixin):
                 result = self._view(unit, record)
                 unit.insert_receipt(operation_id, intent, record["headerId"], result["revisionNumber"], actor, audit_completion)
             self._finish(unit, record, actor, expected_source, audit_completion, "billing_header.compute")
+            if after_create is not None:
+                after_create(unit.conn, unit.stored, result, created)
             return result, created
 
     def generation_replay(self, encounter_id, *, expected_source, operation_id,

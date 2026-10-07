@@ -119,6 +119,7 @@ function HandoffPreview({ launch }) {
 
 function LaunchContents({ launch }) {
   const [encounter, setEncounter] = useState(null);
+  const [headerAsync, setHeaderAsync] = useState(false);
   const [persona, setPersona] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(launch.error || "");
@@ -149,6 +150,7 @@ function LaunchContents({ launch }) {
     setEncounter(null); setLoading(true); setError(""); setSignIn(false); setConfirmRefresh(false);
     try {
       const session = await api("/api/session", { signal: controller.signal });
+      setHeaderAsync(session.capabilities?.billingHeaderAsync === true);
       if (!canLaunchHeader(session)) throw new Error("header-access-unavailable");
       const detail = await api("/api/encounters/detail", {
         method: "POST", body: { encounterId: launch.encounterId }, signal: controller.signal,
@@ -201,7 +203,7 @@ function LaunchContents({ launch }) {
           <button type="button" className={button} disabled={loading || headerState?.busy} onClick={() => headerState?.dirty ? setConfirmRefresh(true) : load()}>Refresh encounter</button>
           {confirmRefresh && <div role="group" aria-label="Confirm encounter refresh" className="w-full rounded-lg bg-amber-50 p-3 text-sm text-amber-950"><p>Refreshing will discard your unsaved header edits.</p><div className="mt-2 flex gap-2"><button type="button" className={button} disabled={loading || headerState?.busy} onClick={load}>Discard edits and refresh</button><button type="button" className={button} onClick={() => setConfirmRefresh(false)}>Keep editing</button></div></div>}
         </section>
-        <BillingHeader encounter={encounter} onStateChange={setHeaderState} generationAllowed={encounter.inferencePolicy?.allowed !== false} />
+        <BillingHeader asyncEnabled={headerAsync} encounter={encounter} onStateChange={setHeaderState} generationAllowed={encounter.inferencePolicy?.allowed !== false} />
         <section aria-label="Encounter source documentation" className="space-y-2">
           {[['Clinical note', encounter.signedNote], ['Transcript', encounter.transcript], ['Intake', encounter.intake]].map(([label, text]) => <details key={label} className="rounded-xl border border-slate-200 bg-white">
             <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-slate-700"><FileText size={15} aria-hidden="true" />{label}</summary>

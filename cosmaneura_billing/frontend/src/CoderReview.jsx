@@ -225,7 +225,7 @@ function PreparedPreview({ payload, engine, receipt, onRetry, saving }) {
 export default function CoderReview({
   encounterId, encounters = [], live, statuses = {}, onSelect = NOOP,
   onStatusChange = NOOP, onNavigationLockChange = NOOP,
-  onHeaderNavigationChange = NOOP, navigationLocked = false,
+  onHeaderNavigationChange = NOOP, navigationLocked = false, headerAsync = false,
 }) {
   const [engine, setEngine] = useState(null);
   const [decisions, setDecisions] = useState({});
@@ -518,7 +518,7 @@ export default function CoderReview({
       ) : loadError?.encounterId === encounterId ? <ErrorNotice>{loadError.message}</ErrorNotice>
         : headerEncounter?.encounterId === encounterId && !workspaceInferenceAllowed(headerEncounter) ? (
           <section className="space-y-4"><p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-950">New coding generation is not approved for this source. You can read or edit its saved header; recording a new coder signoff requires a current authorized coding review.</p>
-            <BillingHeader encounter={headerEncounter} onStateChange={onHeaderState} generationAllowed={false} />
+            <BillingHeader asyncEnabled={headerAsync} encounter={headerEncounter} onStateChange={onHeaderState} generationAllowed={false} />
           </section>
         ) : !engine || engine.encounterId !== encounterId ? (
         <p role="status" className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm"><RefreshCw size={16} className="animate-spin" aria-hidden="true" />Loading evidence-linked coder review…</p>
@@ -542,7 +542,7 @@ export default function CoderReview({
 
           <DiagnosisSequencingNotice value={engine.diagnosisSequencing} />
           {headerEnabled && <>
-            <BillingHeader encounter={headerEncounter} onStateChange={onHeaderState}
+            <BillingHeader asyncEnabled={headerAsync} encounter={headerEncounter} onStateChange={onHeaderState}
               disabled={frozen && !receipt || saving} refreshKey={headerRefresh} generationAllowed={workspaceInferenceAllowed(headerEncounter)} />
             <section className="rounded-2xl border border-teal-200 bg-teal-50 p-5" aria-labelledby="header-confirmation-heading">
               <h2 id="header-confirmation-heading" className="font-semibold text-teal-950">Review the saved header</h2>

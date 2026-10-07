@@ -283,6 +283,9 @@ def _provision_runtime_role(conn, settings: Settings) -> None:
             "GRANT EXECUTE ON FUNCTION cosmaneura_billing_header_editor_allowed(uuid,uuid,text) TO {}"
         ).format(identifier))
 
+    if settings.billing_header_async_enabled and conn.execute("SELECT to_regprocedure('public.cosmaneura_header_generation(jsonb)')").fetchone()[0]:
+        conn.execute(sql.SQL("GRANT EXECUTE ON FUNCTION public.cosmaneura_header_generation(jsonb) TO {}").format(identifier))
+
     if conn.execute("SELECT to_regclass('public.billing_header_signoffs')").fetchone()[0]:
         conn.execute(sql.SQL("GRANT SELECT, INSERT ON billing_header_signoffs TO {}").format(identifier))
 
