@@ -324,18 +324,37 @@ export function exportBillingHeader(view, encounter) {
 }
 
 // Each completion/cleanup may release only the request that owns this ref.
+export const HEADER_REQUEST_TIMEOUT_MS = 30_000;
+// Generation may wait on the server's longer model budget; do not invite an
+// early retry merely because an ordinary read/save deadline elapsed.
+export const HEADER_GENERATION_TIMEOUT_MS = 300_000;
+
 export function ownsHeaderRequest(pending, request) {
   return Boolean(request) && pending.current === request;
 }
 
 export function finishHeaderRequest(pending, request) {
   if (!ownsHeaderRequest(pending, request)) return false;
+  globalThis.clearTimeout(request.deadline);
   pending.current = null;
   return true;
 }
 
 export function cancelHeaderRequest(pending, request = pending.current) {
   if (finishHeaderRequest(pending, request)) request.controller.abort();
+}
+
+export function armHeaderRequestDeadline(pending, request, onTimeout) {
+  if (!ownsHeaderRequest(pending, request)) return;
+  globalThis.clearTimeout(request.deadline);
+  request.deadline = globalThis.setTimeout(() => {
+    // Retire ownership before aborting: a transport/body read may answer late,
+    // and its completion must not replace the timeout or a newer exact retry.
+    if (!finishHeaderRequest(pending, request)) return;
+    request.controller.abort();
+    onTimeout();
+  }, request.command?.path === "/api/encounters/header/generate"
+    ? HEADER_GENERATION_TIMEOUT_MS : HEADER_REQUEST_TIMEOUT_MS);
 }
 
 export function beginHeaderRequest(pending, command = null, refresh = false, unresolvedCommand = null) {

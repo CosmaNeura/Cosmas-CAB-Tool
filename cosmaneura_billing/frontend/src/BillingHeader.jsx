@@ -5,7 +5,7 @@ import MdmClinicalReview from "./MdmClinicalReview.jsx";
 import DiagnosisMapping from "./DiagnosisMapping.jsx";
 import {mappingReviewText} from "./diagnosisMapping.js";
 import { api } from "./api.js";
-import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
+import { armHeaderRequestDeadline, beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
 
 const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
 const input = "mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
@@ -55,6 +55,14 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     // by changing visits, even if the server never answers.
     onStateChange({view, dirty: !!draft, busy: true, navigationBlocked: !!command, stale});
     setBusy(true); setError(""); setNotice("");
+    armHeaderRequestDeadline(pending, request, () => {
+      unresolvedCommand.current = command;
+      setRetry(command); setBusy(false);
+      onStateChange({view, dirty: !!draft, busy: !!command, navigationBlocked: !!command, stale});
+      setError(command
+        ? "The header request timed out. Its outcome is unknown. Retry the same request to confirm it."
+        : "Loading the header timed out. Reload the header to try again.");
+    });
     void (async () => {
       try {
         const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
