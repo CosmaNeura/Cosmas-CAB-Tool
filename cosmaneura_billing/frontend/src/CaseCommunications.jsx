@@ -331,6 +331,7 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
             <div className={`max-w-[90%] rounded-xl px-3 py-2 ${item.direction === "outbound" ? "bg-sky-50" : "bg-slate-100"}`}>
               <p className="text-[11px] font-semibold text-slate-500">{item.direction === "outbound" ? (durable ? "Staff draft / SMS" : "Staff · simulated SMS") : (durable ? "Inbound reply" : "Simulated inbound reply")}</p>
               <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-800">{item.text || "Attachment received; text content unavailable here."}</p>
+              {item.direction === "inbound" && item.mediaCount > 0 && <p className="mt-1 text-xs text-amber-800" aria-label="Reported attachments">{item.mediaCount} attachment{item.mediaCount === 1 ? "" : "s"} reported; attachment content is not loaded.</p>}
               <p className="mt-2 text-[11px] text-slate-500"><time dateTime={item.at}>{chaseAttemptTime(item.at)}</time> · {item.unknownResolution ? "Original outcome unknown · investigated" : communicationsStatus(item.status)}</p>
               {item.needsStaffReview && <p className="mt-1 text-xs font-medium text-amber-800">Needs staff review</p>}
               {item.blockedReason && <p className="mt-2 text-xs text-amber-800">{communicationsReason(item.blockedReason)} · Checked {chaseAttemptTime(item.lastCheckedAt)}</p>}
