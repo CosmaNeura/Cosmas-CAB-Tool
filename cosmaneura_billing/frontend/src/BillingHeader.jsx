@@ -50,6 +50,8 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
     if (!request) return NOOP;
     const {controller} = request;
+    // Notify the navigation host before starting I/O, including exact retries.
+    onStateChange({view, dirty: !!draft, busy: true, stale});
     setBusy(true); setError(""); setNotice("");
     void (async () => {
       try {

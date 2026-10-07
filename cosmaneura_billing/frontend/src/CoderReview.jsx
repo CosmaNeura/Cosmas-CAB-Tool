@@ -223,6 +223,7 @@ function PreparedPreview({ payload, engine, receipt, onRetry, saving }) {
 export default function CoderReview({
   encounterId, encounters = [], live, statuses = {}, onSelect = NOOP,
   onStatusChange = NOOP, onNavigationLockChange = NOOP,
+  onHeaderNavigationChange = NOOP, navigationLocked = false,
 }) {
   const [engine, setEngine] = useState(null);
   const [decisions, setDecisions] = useState({});
@@ -241,7 +242,10 @@ export default function CoderReview({
   const [baselineChoices, setBaselineChoices] = useState({});
   const [headerAcknowledged, setHeaderAcknowledged] = useState(false);
   const [headerRefresh, setHeaderRefresh] = useState(0);
-  const onHeaderState = useCallback((state) => setHeaderState(state), []);
+  const onHeaderState = useCallback((state) => {
+    setHeaderState(state);
+    onHeaderNavigationChange(state);
+  }, [onHeaderNavigationChange]);
   const headerIdentity = useRef(null);
   const loadRequest = useRef(0);
   const saveRequest = useRef(0);
@@ -496,7 +500,7 @@ export default function CoderReview({
 
   return (
     <div className="space-y-5">
-      <ProviderQueue encounters={encounters} selectedId={encounterId} statuses={statuses} onSelect={onSelect} selectionDisabled={frozen && !receipt} title="Coder work queue" description="Choose a visit, make an explicit decision for every recommendation, then record the review." />
+      <ProviderQueue encounters={encounters} selectedId={encounterId} statuses={statuses} onSelect={onSelect} selectionDisabled={navigationLocked || (frozen && !receipt)} title="Coder work queue" description="Choose a visit, make an explicit decision for every recommendation, then record the review." />
 
       {!encounterId ? (
         <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-7 text-center"><FileCheck2 size={26} className="mx-auto text-slate-500" aria-hidden="true" /><h2 className="mt-2 font-semibold text-slate-950">Choose an encounter for coder review</h2><p className="mt-1 text-sm text-slate-600">No recommendation is accepted until a coder makes an explicit decision.</p></section>
