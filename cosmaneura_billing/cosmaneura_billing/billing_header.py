@@ -30,7 +30,7 @@ class BillingHeaderError(ValueError):
                 "operation_conflict": 409, "header_not_found": 404,
                 "not_authorized": 403, "invalid_header": 422, "invalid_edit": 422,
                 "audit_required": 503, "history_limit": 409, "store_invalid": 503,
-                "generation_unavailable": 503, "header_unavailable": 404,
+                "generation_unavailable": 503, "generation_capacity": 409, "generation_unknown": 409, "header_unavailable": 404,
                 "catalog_unavailable": 503, "catalog_changed": 409,
                 "invalid_signoff": 422, "signoff_unavailable": 503, "review_conflict": 409}
 

@@ -806,6 +806,8 @@ def session_capabilities(request: Request) -> dict[str, Any]:
         }
     if _request_settings(request).billing_header_enabled and "provider" in views:
         capabilities["capabilities"]["billingHeader"] = True
+        if _request_settings(request).billing_header_async_enabled:
+            capabilities["capabilities"]["billingHeaderAsync"] = True
         if _request_settings(request).provider_handoff_enabled and principal.has_any_role(("Provider", "Admin")):
             capabilities["capabilities"]["providerHandoff"] = True
     if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
@@ -849,6 +851,8 @@ def readiness(request: Request):
                     raise RuntimeError("provider model source reader unavailable")
         if request.app.state.billing_header_store is not None:
             request.app.state.billing_header_store.healthcheck()
+            if getattr(request.app.state, "header_generation", None) is not None:
+                request.app.state.header_generation.store.healthcheck()
         if _request_settings(request).communications_enabled:
             from .chase.communications.runtime import check_schema
             check_schema(_request_settings(request))
@@ -924,10 +928,15 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
     """
     from .model_admission import requires_model_scope
     settings = _request_settings(request)
+    return require_inference_input(settings, getattr(request.app.state, "model_data_policy", None), stored)
+
+
+def require_inference_input(settings, policy, stored):
+    from .model_admission import requires_model_scope
     scoped = stored is not None and requires_model_scope(settings, stored.source)
     # Source read/storage approval never grants model-service disclosure.
     if (scoped
-            and (getattr(request.app.state, "model_data_policy", None) is None
+            and (policy is None
                  or (stored.source == ATHENA_REVIEW_OPERATIONAL_SOURCE
                      and settings.azure_openai_synthetic_only))):
         raise HTTPException(status_code=403, detail="operational_source_model_not_approved")
@@ -936,7 +945,7 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
         and (stored is None or stored.source not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES)
     ):
         raise HTTPException(status_code=403, detail=_SYNTHETIC_INFERENCE_ONLY_DETAIL)
-    if (getattr(request.app.state, "model_data_policy", None) is not None and not scoped
+    if (policy is not None and not scoped
             and (stored is None or stored.source not in DEPLOYABLE_SYNTHETIC_INFERENCE_SOURCES)):
         raise HTTPException(403, "model_data_policy_requires_reviewed_source")
 
@@ -944,15 +953,19 @@ def _require_inference_input_allowed(request: Request, *, stored=None) -> None:
 @contextmanager
 def _inference_scope(request, stored):
     """Resolve source/model authority from the actual stored encounter and actor."""
-    from .billing_header import HeaderActor
+    with inference_scope_for(_request_settings(request), getattr(request.app.state, "model_data_policy", None),
+            _request_encounter_store(request), _request_principal(request), stored) as permit:
+        yield permit
+
+
+@contextmanager
+def inference_scope_for(settings, policy, encounter_store, principal, stored):
+    """Shared server-only authority path; worker never constructs a fake Request."""
     from .model_admission import ModelAdmissionError, operational_scope, requires_model_scope
-    _require_inference_input_allowed(request, stored=stored)
-    settings = _request_settings(request)
+    require_inference_input(settings, policy, stored)
     if not requires_model_scope(settings, stored.source):
         yield None
         return
-    principal = _request_principal(request)
-    encounter_store = _request_encounter_store(request)
     role = next((role for role in ("Admin", "Coder", "Provider")
                  if principal.has_any_role((role,))), None)
     if (not isinstance(encounter_store, PostgresEncounterStore) or role is None
@@ -961,8 +974,8 @@ def _inference_scope(request, stored):
     from .billing_header import actor_for_principal
     actor = actor_for_principal(principal, role)
     try:
-        with operational_scope(request.app.state.model_data_policy, settings=settings,
-                stored=stored, actor=actor, context=encounter_store.context) as permit:
+        with operational_scope(policy, settings=settings, stored=stored, actor=actor,
+                context=encounter_store.context) as permit:
             yield permit
     except (ModelAdmissionError, InferenceInputPolicyError):
         raise HTTPException(403, "operational_source_model_not_approved") from None
@@ -2220,6 +2233,8 @@ async def _lifespan(application: FastAPI):
         ):
             raise RuntimeError("required regulatory datasets are unavailable")
         application.state.orchestrator = orchestrator
+        if application.state.header_generation is not None:
+            application.state.header_generation.start()
     except Exception as exc:
         # Record only the class; configuration values and data never enter state
         # that a generic health surface might later expose.
@@ -2230,6 +2245,8 @@ async def _lifespan(application: FastAPI):
         yield
     finally:
         application.state.ready = False
+        if application.state.header_generation is not None:
+            application.state.header_generation.shutdown()
         active_orchestrator = application.state.orchestrator
         shutdown_orchestrator = getattr(active_orchestrator, "shutdown", None)
         if callable(shutdown_orchestrator):

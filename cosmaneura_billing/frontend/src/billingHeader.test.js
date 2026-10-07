@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { armHeaderRequestDeadline, HEADER_REQUEST_TIMEOUT_MS, HEADER_GENERATION_TIMEOUT_MS } from "./billingHeader.js";
+import { armHeaderRequestDeadline, HEADER_REQUEST_TIMEOUT_MS, HEADER_GENERATION_TIMEOUT_MS, readHeaderGeneration } from "./billingHeader.js";
 import assert from "node:assert/strict";
 import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, factKeys, fieldAuthor, finishHeaderRequest, headerDraft, headerProposals, ownsHeaderRequest, headerReviewRequest, headerSourceKey, missingHeaderBaseline, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, headerDecisionIds, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes,  } from "./billingHeader.js";
 
@@ -591,4 +591,29 @@ test("provider Azure proof v2 requires the exact source operation/admission and 
   encounter.headerSource.ingestionSource="provider_completed_note";
   view.header.expectedSource=structuredClone(encounter.headerSource);
   assert.throws(()=>readBillingHeader(view,encounter));
+});
+
+
+test("async acceptance and status use ordinary deadlines and retain ownership", (t) => {
+  t.mock.timers.enable({apis:["setTimeout"]});
+  for (const path of ["generate", "generation-status"]) {
+    const pending = {current:null}, command = {path:"/api/encounters/header/" + path,
+      body:{operationId:"same", ...(path === "generate" ? {responseMode:"async"} : {})}};
+    const request = beginHeaderRequest(pending, command);
+    let expired = false;
+    armHeaderRequestDeadline(pending, request, () => {expired=true});
+    t.mock.timers.tick(HEADER_REQUEST_TIMEOUT_MS);
+    assert.equal(expired,true);
+    assert.equal(ownsHeaderRequest(pending,request),false);
+  }
+});
+test("running and unknown do not parse a fabricated header, and status is exactly pinned", () => {
+  const command = {body:{operationId:"same"}};
+  for (const status of ["running", "unknown", "failed"]) {
+    const response={generation:{operationId:"same",status},view:null,created:false};
+    assert.equal(readHeaderGeneration(response, command).status,status);
+    assert.throws(() => readHeaderGeneration({...response,created:true},command));
+    assert.throws(() => readHeaderGeneration({...response,generation:{operationId:"other",status}},command));
+    assert.throws(() => readHeaderGeneration({...response,view:{}},command));
+  }
 });

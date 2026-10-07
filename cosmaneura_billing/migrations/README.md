@@ -419,3 +419,17 @@ hashes and replay identities stay unchanged, and old events are not backfilled.
 Rollback retains the column and all history; the down file deliberately refuses
 to delete delivery evidence. No send, consent, retry or reconciliation authority
 is added.
+
+
+`028_billing_header_generation` adds source-version-unique generation claims and
+immutable operation aliases. Only `cosmaneura_header_generation(jsonb)` EXECUTE is
+provisioned to a runtime explicitly enabling `COSMANEURA_BILLING_HEADER_ASYNC_ENABLED`;
+no direct claim-table read/write grant is added. Core's separately bound runtime
+uses the same opt-in. Apply the expand before enabling; disabled API/Core startup
+does not require 028. The POSIX worker has a fixed <=360s database lease and child
+alarm, plus parent supervision; two live leases per practice, two local children,
+no queue. Existing sync calls join the same claim when enabled. Status never starts
+work. Unknown/failed source versions cannot automatically restart with a fresh UUID.
+Disable new work and preserve all claims/audits/headers on recovery. Expired orphan
+claims project unknown read-only; an in-flight remote service may finish processing
+an already submitted HTTP request even after its CAB child is terminated.

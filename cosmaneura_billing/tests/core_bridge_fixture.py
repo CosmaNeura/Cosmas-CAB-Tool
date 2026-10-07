@@ -45,10 +45,10 @@ class AuthoredCoreResponses:
         return SimpleNamespace(status="completed",output_text=json.dumps(result),output=[],error=None,model="gpt-5.6-sol",usage=None)
 
 
-def prepare_core_fixture(dsn, path, *, data_class="synthetic", core_identity=None):
+def prepare_core_fixture(dsn, path, *, data_class="synthetic", core_identity=None, async_generation=False):
     with psycopg.connect(dsn) as db:
         assert db.info.host == "127.0.0.1" and db.info.port == 32800
-        assert db.info.dbname.startswith("cab_core_bridge_test_")
+        assert db.info.dbname.startswith("cab_core_bridge_test_") or async_generation and db.info.dbname.startswith("cab_header_async_20261007_")
         database = db.info.dbname
         expected = {p.name: content_sha256(p.read_bytes()).hexdigest()
                     for p in (Path(__file__).resolve().parents[1] / "migrations").glob("*.up.sql")}
@@ -56,6 +56,8 @@ def prepare_core_fixture(dsn, path, *, data_class="synthetic", core_identity=Non
     practice, tenant, ordinary = "core-synthetic-"+uuid4().hex, str(uuid4()), str(uuid4())
     owner = Settings(environment="test", database_url=dsn, practice_id=practice, entra_tenant_id=tenant,
         database_runtime_role="core_bridge_"+uuid4().hex[:14], database_runtime_password="disposable-local-only")
+    if async_generation:
+        owner=replace(owner,state_store="postgres",auth_mode="container_apps",billing_header_enabled=True,billing_header_async_enabled=True)
     with psycopg.connect(dsn) as db:
         db.execute("INSERT INTO practices(practice_id,entra_tenant_id) VALUES(%s,%s::uuid)", (practice,tenant))
         db.execute("INSERT INTO users(tenant_id,user_id) VALUES(%s::uuid,%s::uuid)", (tenant,ordinary))

@@ -60,6 +60,8 @@ def register_core(settings, kind, value):
             db.execute(sql.SQL('GRANT SELECT,INSERT ON billing_headers,billing_header_revisions,billing_header_operations,billing_header_signoffs TO {}').format(ident))
             db.execute(sql.SQL('GRANT INSERT ON access_audit_attempts,access_audit_completions TO {}').format(ident))
             db.execute(sql.SQL('GRANT EXECUTE ON FUNCTION cosmaneura_practice_allowed(text),cosmaneura_billing_header_editor_allowed(uuid,uuid,text),cosmaneura_commit_provider_handoff(jsonb),cosmaneura_provider_model_source(uuid,uuid,text,text),cosmaneura_resolve_core_actor(uuid,uuid,text,text,text,text,text),cosmaneura_prepare_core_handoff(jsonb),cosmaneura_core_operation(uuid,uuid),cosmaneura_core_lock_encounter(uuid,text) TO {}').format(ident))
+            if settings.billing_header_async_enabled:
+                db.execute(sql.SQL('GRANT EXECUTE ON FUNCTION cosmaneura_header_generation(jsonb) TO {}').format(ident))
             db.execute('INSERT INTO provider_source_connections(practice_id,connection_id,document) VALUES(%s,%s,%s)',
                 (settings.practice_id,c['connectionId'],Jsonb(c)))
             db.execute('INSERT INTO core_workload_connections(practice_id,connection_id,version,runtime_role,core_practice_id,actor_issuer,workload_tenant,workload_caller,workload_audience,workload_role,not_before,expires_at,review_ref) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',

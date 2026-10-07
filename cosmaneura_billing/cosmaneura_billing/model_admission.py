@@ -294,6 +294,8 @@ def pipeline_scope(scope, orchestrator, bundle, source):
 
 
 def check_model_request(client):
+    from .header_generation import check_generation_request
+    check_generation_request()
     scope = _ACTIVE.get()
     if scope is not None:
         scope._request(client)

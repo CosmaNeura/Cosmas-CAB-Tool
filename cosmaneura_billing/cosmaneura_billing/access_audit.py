@@ -19,6 +19,7 @@ _ENCOUNTER_FIXED_ROUTES = {
     "/api/core/v1/completed-notes": "provider_handoff.accept",
     "/api/core/v1/header/read": "billing_header.view",
     "/api/core/v1/header/generate": "billing_header.compute",
+    "/api/core/v1/header/generation-status": "billing_header.view",
     "/api/core/v1/header/save": "billing_header.save",
     "/api/encounters/detail": "encounter.view",
     "/api/provider/encounters/handoff/fixtures": "provider_handoff.list",
@@ -30,6 +31,7 @@ _ENCOUNTER_FIXED_ROUTES = {
     "/api/encounters/header": "billing_header.view",
     "/api/encounters/header/diagnosis-catalog": "billing_header.catalog",
     "/api/encounters/header/generate": "billing_header.compute",
+    "/api/encounters/header/generation-status": "billing_header.view",
     "/api/encounters/header/save": "billing_header.save",
     "/api/encounters/header/signoff": "billing_header.signoff",
 }

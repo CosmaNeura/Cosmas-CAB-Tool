@@ -5,7 +5,7 @@ import MdmClinicalReview from "./MdmClinicalReview.jsx";
 import DiagnosisMapping from "./DiagnosisMapping.jsx";
 import {mappingReviewText} from "./diagnosisMapping.js";
 import { api } from "./api.js";
-import { armHeaderRequestDeadline, beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
+import { armHeaderRequestDeadline, beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, readHeaderGeneration, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
 
 const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
 const input = "mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
@@ -29,25 +29,35 @@ export default function BillingHeader(props) {
   return <HeaderContents key={headerSourceKey(props.encounter)} {...props} />;
 }
 
-function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true}) {
+function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true, asyncEnabled = false}) {
   const [view, setView] = useState(null), [draft, setDraft] = useState(null);
   const [reason, setReason] = useState(""), [error, setError] = useState("");
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
+  const [generation, setGeneration] = useState(null);
   const [retry, setRetry] = useState(null), [stale, setStale] = useState(false);
   const [notice, setNotice] = useState("");
-  const pending = useRef(null), unresolvedCommand = useRef(null);
+  const pending = useRef(null), unresolvedCommand = useRef(null), generationRef = useRef(null);
+  const active = useRef(true), pollTimer = useRef(null), dirtyRef = useRef(false);
+  dirtyRef.current = !!draft;
   const pin = encounter.headerSource;
 
   useEffect(() => run(null, true), [refreshKey]);
-  useEffect(() => () => cancelHeaderRequest(pending), []);
+  useEffect(() => { active.current = true; return () => { active.current = false; clearTimeout(pollTimer.current); cancelHeaderRequest(pending); }; }, []);
 
   useEffect(() => {
     onStateChange({view, dirty: !!draft, busy: busy || !!retry,
-      navigationBlocked: !!retry || !!pending.current?.command, stale});
-  }, [view, draft, busy, retry, stale, onStateChange]);
+      navigationBlocked: !!retry || !!pending.current?.command || (busy && !!generation), stale});
+  }, [view, draft, busy, retry, generation, stale, onStateChange]);
   useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
 
+  function retireGeneration() {
+    clearTimeout(pollTimer.current); pollTimer.current = null;
+    generationRef.current = null; setGeneration(null);
+  }
+
   function run(command = null, refresh = false) {
+    if (command?.path.endsWith("generation-status") && generationRef.current !== command) return NOOP;
+    if (generationRef.current && command?.path === BASE + "/generate") return NOOP;
     const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
     if (!request) return NOOP;
     const {controller} = request;
@@ -56,10 +66,12 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     onStateChange({view, dirty: !!draft, busy: true, navigationBlocked: !!command, stale});
     setBusy(true); setError(""); setNotice("");
     armHeaderRequestDeadline(pending, request, () => {
-      unresolvedCommand.current = command;
-      setRetry(command); setBusy(false);
-      onStateChange({view, dirty: !!draft, busy: !!command, navigationBlocked: !!command, stale});
-      setError(command
+      const observing = command?.path.endsWith("generation-status");
+      unresolvedCommand.current = observing ? null : command;
+      setRetry(unresolvedCommand.current); setBusy(false);
+      onStateChange({view, dirty: !!draft, busy: !!command && !observing, navigationBlocked: !!command && !observing, stale});
+      setError(command?.path.endsWith("generation-status")
+        ? "Status timed out. Resume status for this operation." : command
         ? "The header request timed out. Its outcome is unknown. Retry the same request to confirm it."
         : "Loading the header timed out. Reload the header to try again.");
     });
@@ -68,19 +80,42 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         const response = await api(command?.path || BASE, {method: "POST", signal: controller.signal,
           body: command?.body || {encounterId: encounter.encounterId, expectedSource: pin}});
         if (!ownsHeaderRequest(pending, request)) return;
+        if (command?.body.responseMode === "async" || command?.path.endsWith("generation-status")) {
+          const result = readHeaderGeneration(response, command);
+          const state = generationRef.current || {path: BASE + "/generation-status", body: {
+            encounterId: encounter.encounterId, expectedSource: pin, operationId: result.operationId}, until: Date.now() + 300_000};
+          unresolvedCommand.current = null; setRetry(null); setLoaded(true);
+          if (result.status !== "succeeded") {
+            generationRef.current = state; setGeneration(state);
+            if (result.status === "running" && Date.now() < state.until) {
+              setNotice("Generating billing header…");
+              pollTimer.current = setTimeout(() => { if (active.current && generationRef.current === state && !dirtyRef.current) run(state); }, 2_000);
+            } else setError(result.status === "failed" ? "Generation failed. Resume status to check this operation."
+              : result.status === "unknown" ? "Generation was interrupted or its outcome is unknown. Resume status for this operation."
+              : "Generation is still pending. Resume status to check this operation.");
+            return;
+          }
+        }
         const received = readBillingHeader(response.view, encounter);
         if (command && (!received || typeof response.created !== "boolean")) throw new Error("invalid-header-mutation-response");
+        if (command?.body.responseMode === "async" || command?.path.endsWith("generation-status")) {
+          retireGeneration();
+        }
         unresolvedCommand.current = null;
-        setView(received); setLoaded(true); setRetry(null); setStale(false); setDraft(null); setReason("");
+        if (!command && received) { retireGeneration(); }
+        setView(received); setLoaded(true); setRetry(null); setStale(false);
+        if (!command?.path.endsWith("generation-status")) { setDraft(null); setReason(""); }
         if (command) setNotice(command.path.endsWith("save") ? "Header edits saved for review. The clinical note is unchanged."
           : "Header generated for review. No code has been accepted.");
       } catch (failure) {
         if (!ownsHeaderRequest(pending, request) || failure.name === "AbortError") return;
-        const ambiguous = command && (!failure.status || failure.status >= 500 || failure.status === 429);
+        const observing = command?.path.endsWith("generation-status");
+        const ambiguous = !observing && command && (!failure.status || failure.status >= 500 || failure.status === 429);
         unresolvedCommand.current = ambiguous ? command : null;
         setRetry(unresolvedCommand.current);
-        if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); }
-        setError(failure.status === 409
+        if ([403, 404, 409].includes(failure.status)) { setStale(true); setView(null); retireGeneration(); }
+        setError(observing && ![403, 404, 409].includes(failure.status)
+          ? "Status could not be confirmed. Resume status for the same operation." : failure.status === 409
           ? "The source or header changed. Refresh the encounter before editing again. Your unsaved inputs are shown below."
           : failure.status === 422 ? "The header edit could not be validated. Check the code, evidence, and required reason."
           : "The header could not be loaded or saved. No replacement result was substituted.");
@@ -94,9 +129,9 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   function command(path, body = {}) {
     if (path === "/generate" && !generationAllowed) return;
     run({path: BASE + path, body: {encounterId: encounter.encounterId, expectedSource: pin,
-      operationId: crypto.randomUUID(), ...body}});
+      operationId: crypto.randomUUID(), ...(path === "/generate" && asyncEnabled ? {responseMode: "async"} : {}), ...body}});
   }
-  function startEdit() { setDraft(headerDraft(view)); setReason(""); setNotice(""); }
+  function startEdit() { clearTimeout(pollTimer.current); pollTimer.current = null; setDraft(headerDraft(view)); setReason(""); setNotice(""); }
   function editCode(index, patch) {
     setDraft((current) => replaceHeaderCodes(current, current.codes.map((row, i) => i === index ? {...row, ...patch} : row)));
   }
@@ -127,7 +162,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
       {h && !draft && <div className="flex flex-wrap gap-2"><button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>
         <button className={button} disabled={disabled} onClick={copyHeader}>Copy header with evidence</button>
         <button className={button} disabled={disabled} onClick={downloadHeader}>Download header text</button></div>}
-      {!h && loaded && !stale && <button className={button} disabled={disabled || !generationAllowed} onClick={() => command("/generate")}>Generate billing header</button>}
+      {!h && loaded && !stale && <button className={button} disabled={disabled || !!generation || !generationAllowed} onClick={() => command("/generate")}>Generate billing header</button>}
     </div>
     <SourceVisitContext value={encounter.sourceVisitContext} expectedSource={pin} />
     {!generationAllowed && <div role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">
@@ -138,7 +173,8 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     {notice && <p role="status" className="mt-3 text-sm text-emerald-800">{notice}</p>}
     {error && <div role="alert" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"><p>{error}</p>
       {retry && <button className={`${button} mt-2`} disabled={busy} onClick={() => run(retry)}>Retry same request</button>}
-      {!retry && !stale && <button className={`${button} mt-2`} disabled={busy} onClick={() => run()}>Reload header</button>}
+      {generation && !stale && <button className={`${button} mt-2`} disabled={busy} onClick={() => { const state = {...generation, until: Date.now() + 300_000}; generationRef.current = state; setGeneration(state); run(state); }}>Resume status</button>}
+      {!retry && !stale && <button className={`${button} mt-2`} disabled={busy || !!draft} onClick={() => run()}>Reload header</button>}
     </div>}
     {h && <>
       <p className="mt-4 text-xs font-medium text-slate-600">{view.signoff ? "Coder review recorded" : "Coder review pending"} · {h.generation.inferenceMode === "mock" ? "Offline synthetic engine" : "Billing engine"} · revision {view.revisionNumber}</p>

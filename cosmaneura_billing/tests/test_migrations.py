@@ -39,6 +39,7 @@ def test_checked_in_up_migrations_are_ordered_and_down_files_are_excluded():
         "025_provider_model_source.up.sql",
         "026_core_workload_bridge.up.sql",
         "027_communications_delivery_errors.up.sql",
+        "028_billing_header_generation.up.sql",
     ]
 
 

@@ -11,7 +11,7 @@ from pydantic import Field, model_validator
 from .provider_handoff import Closed, Completion, VisitContext, Document
 from .billing_header import timestamp
 
-PURPOSES = frozenset(("completed-note.accept", "header.read", "header.generate", "header.save"))
+PURPOSES = frozenset(("completed-note.accept", "header.read", "header.generate", "header.save", "header.generation-status"))
 
 
 def canonical(value):
@@ -93,11 +93,14 @@ def authorization_request(operation, purpose, request_sha):
         "sourceTextSha256": operation["source"]["textSha256"]}
 
 
-def verify_authorization(value, operation, purpose, request_sha, *, now=None):
+def verify_authorization(value, operation, purpose, request_sha, *, now=None, async_generation=False):
     """Verify the authenticated Core response; its body is not a bearer token."""
     try:
         keys = {"schemaVersion", "allowed", "operationId", "purpose", "requestSha256", "operationSha256",
                 "practiceId", "actor", "source", "admission", "authorizedAt", "expiresAt"}
+        if async_generation:
+            require(purpose == "header.generate")
+            keys.add("generationExpiresAt")
         require(type(value) is dict and set(value) == keys and value["allowed"] is True
                 and value["schemaVersion"] == "core-cab-authorization.v1")
         require(value["operationId"] == operation["operationId"] and value["purpose"] == purpose
@@ -109,6 +112,10 @@ def verify_authorization(value, operation, purpose, request_sha, *, now=None):
         issued, expires = timestamp(value["authorizedAt"]), timestamp(value["expiresAt"])
         current = now or datetime.now(timezone.utc)
         require(issued <= current + timedelta(seconds=2) and current < expires and 0 < (expires-issued).total_seconds() <= 30)
+        if async_generation:
+            deadline = timestamp(value["generationExpiresAt"])
+            require(current < deadline and expires <= deadline
+                    and (deadline-issued).total_seconds() <= 362)
         return value
     except CoreBridgeError:
         raise

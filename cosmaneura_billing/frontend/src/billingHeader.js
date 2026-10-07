@@ -353,7 +353,7 @@ export function armHeaderRequestDeadline(pending, request, onTimeout) {
     if (!finishHeaderRequest(pending, request)) return;
     request.controller.abort();
     onTimeout();
-  }, request.command?.path === "/api/encounters/header/generate"
+  }, request.command?.path === "/api/encounters/header/generate" && request.command.body?.responseMode !== "async"
     ? HEADER_GENERATION_TIMEOUT_MS : HEADER_REQUEST_TIMEOUT_MS);
 }
 
@@ -365,4 +365,17 @@ export function beginHeaderRequest(pending, command = null, refresh = false, unr
   if (pending.current) return null;
   pending.current = {controller: new AbortController(), command};
   return pending.current;
+}
+
+
+export function readHeaderGeneration(response, command) {
+  const value = response?.generation;
+  if (!value || Object.keys(value).sort().join() !== "operationId,status" ||
+      value.operationId !== command.body.operationId ||
+      !["running", "succeeded", "failed", "unknown"].includes(value.status) ||
+      Object.keys(response).sort().join() !== "created,generation,view" ||
+      typeof response.created !== "boolean" ||
+      (value.status === "succeeded" ? !response.view : response.view !== null || response.created !== false))
+    throw new Error("invalid-header-generation-response");
+  return value;
 }

@@ -83,6 +83,7 @@ export default function App() {
 
 function Workspace() {
   const [view, setView] = useState(null);               // provider | coder | chase
+  const [headerAsync, setHeaderAsync] = useState(false);
   const [views, setViews] = useState([]);               // server-owned capabilities
   const [chaseDemoSeed, setChaseDemoSeed] = useState(null); // Admin-only server capability
   const [billingHeaderAvailable, setBillingHeaderAvailable] = useState(false);
@@ -168,6 +169,7 @@ function Workspace() {
         setViews(session.views);
         setChaseDemoSeed(session.actions?.seedSyntheticChase || null);
         setManageChase(session.capabilities?.manageChase === true);
+        setHeaderAsync(session.capabilities?.billingHeaderAsync === true);
         setBillingHeaderAvailable(canLaunchHeader(session));
         setHandoffAvailable(canPreviewHandoff(session));
         setView((current) => (
@@ -312,6 +314,7 @@ function Workspace() {
           </div>
         ) : view === "provider" ? (
           <BillingReview
+            headerAsync={headerAsync}
             encounters={encounters}
             selectedId={selected}
             live={Boolean(health)}
@@ -323,6 +326,7 @@ function Workspace() {
           />
         ) : (
           <CoderReview
+            headerAsync={headerAsync}
             encounterId={selected}
             encounters={encounters}
             live={Boolean(health)}

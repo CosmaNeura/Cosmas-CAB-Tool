@@ -67,11 +67,23 @@ class CoreOperationAuthorizer:
         self.opener = build_opener(ProxyHandler({}), _NoRedirect())
 
     def __call__(self, operation, purpose, request_sha):
+        return self._post(operation, "authorize", authorization_request(operation, purpose, request_sha))
+
+    def complete(self, operation, request_sha, status):
+        body = {**authorization_request(operation, "header.generate", request_sha),
+                "schemaVersion": "core-cab-generation-completion.v1", "status": status}
+        body.pop("purpose")
+        value = self._post(operation, "complete-generation", body)
+        require(value == {"schemaVersion": "core-cab-generation-completion-receipt.v1",
+                "operationId": operation["operationId"], "requestSha256": request_sha,
+                "status": status, "closed": True})
+
+    def _post(self, operation, endpoint, body):
         try:
             token = self.credential.get_token(self.policy.core_token_scope).token
             req = WireRequest(self.policy.core_origin.rstrip("/") +
-                f"/internal/cab/v1/operations/{operation['operationId']}/authorize",
-                data=canonical(authorization_request(operation, purpose, request_sha)).encode(), method="POST",
+                f"/internal/cab/v1/operations/{operation['operationId']}/{endpoint}",
+                data=canonical(body).encode(), method="POST",
                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "Accept": "application/json"})
             with self.opener.open(req, timeout=3) as response:
                 require(response.status == 200)
@@ -94,11 +106,18 @@ class CoreLease:
         self.principal, self.workload, self.authorizer = principal, workload, authorizer
         self.authorization = None
         self.active = False
+        self.async_generation = False
+        self.generation_deadline = None
 
     def recheck(self):
         require(self.active and datetime.now(timezone.utc).timestamp() < self.workload.expires_at)
         self.authorization = verify_authorization(self.authorizer(self.operation, self.purpose, self.request_sha),
-                                                  self.operation, self.purpose, self.request_sha)
+                                                  self.operation, self.purpose, self.request_sha,
+                                                  async_generation=self.async_generation)
+        if self.async_generation:
+            deadline = self.authorization["generationExpiresAt"]
+            require(self.generation_deadline is None or self.generation_deadline == deadline)
+            self.generation_deadline = deadline
         return self.authorization
 
     def check_source(self, stored):
@@ -117,6 +136,39 @@ class CoreLease:
         finally:
             self.active = False
             _ACTIVE.reset(token)
+
+
+def captured_generation(*, async_mode):
+    lease = _ACTIVE.get()
+    if lease is None:
+        return None
+    require(lease.active and lease.purpose == "header.generate" and lease.async_generation == async_mode)
+    lease.recheck()
+    return {"operation": lease.operation, "requestSha": lease.request_sha, "principal": lease.principal,
+            "workload": lease.workload, "connection": lease.connection_id, "policy": lease.policy,
+            "authorizer": lease.worker_authorizer, "async": async_mode,
+            "generationExpiresAt": lease.generation_deadline}
+
+
+def worker_lease(capture, services):
+    operation = capture["operation"]
+    principal, connection = _resolve(services.context, capture["workload"], operation["practiceId"], operation["actor"])
+    require(principal == capture["principal"] and connection == capture["connection"])
+    actual, _ = _load_operation(services.context, services.encounters, principal, operation["operationId"])
+    require(digest(actual) == digest(operation))
+    lease = CoreLease(operation=actual, purpose="header.generate", request_sha=capture["requestSha"],
+        principal=principal, workload=capture["workload"],
+        authorizer=capture["authorizer"] or CoreOperationAuthorizer(capture["policy"]))
+    lease.connection_id, lease.policy = connection, capture["policy"]
+    lease.async_generation = capture["async"]
+    lease.generation_deadline = capture["generationExpiresAt"] if capture["async"] else None
+    return lease
+
+
+def complete_generation(capture, status):
+    if capture["async"]:
+        authorizer = capture["authorizer"] or CoreOperationAuthorizer(capture["policy"])
+        authorizer.complete(capture["operation"], capture["requestSha"], status)
 
 
 def assert_core_model_authority(source, actor, stored):
@@ -235,7 +287,7 @@ def _load_operation(context, encounters, principal, operation_id):
 
 
 _PATHS = {"/api/core/v1/completed-notes": "completed-note.accept",
-          **{f"/api/core/v1/header/{kind}": f"header.{kind}" for kind in ("read", "generate", "save")}}
+          **{f"/api/core/v1/header/{kind}": f"header.{kind}" for kind in ("read", "generate", "save", "generation-status")}}
 
 
 def _unique(pairs):
@@ -254,7 +306,7 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
     from starlette.concurrency import run_in_threadpool
     from . import api
     from .access_audit import build_access_event, classify_access
-    from .billing_header_routes import HeaderRead, HeaderGenerate, HeaderSave, read_header, generate_header, save_header
+    from .billing_header_routes import HeaderRead, HeaderGenerate, HeaderSave, HeaderOperation, read_header, generate_header, save_header, generation_status
     from .billing_header import BillingHeaderError
     from .persistence import PostgresContext, postgres_services
     from .model_admission import parse_policy
@@ -273,13 +325,17 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
     require(settings.environment in {"test", "development"} or
             verifier is None and authorizer is None and orchestrator_factory is None)
     verifier = verifier or CoreWorkloadAuthenticator(policy.inbound)
+    worker_authorizer = authorizer
     authorizer = authorizer or CoreOperationAuthorizer(policy)
     services = postgres_services(settings)
     context = services.encounters.context
     headers, handoffs = CoreHeaderStore(context), CoreHandoffStore(context)
+    from .header_generation import GenerationManager
+    manager = GenerationManager(settings, factory=orchestrator_factory) if settings.billing_header_async_enabled else None
 
     def healthcheck():
         services.encounters.healthcheck(); headers.healthcheck(); handoffs.healthcheck()
+        if manager is not None: manager.store.healthcheck()
         with context.connection() as conn:
             checks = conn.execute("""SELECT
              has_function_privilege(current_user,'cosmaneura_resolve_core_actor(uuid,uuid,text,text,text,text,text)','EXECUTE') AS resolve,
@@ -293,16 +349,19 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
         healthcheck()
         factory = orchestrator_factory or api.get_orchestrator
         app.state.orchestrator = factory(settings, feedback_store=services.feedback)
+        if manager is not None: manager.start()
         app.state.ready = True
         try:
             yield
         finally:
             app.state.ready = False
+            if manager is not None: manager.shutdown()
             shutdown = getattr(app.state.orchestrator, "shutdown", None)
             if callable(shutdown): shutdown()
             app.state.orchestrator = None
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.header_generation = manager
     app.state.settings, app.state.encounter_store = settings, services.encounters
     app.state.feedback_store, app.state.billing_header_store = services.feedback, headers
     app.state.model_data_policy, app.state.ready = parse_policy(settings.model_data_policy_json), False
@@ -345,6 +404,8 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
         lease = CoreLease(operation=operation, purpose=purpose, request_sha=digest(body),
                           principal=principal, workload=workload, authorizer=authorizer)
         lease.connection_id = connection_id
+        lease.policy, lease.worker_authorizer = policy, worker_authorizer
+        lease.async_generation = purpose == "header.generate" and body["command"].get("responseMode") == "async"
         request.state.principal = principal
         event_id = str(uuid4())
         request.state.audit_event_id = event_id
@@ -370,7 +431,7 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
                 else:
                     kind = purpose.split(".")[1]
                     cls, handler = {"read": (HeaderRead, read_header), "generate": (HeaderGenerate, generate_header),
-                                    "save": (HeaderSave, save_header)}[kind]
+                                    "save": (HeaderSave, save_header), "generation-status": (HeaderOperation, generation_status)}[kind]
                     command = cls.model_validate(body["command"])
                     require(command.encounterId == receipt["encounterId"]
                         and source_digest(command.expectedSource) == source_digest(receipt["headerSource"]), "source_changed", 409)
