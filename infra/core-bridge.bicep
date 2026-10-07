@@ -24,6 +24,10 @@ param deploymentId string = ''
 param storageId string = ''
 param externalIngress bool = false
 param enableInference bool = false
+@description('Existing durable generation capability; requires canonical028 and the dedicated runtime EXECUTE grant before enablement.')
+param enableAsyncGeneration bool = false
+@description('Existing provider-continuation contract; opt in only after the matching Core migration/client and async generation.')
+param enableGenerationContinuation bool = false
 param azureOpenAIAccountName string
 param azureOpenAIDeployment string
 param azureOpenAIModel string
@@ -40,6 +44,9 @@ var validatedIngress = externalIngress && empty(policyJson)
 var validatedInference = enableInference && (empty(policyJson) || empty(modelDataPolicyJson) || empty(deploymentId) || empty(storageId))
   ? fail('Core bridge inference requires separate exact workload/model policies and deployment/storage references')
   : enableInference
+var validatedGenerationContinuation = enableGenerationContinuation && !enableAsyncGeneration
+  ? fail('Core bridge continuation requires async generation')
+  : enableGenerationContinuation
 var validatedPolicy = empty(policyJson) ? ''
   : json(policyJson).managedIdentityClientId != identity.properties.clientId
     ? fail('Core bridge policy managed identity must match this dedicated service')
@@ -127,6 +134,8 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           { name: 'COSMANEURA_PRACTICE_ID', value: practiceId }
           { name: 'COSMANEURA_ALLOWED_ROLES', value: 'Provider,Admin' }
           { name: 'COSMANEURA_BILLING_HEADER_ENABLED', value: 'true' }
+          { name: 'COSMANEURA_BILLING_HEADER_ASYNC_ENABLED', value: string(enableAsyncGeneration) }
+          { name: 'COSMANEURA_BILLING_HEADER_CONTINUATION_ENABLED', value: string(validatedGenerationContinuation) }
           { name: 'COSMANEURA_PROVIDER_HANDOFF_ENABLED', value: 'true' }
           { name: 'COSMANEURA_REVIEW_CONTEXT_SIGNING_KEY', secretRef: 'review-signing-key' }
           { name: 'COSMANEURA_CORE_BRIDGE_POLICY_JSON', value: validatedPolicy }
@@ -151,7 +160,8 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
           { name: 'AZURE_OPENAI_MODEL', value: azureOpenAIModel }
           { name: 'AZURE_OPENAI_API_VERSION', value: azureOpenAIApiVersion }
         ] : [])
-        resources: { cpu: json('0.5'), memory: '1Gi' }
+        // Candidate sizing only: actual installed-image capacity acceptance precedes rollout.
+        resources: { cpu: enableAsyncGeneration ? json('1.0') : json('0.5'), memory: enableAsyncGeneration ? '2Gi' : '1Gi' }
         probes: [
           { type: 'Startup', httpGet: { path: healthPath, port: 8000, scheme: 'HTTP' }, initialDelaySeconds: 5, periodSeconds: 5, timeoutSeconds: 4, failureThreshold: 36 }
           { type: 'Readiness', httpGet: { path: healthPath, port: 8000, scheme: 'HTTP' }, periodSeconds: 10, timeoutSeconds: 4, failureThreshold: 3 }

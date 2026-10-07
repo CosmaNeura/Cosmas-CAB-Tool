@@ -92,6 +92,10 @@ param provisionCoreBridge bool = false
 @description('Explicit reachability choice for authenticated Core workloads. Private ingress requires a verified cross-environment network path.')
 param coreBridgeExternalIngress bool = false
 param enableCoreBridgeInference bool = false
+@description('Opt in to durable Core header generation only after canonical028, the dedicated runtime EXECUTE grant and capacity acceptance. Does not enable inference.')
+param enableCoreBridgeAsyncGeneration bool = false
+@description('Opt in to the existing Core provider-continuation contract only with async generation. Does not grant source or model authority.')
+param enableCoreBridgeGenerationContinuation bool = false
 param coreBridgeDatabaseRole string = ''
 param coreBridgeDatabaseSecretName string = 'core-bridge-database-url'
 @secure()
@@ -505,8 +509,11 @@ var validatedCoreDatabaseRole = provisionCoreBridge && (empty(coreBridgeDatabase
 var validatedCoreDatabaseSecret = provisionCoreBridge && (empty(coreBridgeDatabaseSecretName) || contains(union(athenaReservedSecretNames, betaSecretNames, [toLower(entraClientSecretKeyVaultSecretName), toLower(athenaClientSecretKeyVaultSecretName)]), toLower(coreBridgeDatabaseSecretName)))
   ? fail('Core bridge database secret must not alias any API, owner, worker, importer or credential secret')
   : coreBridgeDatabaseSecretName
-var validatedCoreProvisioning = (coreBridgeExternalIngress || enableCoreBridgeInference || !empty(coreBridgePolicyJson) || !empty(coreBridgeModelDataPolicyJson)) && !provisionCoreBridge
-  ? fail('Core bridge policy, ingress and inference require explicit provisionCoreBridge')
+var validatedCoreGenerationContinuation = enableCoreBridgeGenerationContinuation && !enableCoreBridgeAsyncGeneration
+  ? fail('Core bridge continuation requires async generation')
+  : enableCoreBridgeGenerationContinuation
+var validatedCoreProvisioning = (coreBridgeExternalIngress || enableCoreBridgeInference || enableCoreBridgeAsyncGeneration || enableCoreBridgeGenerationContinuation || !empty(coreBridgePolicyJson) || !empty(coreBridgeModelDataPolicyJson)) && !provisionCoreBridge
+  ? fail('Core bridge policy, ingress, inference and generation options require explicit provisionCoreBridge')
   : provisionCoreBridge
 
 module coreBridge './core-bridge.bicep' = if (validatedCoreProvisioning) {
@@ -530,6 +537,8 @@ module coreBridge './core-bridge.bicep' = if (validatedCoreProvisioning) {
     storageId: coreBridgeStorageId
     externalIngress: coreBridgeExternalIngress
     enableInference: enableCoreBridgeInference
+    enableAsyncGeneration: enableCoreBridgeAsyncGeneration
+    enableGenerationContinuation: validatedCoreGenerationContinuation
     azureOpenAIAccountName: azureOpenAIName
     azureOpenAIDeployment: azureOpenAIDeploymentName
     azureOpenAIModel: azureOpenAIModelName

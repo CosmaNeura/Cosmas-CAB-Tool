@@ -291,7 +291,8 @@ def test_compiled_provider_handoff_requires_header_without_new_authority(compile
 
 def test_core_bridge_is_opt_in_separate_and_same_digest(compiled):
     params = json.loads((ROOT / 'infra/app.parameters.example.json').read_text())['parameters']
-    for key in ('provisionCoreBridge', 'coreBridgeExternalIngress', 'enableCoreBridgeInference'):
+    for key in ('provisionCoreBridge', 'coreBridgeExternalIngress', 'enableCoreBridgeInference',
+                'enableCoreBridgeAsyncGeneration', 'enableCoreBridgeGenerationContinuation'):
         assert compiled['parameters'][key]['defaultValue'] is False
         assert params[key]['value'] is False
     for key in ('coreBridgePolicyJson', 'coreBridgeModelDataPolicyJson'):
@@ -362,3 +363,56 @@ def test_core_bridge_policy_model_and_network_boundaries_are_explicit(compiled):
     reader = next(r for r in addon['resources'] if r['type'] == 'Microsoft.Authorization/roleAssignments'
                   and r['properties']['roleDefinitionId'].endswith("'5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]"))
     assert reader['condition'] == "[variables('validatedInference')]"
+
+
+def test_core_async_flags_reach_only_the_dedicated_receiver(compiled):
+    module = next(r for r in compiled['resources'] if r['type'] == 'Microsoft.Resources/deployments'
+                  and r['name'] == 'core-workload-runtime')
+    addon = module['properties']['template']
+    values = module['properties']['parameters']
+    assert values['enableAsyncGeneration']['value'] == "[parameters('enableCoreBridgeAsyncGeneration')]"
+    assert values['enableGenerationContinuation']['value'] == "[variables('validatedCoreGenerationContinuation')]"
+    for key in ('enableAsyncGeneration', 'enableGenerationContinuation'):
+        assert addon['parameters'][key]['defaultValue'] is False
+    app = next(r for r in addon['resources'] if r['type'] == 'Microsoft.App/containerApps')
+    container = app['properties']['template']['containers'][0]
+    env = container['env']
+    for name, value in (
+        ('COSMANEURA_BILLING_HEADER_ASYNC_ENABLED', "parameters('enableAsyncGeneration')"),
+        ('COSMANEURA_BILLING_HEADER_CONTINUATION_ENABLED', "variables('validatedGenerationContinuation')"),
+    ):
+        assert env.count(name) == 1
+        assert f"createObject('name', '{name}', 'value', string({value}))" in env
+        for other in compiled['resources']:
+            if other is not module:
+                assert name not in json.dumps(other)
+    assert container['resources'] == {
+        'cpu': "[if(parameters('enableAsyncGeneration'), json('1.0'), json('0.5'))]",
+        'memory': "[if(parameters('enableAsyncGeneration'), '2Gi', '1Gi')]",
+    }
+
+
+def test_core_async_relationships_fail_closed_without_enabling_other_authority(compiled):
+    addon = next(r for r in compiled['resources'] if r['type'] == 'Microsoft.Resources/deployments'
+                 and r['name'] == 'core-workload-runtime')['properties']['template']
+    for template, continuation, asynchronous, guard in (
+        (compiled, 'enableCoreBridgeGenerationContinuation', 'enableCoreBridgeAsyncGeneration',
+         'validatedCoreGenerationContinuation'),
+        (addon, 'enableGenerationContinuation', 'enableAsyncGeneration', 'validatedGenerationContinuation'),
+    ):
+        assert template['variables'][guard] == (
+            f"[if(and(parameters('{continuation}'), not(parameters('{asynchronous}'))), "
+            "fail('Core bridge continuation requires async generation'), "
+            f"parameters('{continuation}'))]"
+        )
+    provisioning = compiled['variables']['validatedCoreProvisioning']
+    assert "parameters('enableCoreBridgeAsyncGeneration')" in provisioning
+    assert "parameters('enableCoreBridgeGenerationContinuation')" in provisioning
+    assert "not(parameters('provisionCoreBridge'))" in provisioning and 'fail(' in provisioning
+    for guard in ('validatedInference', 'validatedIngress', 'validatedPolicy'):
+        expression = addon['variables'].get(guard, '')
+        assert 'enableAsyncGeneration' not in expression and 'enableGenerationContinuation' not in expression
+    # The existing model permission still depends only on the separate inference choice.
+    model = next(r for r in addon['resources'] if r['type'] == 'Microsoft.Authorization/roleAssignments'
+                 and r['properties']['roleDefinitionId'].endswith("'5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]"))
+    assert model['condition'] == "[variables('validatedInference')]"

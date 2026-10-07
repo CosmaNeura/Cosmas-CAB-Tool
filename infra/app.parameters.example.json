@@ -71,6 +71,8 @@
     "provisionCoreBridge": {"value": false},
     "coreBridgeExternalIngress": {"value": false},
     "enableCoreBridgeInference": {"value": false},
+    "enableCoreBridgeAsyncGeneration": {"value": false},
+    "enableCoreBridgeGenerationContinuation": {"value": false},
     "coreBridgeDatabaseRole": {"value": ""},
     "coreBridgeDatabaseSecretName": {"value": "core-bridge-database-url"},
     "coreBridgePolicyJson": {"value": ""},
