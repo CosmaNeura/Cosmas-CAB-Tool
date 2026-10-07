@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import csv
 import gzip
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 # modifier indicator: 0 = modifier never bypasses the edit, 1 = a modifier may
 # bypass when clinically appropriate, 9 = edit not applicable / deleted.
@@ -49,26 +51,36 @@ def _open(path: Path):
         if str(path).endswith(".gz") else open(path, newline="", encoding="utf-8", errors="ignore")
 
 
-def _read_rows(path: Path) -> tuple[list[str], list[list[str]]]:
-    """Return (header, rows). Sniff comma vs tab; fall back to whitespace."""
+@contextmanager
+def _read_rows(path: Path) -> Iterator[tuple[list[str], Iterator[list[str]]]]:
+    """Keep only the header and current row; close text/workbook on every exit."""
     text_path = Path(path)
     if str(text_path).lower().endswith((".xlsx", ".xlsm")):
         from openpyxl import load_workbook
         wb = load_workbook(text_path, read_only=True, data_only=True)
-        ws = wb.active
-        rows = [[("" if c is None else str(c)) for c in r] for r in ws.iter_rows(values_only=True)]
-        return (rows[0] if rows else []), rows[1:]
+        try:
+            rows = (["" if c is None else str(c) for c in row]
+                    for row in wb.active.iter_rows(values_only=True))
+            # Spreadsheet behavior is intentionally first-row header, unlike TXT.
+            yield next(rows, []), rows
+        finally:
+            wb.close()
+        return
     with _open(text_path) as fh:
         sample = fh.read(4096)
         fh.seek(0)
         delim = "\t" if sample.count("\t") >= sample.count(",") else ","
-        reader = list(csv.reader(fh, delimiter=delim))
-    # NCCI text files sometimes carry a title line above the header; find the header row
-    for i, row in enumerate(reader):
-        joined = " ".join(row).lower()
-        if "column 1" in joined or ("hcpcs" in joined and "mue" in joined) or "code" in joined:
-            return row, reader[i + 1:]
-    return (reader[0] if reader else []), reader[1:]
+        rows = csv.reader(fh, delimiter=delim)
+        # Preserve the existing whole-file title/header detection and fallback.
+        # If no row is recognizable, rewind rather than retaining all rows.
+        for row in rows:
+            joined = " ".join(row).lower()
+            if "column 1" in joined or ("hcpcs" in joined and "mue" in joined) or "code" in joined:
+                yield row, rows
+                return
+        fh.seek(0)
+        rows = csv.reader(fh, delimiter=delim)
+        yield next(rows, []), rows
 
 
 def _col(header: list[str], *needles: str) -> int | None:
@@ -84,7 +96,11 @@ _BUNDLED_DIR = Path(__file__).resolve().parent.parent / "data" / "ncci"
 
 class NCCIEdits:
     def __init__(self) -> None:
-        self._ptp: dict[tuple[str, str], PTPResult] = {}
+        # Retain one modifier per directed pair, not a tuple/dataclass per pair.
+        # Canonical code strings belong to this dataset instance, never sys.intern.
+        self._ptp: dict[str, dict[str, str]] = {}
+        self._codes: dict[str, str] = {}
+        self._pair_count = 0
         self._mue: dict[str, int] = {}
 
     _bundled_cache: dict[str, "NCCIEdits | None"] = {}
@@ -130,45 +146,59 @@ class NCCIEdits:
             self.load_mue(mue_path)
         return self
 
+    def _code(self, value: str) -> str:
+        code = _norm(value)
+        return self._codes.setdefault(code, code)
+
     def load_ptp(self, path: str | Path) -> int:
-        header, rows = _read_rows(Path(path))
-        c1 = _col(header, "column 1") if _col(header, "column 1") is not None else 0
-        c2 = _col(header, "column 2") if _col(header, "column 2") is not None else 1
-        cm = _col(header, "modifier")
         n = 0
-        for r in rows:
-            if len(r) <= max(c1, c2):
-                continue
-            a, b = _norm(r[c1]), _norm(r[c2])
-            if not a or not b:
-                continue
-            mod = (r[cm].strip()[:1] if cm is not None and cm < len(r) and r[cm].strip() else "9")
-            self._ptp[(a, b)] = PTPResult(a, b, mod, _MOD.get(mod, "unknown"))
-            n += 1
+        with _read_rows(Path(path)) as (header, rows):
+            c1 = _col(header, "column 1") if _col(header, "column 1") is not None else 0
+            c2 = _col(header, "column 2") if _col(header, "column 2") is not None else 1
+            cm = _col(header, "modifier")
+            for r in rows:
+                if len(r) <= max(c1, c2):
+                    continue
+                a, b = _norm(r[c1]), _norm(r[c2])
+                if not a or not b:
+                    continue
+                a, b = self._code(a), self._code(b)
+                mod = (r[cm].strip()[:1] if cm is not None and cm < len(r) and r[cm].strip() else "9")
+                pairs = self._ptp.setdefault(a, {})
+                if b not in pairs:
+                    self._pair_count += 1
+                pairs[b] = mod
+                n += 1
         return n
 
     def load_mue(self, path: str | Path) -> int:
-        header, rows = _read_rows(Path(path))
-        cc = _col(header, "code") if _col(header, "code") is not None else 0
-        cv = _col(header, "mue", "value")
-        if cv is None:
-            cv = _col(header, "mue")
         n = 0
-        for r in rows:
-            if cv is None or len(r) <= max(cc, cv):
-                continue
-            code = _norm(r[cc])
-            try:
-                self._mue[code] = int(float(r[cv]))
+        with _read_rows(Path(path)) as (header, rows):
+            cc = _col(header, "code") if _col(header, "code") is not None else 0
+            cv = _col(header, "mue", "value")
+            if cv is None:
+                cv = _col(header, "mue")
+            for r in rows:
+                if cv is None or len(r) <= max(cc, cv):
+                    continue
+                try:
+                    value = int(float(r[cv]))
+                except (ValueError, TypeError):
+                    continue
+                self._mue[self._code(r[cc])] = value
                 n += 1
-            except (ValueError, TypeError):
-                continue
         return n
 
     # ---- queries -------------------------------------------------------- #
     def ptp_check(self, code_a: str, code_b: str) -> PTPResult | None:
         a, b = _norm(code_a), _norm(code_b)
-        return self._ptp.get((a, b)) or self._ptp.get((b, a))
+        modifier = self._ptp.get(a, {}).get(b)
+        if modifier is None:
+            a, b = b, a
+            modifier = self._ptp.get(a, {}).get(b)
+        if modifier is None:
+            return None
+        return PTPResult(a, b, modifier, _MOD.get(modifier, "unknown"))
 
     def mue_limit(self, code: str) -> int | None:
         return self._mue.get(_norm(code))
@@ -179,7 +209,7 @@ class NCCIEdits:
 
     @property
     def stats(self) -> str:
-        return f"{len(self._ptp)} PTP pairs, {len(self._mue)} MUE limits"
+        return f"{self._pair_count} PTP pairs, {len(self._mue)} MUE limits"
 
 
 if __name__ == "__main__":
