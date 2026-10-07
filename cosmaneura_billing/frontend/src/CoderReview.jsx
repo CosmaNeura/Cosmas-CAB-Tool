@@ -12,13 +12,14 @@ import {
 } from "./coderReview.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import { loadCoderWorkspace, workspaceInferenceAllowed } from "./workspaceSource.js";
 import {mappingAddition} from "./diagnosisMapping.js";
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
 import { primaryBadge } from "./diagnosisSequencing.js";
 import { diagnosisOrderDecisionId, headerDecisionIds, headerProposals, headerReviewRequest,
   missingHeaderBaseline, proposedDiagnosisOrder, readBillingHeader } from "./billingHeader.js";
 import {
-  completenessLabel, isSyntheticDemoEncounter, sourceLabel,
+  completenessLabel, sourceLabel,
 } from "./providerBilling.js";
 
 const REASONS = Object.freeze({
@@ -291,24 +292,23 @@ export default function CoderReview({
     onStatusChange(encounterId, { processingStatus: "Loading coder review", reviewState: "Needs review" });
     (async () => {
       try {
-        const [response, detail] = await Promise.all([
-          api("/api/encounters/coder-view", { method: "POST", body: { encounterId }, signal: controller.signal }),
-          api("/api/encounters/detail", { method: "POST", body: { encounterId }, signal: controller.signal }),
-        ]);
+        const { review: response, encounter } = await loadCoderWorkspace(encounterId,
+          encounters.find((item) => item.id === encounterId),
+          (path, body) => api(path, { method: "POST", body, signal: controller.signal }));
         if (requestId !== loadRequest.current) return;
-        const listed = encounters.find((item) => item.id === encounterId);
-        if (response.encounterId !== encounterId) throw new Error("encounter-mismatch-response");
-        if (!listed || !isSyntheticDemoEncounter(response) || response.dataClass !== listed.dataClass) throw new Error("synthetic-boundary-response");
+        setHeaderEncounter(encounter);
+        if (!response) {
+          onStatusChange(encounterId, { processingStatus: "Coding generation not approved", reviewState: "Needs review" });
+          activeLoadEncounter.current = null;
+          return;
+        }
         if (!Number.isInteger(response.encounterVersion) || !response.reviewContext || !response.completeness) throw new Error("incomplete-review-context");
-        if (detail.id !== encounterId || detail.encounterVersion !== response.encounterVersion
-          || detail.dataClass !== response.dataClass) throw new Error("source-version-response");
         const reviewable = reviewableCoderView(response);
         if (reviewable.contractViolations > 0) throw new Error("evidence-contract-response");
         const initial = initialCoderDraft(reviewable);
         reviewId.current = globalThis.crypto.randomUUID();
         setDecisions(initial.decisions);
         setEngine(reviewable);
-        setHeaderEncounter({...detail, encounterId: detail.id});
         onStatusChange(encounterId, {
           completenessState: completenessLabel(reviewable.completeness),
           processingStatus: reviewable.degraded ? "Inference unavailable" : "Ready for coder decisions",
@@ -504,7 +504,12 @@ export default function CoderReview({
 
       {!encounterId ? (
         <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-7 text-center"><FileCheck2 size={26} className="mx-auto text-slate-500" aria-hidden="true" /><h2 className="mt-2 font-semibold text-slate-950">Choose an encounter for coder review</h2><p className="mt-1 text-sm text-slate-600">No recommendation is accepted until a coder makes an explicit decision.</p></section>
-      ) : loadError?.encounterId === encounterId ? <ErrorNotice>{loadError.message}</ErrorNotice> : !engine || engine.encounterId !== encounterId ? (
+      ) : loadError?.encounterId === encounterId ? <ErrorNotice>{loadError.message}</ErrorNotice>
+        : headerEncounter?.encounterId === encounterId && !workspaceInferenceAllowed(headerEncounter) ? (
+          <section className="space-y-4"><p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-950">New coding generation is not approved for this source. You can read or edit its saved header; recording a new coder signoff requires a current authorized coding review.</p>
+            <BillingHeader encounter={headerEncounter} onStateChange={onHeaderState} generationAllowed={false} />
+          </section>
+        ) : !engine || engine.encounterId !== encounterId ? (
         <p role="status" className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm"><RefreshCw size={16} className="animate-spin" aria-hidden="true" />Loading evidence-linked coder review…</p>
       ) : engine.degraded ? (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950 shadow-sm"><div className="flex gap-3"><AlertTriangle size={20} className="mt-0.5 shrink-0" aria-hidden="true" /><div><h2 className="font-semibold">No codes proposed for this encounter</h2><p className="mt-1 text-sm">{engine.degraded.detail}</p><p className="mt-2 text-sm">No code recommendations, prepared draft, or feedback actions are shown. Route this encounter to manual review.</p></div></div></section>
@@ -527,7 +532,7 @@ export default function CoderReview({
           <DiagnosisSequencingNotice value={engine.diagnosisSequencing} />
           {headerEnabled && <>
             <BillingHeader encounter={headerEncounter} onStateChange={onHeaderState}
-              disabled={frozen && !receipt || saving} refreshKey={headerRefresh} />
+              disabled={frozen && !receipt || saving} refreshKey={headerRefresh} generationAllowed={workspaceInferenceAllowed(headerEncounter)} />
             <section className="rounded-2xl border border-teal-200 bg-teal-50 p-5" aria-labelledby="header-confirmation-heading">
               <h2 id="header-confirmation-heading" className="font-semibold text-teal-950">Review the saved header</h2>
               <p className="mt-1 text-sm text-teal-900">Review the facts, evidence, and documentation warnings above. For each human code proposal, record a decision and reason, then make matching code decisions below.</p>
@@ -590,7 +595,7 @@ export default function CoderReview({
           {excluded.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="excluded-heading"><h2 id="excluded-heading" className="font-semibold text-slate-950">Engine-held and removed candidates</h2><p className="mt-1 text-sm text-slate-600">These exclusions are read-only because the feedback contract has no “hold” action. A coder may start a separate manual addition, which still requires rationale and evidence.</p>{excluded.map((item) => <ExcludedRow key={item.key} item={item} disabled={frozen} added={additions.some((addition) => addition.sourceKey === item.key)} onStartManualAddition={() => startManualAddition(item)} />)}</section>}
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="manual-heading">
-            <h2 id="manual-heading" className="font-semibold text-slate-950">Human-added codes</h2><p className="mt-1 text-sm text-slate-600">Every addition requires a rationale and a supporting synthetic documentation excerpt. Human additions remain separate from engine suggestions.</p>
+            <h2 id="manual-heading" className="font-semibold text-slate-950">Human-added codes</h2><p className="mt-1 text-sm text-slate-600">Every addition requires a rationale and a supporting documentation excerpt. Human additions remain separate from engine suggestions.</p>
             <div className="mt-3 space-y-3">{additions.map((addition, index) => {
               const key = `addition:${addition.id}`;
               const rowIssues = showValidation ? issuesFor(key) : [];

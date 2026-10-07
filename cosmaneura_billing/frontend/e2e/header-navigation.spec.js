@@ -9,15 +9,19 @@ const source = "athena_staff_review_preview_synthetic";
 const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic reviewer", role: "provider"};
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-async function setup(page, {workspace = "provider", lostSave = false, holdRead = false} = {}) {
+async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, operationalDenied = false} = {}) {
   const details = {}, views = {}, commands = [], persisted = new Set();
+  const sourceKind = operationalDenied ? "provider_completed_note" : source;
+  let coderRequests = 0;
   let releaseRead;
   for (const [index, id] of ids.entries()) {
     const note = `Synthetic documented visit ${id}.`;
-    const pin = {encounterId: id, encounterVersion: 1, ingestionSource: source,
+    const pin = {encounterId: id, encounterVersion: 1, ingestionSource: sourceKind,
       noteId: `${id}:note`, noteVersion: "1", noteSha256: hash(note),
       bundleSha256: hash(id), supportingSourceDigests: []};
-    details[id] = {id, encounterVersion: 1, dataClass: source, readOnly: true,
+    details[id] = {id, encounterVersion: 1, dataClass: operationalDenied ? "operational" : source, readOnly: !operationalDenied,
+      ...(operationalDenied ? {ingestionSource: sourceKind,
+        inferencePolicy: {allowed: false, reason: "operational_source_model_not_approved"}} : {}),
       encounterType: "office_established", placeOfService: "11", submittedEm: "99213",
       signedNote: note, transcript: "", intake: "", headerSource: pin};
     views[id] = {revision: null, revisionNumber: 0, header: {
@@ -42,6 +46,7 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   await page.route("**/api/encounters/detail", (route) => route.fulfill({json: details[route.request().postDataJSON().encounterId]}));
   await page.route("**/api/completeness", (route) => route.fulfill({json: {complete: true, results: []}}));
   await page.route("**/api/encounters/coder-view", (route) => {
+    coderRequests += 1;
     const {encounterId} = route.request().postDataJSON();
     return route.fulfill({json: {encounterId, encounterVersion: 1, readOnly: true, dataClass: source,
       reviewContext: "synthetic-browser-context", submittedEm: "99213",
@@ -81,11 +86,29 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   await header.getByRole("button", {name: "Edit header", exact: true}).click();
   await header.getByLabel("Reviewer note (optional)").fill("Keep my unsaved review.");
   await header.getByLabel("Reason for edit (required)").fill("Compared the synthetic documentation.");
-  return {header, commands, navigation: page.getByRole("navigation", {name: "Workspace"}),
+  return {header, commands, coderRequests: () => coderRequests, navigation: page.getByRole("navigation", {name: "Workspace"}),
     prompt: page.getByRole("group", {name: "Confirm discarding header edits"})};
 }
 
 for (const workspace of ["provider", "coder"]) {
+  test(`${workspace} denied-model stored header preserves navigation and exact retry without inference`, async ({page}) => {
+    const {header, prompt, navigation, commands, coderRequests} = await setup(page, {workspace, lostSave: true, operationalDenied: true});
+    expect(coderRequests()).toBe(0);
+    await page.getByRole("button", {name: ids[1], exact: true}).click();
+    await expect(prompt).toBeVisible();
+    await prompt.getByRole("button", {name: "Keep editing", exact: true}).click();
+    await expect(header.getByLabel("Reviewer note (optional)")).toHaveValue("Keep my unsaved review.");
+    await header.getByRole("button", {name: "Save header edits", exact: true}).click();
+    await expect(header.getByRole("button", {name: "Retry same request", exact: true})).toBeVisible();
+    await expect(navigation.getByRole("button", {name: "Card chase", exact: true})).toBeDisabled();
+    await expect(page.getByRole("button", {name: ids[1], exact: true})).toBeDisabled();
+    await header.getByRole("button", {name: "Retry same request", exact: true}).click();
+    await expect(header).toContainText("Header edits saved");
+    expect(commands).toHaveLength(2);expect(commands[0]).toEqual(commands[1]);
+    expect(coderRequests()).toBe(0);
+    await expect(page.getByRole("button", {name: ids[1], exact: true})).toBeEnabled();
+  });
+
   test(`${workspace} can leave an unanswered read without locking the workspace`, async ({page}) => {
     const {header, navigation, releaseRead} = await setup(page, {workspace, holdRead: true});
     await expect(navigation.getByRole("button", {name: "Card chase", exact: true})).toBeEnabled();

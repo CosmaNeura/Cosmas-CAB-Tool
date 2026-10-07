@@ -210,6 +210,16 @@ def test_read_only_data_class_comes_only_from_persisted_source(client):
     assert unknown_policy == {"dataClass": "operational", "readOnly": False}
 
 
+@pytest.mark.parametrize("source", ["provider_completed_note", "athena_staff_review_operational"])
+def test_workspace_source_discriminator_does_not_grant_model_permission(source):
+    policy = api._encounter_data_policy(StoredEncounter(
+        resource_id="opaque-server-resource", bundle=SAMPLE_VISIT, source=source,
+    ))
+    assert policy == {"dataClass": "operational", "readOnly": False,
+        "ingestionSource": source,
+        "inferencePolicy": {"allowed": False, "reason": "operational_source_model_not_approved"}}
+
+
 def test_unknown_encounter_404(client):
     assert client.post(
         "/api/encounters/billing", json={"encounterId": "NOPE"},

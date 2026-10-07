@@ -902,7 +902,7 @@ def _encounter_data_policy(stored, request=None) -> dict[str, Any]:
             stored.source if is_synthetic_demo else "operational"
         ),
         "readOnly": is_synthetic_demo,
-        **({"inferencePolicy": policy}
+        **({"ingestionSource": stored.source, "inferencePolicy": policy}
            if stored.source in MODEL_SCOPED_SOURCES else {}),
     }
 

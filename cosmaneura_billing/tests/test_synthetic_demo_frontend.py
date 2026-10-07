@@ -1,4 +1,4 @@
-"""Source contracts for the dependency-light synthetic demo frontend."""
+"""Wiring contracts for source-verified workspaces; behavioral readers use Node tests."""
 from pathlib import Path
 
 
@@ -11,6 +11,8 @@ QUEUE = (FRONTEND / "ProviderQueue.jsx").read_text(encoding="utf-8")
 PROVIDER = (FRONTEND / "providerBilling.js").read_text(encoding="utf-8")
 CODER = (FRONTEND / "CoderReview.jsx").read_text(encoding="utf-8")
 CODER_LOGIC = (FRONTEND / "coderReview.js").read_text(encoding="utf-8")
+WORKSPACE = (FRONTEND / "workspaceSource.js").read_text(encoding="utf-8")
+LAUNCH = (FRONTEND / "providerHeaderLaunch.js").read_text(encoding="utf-8")
 CHASE = (FRONTEND / "CardChase.jsx").read_text(encoding="utf-8")
 SEED = (FRONTEND / "syntheticDemoSeed.js").read_text(encoding="utf-8")
 
@@ -31,7 +33,7 @@ def test_app_waits_for_a_list_selection_and_fails_safe_when_the_list_is_empty():
     assert "ENC-100237" not in APP
     assert "!encountersLoaded" in APP
     assert "encounterId={selected}" in APP
-    assert "No synthetic demo encounter is loaded" in APP
+    assert "No reviewable encounter is available" in APP
     assert "No mock claim or expected code has been substituted." in APP
     assert "billing service offline · no mock claim loaded" in APP
     assert "engine offline · mock data" not in APP
@@ -45,12 +47,15 @@ def test_synthetic_fixture_is_read_only_and_uses_only_the_stored_billing_route()
         in PROVIDER
     )
     assert 'athena_preview_synthetic: "Athena Preview synthetic fixture"' in PROVIDER
-    assert "detail.readOnly === true" in BILLING
+    assert "detail.readOnly === listed.readOnly" in WORKSPACE
+    assert "isSyntheticDemoEncounter(detail)" in WORKSPACE
     assert "sourceLabel(encounter.dataClass)" in BILLING
     assert 'startsWith("SYN-RC-")' not in BILLING + QUEUE + PROVIDER
     assert "Read-only documentation" in BILLING
-    assert "available.filter(isSyntheticDemoEncounter)" in APP
-    assert "!isSyntheticDemoEncounter(detail)" in BILLING
+    assert "isWorkspaceEncounterEntry(entry, canLaunchHeader(session))" in APP
+    assert "readWorkspaceEncounter(detail, selectedId, listed)" in BILLING
+    assert "readLaunchEncounter(detail, selectedId)" in WORKSPACE
+    assert "sourceHash(detail.signedNote) === pin.noteSha256" in LAUNCH
     assert 'api("/api/encounters/billing-tab"' in BILLING
     assert 'api("/api/encounters/billing"' not in BILLING
     assert 'api("/api/billing"' not in BILLING
@@ -68,11 +73,10 @@ def test_billing_and_coder_skip_requests_without_an_encounter_id():
     assert billing_guard < billing_request
 
     coder_guard = CODER.index("if (!encounterId) return cancelRequests;")
-    coder_request = CODER.index(
-        'api("/api/encounters/coder-view"',
-        coder_guard,
-    )
+    coder_request = CODER.index("await loadCoderWorkspace(encounterId,", coder_guard)
     assert coder_guard < coder_request
+    assert WORKSPACE.index("await readWorkspaceEncounter") < WORKSPACE.index('request("/api/encounters/coder-view"')
+    assert "if (!workspaceInferenceAllowed(encounter)) return { encounter, review: null }" in WORKSPACE
 
 
 def test_frontend_never_places_an_encounter_identifier_in_a_request_target():
@@ -99,9 +103,12 @@ def test_coder_review_is_explicit_evidence_bound_and_never_falls_back_to_a_mock(
 def test_coder_review_rejects_stale_or_untrusted_responses_and_freezes_exact_retry():
     assert "new AbortController()" in CODER
     assert "requestId !== loadRequest.current" in CODER
-    assert "response.encounterId !== encounterId" in CODER
-    assert "!isSyntheticDemoEncounter(response)" in CODER
-    assert "response.dataClass !== listed.dataClass" in CODER
+    assert "readWorkspaceResult(review, encounter)" in WORKSPACE
+    assert "result?.[idField] === encounter.encounterId" in WORKSPACE
+    assert "result.encounterVersion === encounter.encounterVersion" in WORKSPACE
+    assert "result.dataClass === encounter.dataClass" in WORKSPACE
+    assert "result.ingestionSource === encounter.ingestionSource" in WORKSPACE
+    assert "workspaceInferenceAllowed(result) && workspaceInferenceAllowed(encounter)" in WORKSPACE
     assert "engine.encounterId !== encounterId" in CODER
     assert "engine?.encounterId === encounterId" in CODER
     save_review = CODER.split("const saveReview = async () => {", 1)[1].split(
@@ -167,8 +174,8 @@ def test_coder_validation_is_labelled_without_reactive_focus_stealing():
 
 def test_provider_queue_and_persistent_safety_boundary_are_explicit():
     for label in (
-        "Synthetic data", "Decision support only", "Human review required",
-        "No EHR or claim transmission", "Patient outreach disabled",
+        "Server-stored documentation", "Decision support only", "Human review required",
+        "No EHR or claim transmission", "Original clinical note unchanged",
     ):
         assert label in APP
     for heading in (
@@ -188,9 +195,9 @@ def test_provider_review_uses_rich_contract_and_rejects_stale_cross_encounter_re
     assert "detail.id !== selectedId" in BILLING
     assert "controller.abort()" in BILLING
     assert "clinical_note_modified !== false" in BILLING
-    assert "!isSyntheticDemoEncounter(review)" in BILLING
-    assert "review.dataClass !== encounter.dataClass" in BILLING
-    assert "isValidEncounterVersion(detail.encounterVersion)" in BILLING
+    assert 'readWorkspaceResult(review, encounter, "visit_id")' in BILLING
+    assert "result.dataClass === encounter.dataClass" in WORKSPACE
+    assert "isValidEncounterVersion(detail.encounterVersion)" in WORKSPACE
     assert "isCurrentEncounterResult(review, encounter)" in BILLING
     assert "encounter-version-response" in BILLING
     assert "No browser fallback or canned result was substituted." in BILLING
