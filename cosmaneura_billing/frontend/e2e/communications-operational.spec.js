@@ -33,6 +33,42 @@ async function open(page) {
   return panel;
 }
 
+test("delivery errors show a safe reason and clear after success without enabling a resend", async ({ page }) => {
+  const view = payload(), mutations = [];
+  await page.route("**/api/chase/communications**", async (route) => {
+    const path = new URL(route.request().url()).pathname.slice(base.length);
+    if (path === "/unassigned-texts/count") return route.fulfill({ status: 404, json: {} });
+    const body = route.request().postDataJSON();
+    if (path === "/review-events") return route.fulfill({ json: {
+      schemaVersion: "communications-review.v1", chaseId: body.chaseId,
+      totalPending: 0, heldPending: 0, truncated: false, items: [],
+    } });
+    if (path) mutations.push(path);
+    if (!view.chaseId) {
+      view.chaseId = body.chaseId;
+      view.operations.push({ operationId: "33333333-3333-4333-8333-333333333333", caseId: view.chaseId,
+        channel: "sms", direction: "outbound", text: "Synthetic Practice: Please contact our office. Reply STOP to stop.",
+        status: "undelivered", simulated: false, createdAt: at, needsStaffReview: true, cancelable: false,
+        deliveryError: { code: "30034", source: "callback" }, providerMessage: "PRIVATE-CANARY" });
+    }
+    return route.fulfill({ json: view });
+  });
+  const panel = await open(page);
+  await expect(panel.getByLabel("Delivery problem", { exact: true })).toContainText("Provider code 30034");
+  await expect(panel.getByLabel("Delivery problem", { exact: true })).toContainText("A2P registration");
+  await expect(panel).not.toContainText("PRIVATE-CANARY");
+  await expect(panel.getByRole("button", { name: "Authorize SMS", exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Cancel SMS", exact: true })).toHaveCount(0);
+  Object.assign(view.operations[0], { status: "delivered", deliveryError: null, needsStaffReview: false });
+  await panel.getByRole("button", { name: "Refresh communications", exact: true }).click();
+  await expect(panel.getByLabel("Delivery problem", { exact: true })).toHaveCount(0);
+  Object.assign(view.operations[0], { status: "unknown", needsStaffReview: true,
+    deliveryError: { code: "transport_uncertain", source: "submission" }, canResolveUnknown: false });
+  await panel.getByRole("button", { name: "Refresh communications", exact: true }).click();
+  await expect(panel.getByLabel("Delivery problem", { exact: true })).toContainText("will not be sent again");
+  expect(mutations).toEqual([]);
+});
+
 test("texting-only workspaces keep call history and cancellation without offering new calls", async ({ page }) => {
   const view = payload();
   view.enabledChannels = ["sms"];

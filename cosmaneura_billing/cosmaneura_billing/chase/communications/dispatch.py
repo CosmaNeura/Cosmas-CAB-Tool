@@ -99,6 +99,17 @@ _VOICE_RANK = {"queued": 0, "initiated": 1, "ringing": 2, "in-progress": 3,
                "busy": 4, "failed": 4, "no-answer": 4, "canceled": 4, "completed": 5}
 
 
+def _delivery_error(code, source, status):
+    """Project only bounded codes relevant to the displayed delivery outcome."""
+    if status not in {"failed", "undelivered", "rejected", "unknown", "busy", "no-answer", "canceled"}:
+        return None
+    if not isinstance(code, str) or not (re.fullmatch(r"[0-9]{1,6}", code)
+            or source == "submission" and code in {
+                "transport_uncertain", "provider_uncertain", "invalid_provider_response", "provider_rejected"}):
+        return None
+    return {"code": code, "source": source}
+
+
 class CommunicationsDispatcher:
     def __init__(self, store: PostgresCommunicationsStore, *, policy: DispatchPolicy,
                  sender: SenderConfig, roster: DirectContractList,
@@ -529,11 +540,11 @@ class CommunicationsDispatcher:
                         case_id = matches[0]["case_id"]
                 db.execute("""INSERT INTO chase_communication_provider_events
                     (practice_id,account_sid,event_id,provider_sid,kind,channel,sender,recipient,case_id,text,status,
-                     disposition,opt_out,media_count,provider_sequence,body_hash)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                     disposition,opt_out,media_count,provider_sequence,body_hash,error_code)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (self.store.practice_id, self.sender.account_sid, event_id, event.provider_id, kind, channel,
                      event.from_number, event.to_number, case_id, event.text or "", event.provider_status,
-                     disposition, event.opt_out, event.media_count, event.provider_sequence, body_hash))
+                     disposition, event.opt_out, event.media_count, event.provider_sequence, body_hash, event.error_code))
                 self._audit(db, "communications_provider_event", case_id)
         return {"accepted": True, "eventId": event_id,
                 "twiml": gather_response_twiml() if kind == "voice_gather" else "<Response />"}
@@ -543,7 +554,7 @@ class CommunicationsDispatcher:
         with self.store._db() as db:
             # Contact numbers remain inside server bindings; never project them.
             rows = db.execute("""SELECT o.operation_id,a.created_at AS authorized_at,d.started_at,
-                r.outcome,r.provider_sid,r.status,r.account_sid,c.reason,c.checked_at,x.created_at AS canceled_at,
+                r.outcome,r.provider_sid,r.status,r.account_sid,r.error_code,c.reason,c.checked_at,x.created_at AS canceled_at,
                 u.decision,u.vendor_reference,u.created_at AS resolved_at
                 FROM chase_communication_operations o
                 LEFT JOIN chase_communication_authorizations a USING(practice_id,operation_id)
@@ -568,15 +579,21 @@ class CommunicationsDispatcher:
             # Current delivery state must not regress when the visible history
             # window truncates older terminal callbacks. Grouping bounds each
             # displayed operation to the finite provider status vocabulary.
-            statuses = db.execute("""SELECT r.operation_id,e.status FROM chase_communication_dispatch_receipts r
+            # Keep its latest non-null code, while preserving the original
+            # latest-observation ordering for statuses with equal precedence.
+            statuses = db.execute("""SELECT DISTINCT ON (r.operation_id,e.status)
+                r.operation_id,e.status,e.error_code,
+                max(e.sequence_no) OVER (PARTITION BY r.operation_id,e.status) AS latest_sequence
+                FROM chase_communication_dispatch_receipts r
                 JOIN chase_communication_operations o USING(practice_id,operation_id)
                 JOIN chase_communication_bindings b ON b.practice_id=o.practice_id AND b.binding_id=o.binding_id
                 JOIN chase_communication_provider_events e ON e.practice_id=r.practice_id AND e.account_sid=r.account_sid
                   AND e.provider_sid=r.provider_sid AND e.kind IN ('sms_status','voice_status')
                 WHERE r.practice_id=%s AND o.operation_id=ANY(%s::uuid[])
                   AND (e.sender IS NULL OR e.sender=b.sender) AND (e.recipient IS NULL OR e.recipient=b.phone)
-                GROUP BY r.operation_id,e.status ORDER BY max(e.sequence_no)""",
+                ORDER BY r.operation_id,e.status,(e.error_code IS NOT NULL) DESC,e.sequence_no DESC""",
                 (self.store.practice_id, [op["operationId"] for op in view["operations"]])).fetchall()
+            statuses.sort(key=lambda row: row["latest_sequence"])
             for op in view["operations"]:
                 state = states[op["operationId"]]
                 op["status"] = (state["status"] if state["outcome"] == "accepted" else state["outcome"] or
@@ -592,10 +609,14 @@ class CommunicationsDispatcher:
                 op["blockedReason"] = state["reason"] if pending_check else None
                 op["lastCheckedAt"] = _iso(state["checked_at"]) if pending_check else None
                 op["providerSid"] = state["provider_sid"]
+                op["deliveryError"] = _delivery_error(state["error_code"], "submission", op["status"])
                 ranks = _SMS_RANK if op["channel"] == "sms" else _VOICE_RANK
                 relevant = [e for e in statuses if str(e["operation_id"]) == op["operationId"]]
                 for e in relevant:
                     if ranks.get(e["status"], -1) >= ranks.get(op["status"], -1):
+                        issue = _delivery_error(e["error_code"], "callback", e["status"])
+                        if e["status"] != op["status"] or issue is not None:
+                            op["deliveryError"] = issue
                         op["status"] = e["status"]
                 op["needsStaffReview"] = (op["status"] in {"blocked", "unknown", "failed", "undelivered", "rejected", "busy", "no-answer"}
                     and not state["resolved_at"])
@@ -603,6 +624,7 @@ class CommunicationsDispatcher:
                 view["events"].append({"eventId": e["event_id"], "reviewRef": review_ref("provider", e["account_sid"], e["event_id"]), "operationId": str(e["operation_id"]) if e["operation_id"] else None,
                     "providerSid": e["provider_sid"], "kind": e["kind"], "direction": "inbound" if e["kind"] == "sms_inbound" else "callback",
                     "channel": e["channel"], "text": e["text"], "status": e["status"], "disposition": e["disposition"],
+                    "deliveryError": _delivery_error(e["error_code"], "callback", e["status"]),
                     "occurredAt": _iso(e["received_at"]), "receivedAt": _iso(e["received_at"]),
                     "needsStaffReview": e["kind"] == "sms_inbound" or bool(e["disposition"]), "held": False,
                     "mediaCount": e["media_count"], "actorId": None, "actorTenantId": None})

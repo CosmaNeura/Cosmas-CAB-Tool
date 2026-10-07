@@ -5,7 +5,7 @@ import { chaseAttemptTime } from "./chaseActivity.js";
 import CommunicationsEventReview from "./CommunicationsEventReview.jsx";
 import {
   SMS_MAX_LENGTH, SMS_DEMO_EVENTS, VOICE_DEMO_EVENTS, communicationError,
-  communicationsDisposition, communicationsReason, communicationsStatus, readCommunications, smsThread,
+  communicationsDeliveryError, communicationsDisposition, communicationsReason, communicationsStatus, readCommunications, smsThread,
 } from "./caseCommunications.js";
 
 const BASE = "/api/chase/communications";
@@ -20,6 +20,11 @@ function OperationPicker({ label, operations, value, onChange, disabled }) {
       {operations.map((item, index) => <option key={item.operationId} value={item.operationId}>#{index + 1} · {chaseAttemptTime(item.createdAt)} · {item.unknownResolution ? "Original outcome unknown · investigated" : communicationsStatus(item.status)}</option>)}
     </select>
   </label>;
+}
+
+function DeliveryError({ item }) {
+  const message = communicationsDeliveryError(item.deliveryError, item.status);
+  return message ? <p className="mt-2 text-xs text-amber-800" aria-label="Delivery problem">{message}</p> : null;
 }
 
 
@@ -316,6 +321,7 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
               <p className="mt-2 text-[11px] text-slate-500"><time dateTime={item.at}>{chaseAttemptTime(item.at)}</time> · {item.unknownResolution ? "Original outcome unknown · investigated" : communicationsStatus(item.status)}</p>
               {item.needsStaffReview && <p className="mt-1 text-xs font-medium text-amber-800">Needs staff review</p>}
               {item.blockedReason && <p className="mt-2 text-xs text-amber-800">{communicationsReason(item.blockedReason)} · Checked {chaseAttemptTime(item.lastCheckedAt)}</p>}
+              <DeliveryError item={item} />
               {durable && smsEnabled && item.status === "prepared" && <AuthorizeDraft operationId={item.operationId} channel="sms" locked={locked} act={act} availability={view.actions.sms.authorization} />}
               {durable && <CancelDraft item={item} channel="sms" locked={locked} act={act} />}
               {durable && <UnknownOutcome item={item} channel="sms" locked={locked} act={act} />}
@@ -337,7 +343,7 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
         {voiceEnabled ? <><details className="mt-3 text-xs text-slate-600"><summary className="cursor-pointer font-medium">Preview call script</summary><p className="mt-2 whitespace-pre-wrap leading-relaxed">{view.callScript}</p></details>
         <button type="button" className={`${button} mt-3`} disabled={locked || !view.actions.automatedVoice.allowed} onClick={() => act("/action", { channel: "automated_voice" }, durable ? "Call draft prepared. Review and authorize the script separately." : "Scripted call queued in the simulation. No call was placed.")}>{durable ? "Prepare scripted call" : "Queue simulated call"}</button>
         {view.actions.automatedVoice.reason && <p className="mt-2 text-xs text-amber-800">{durable ? communicationsReason(view.actions.automatedVoice.reason) : view.actions.automatedVoice.reason}</p>}</> : <p className="mt-3 text-xs text-slate-500">Automated calling is unavailable for this workspace. Previous calls remain available for review.</p>}
-        {calls.length > 0 && <ul aria-label={durable ? "Scripted calls" : "Simulated calls"} className="mt-3 space-y-3 border-t border-slate-100 pt-3">{calls.map((item, index) => <li key={item.operationId} className="text-xs text-slate-600"><div className="flex flex-wrap justify-between gap-1"><span>Call #{index + 1} · <time dateTime={item.createdAt}>{chaseAttemptTime(item.createdAt)}</time></span><span className="font-medium">{item.unknownResolution ? "Original outcome unknown · investigated" : communicationsStatus(item.status)}</span></div>{item.needsStaffReview && <span className="text-amber-800">Needs staff review</span>}{item.blockedReason && <p className="mt-1 text-amber-800">{communicationsReason(item.blockedReason)} · Checked {chaseAttemptTime(item.lastCheckedAt)}</p>}{durable && item.status === "prepared" && <><p className="mt-2 whitespace-pre-wrap">{item.text}</p>{voiceEnabled && <AuthorizeDraft operationId={item.operationId} channel="automated_voice" locked={locked} act={act} />}</>}{durable && item.status !== "prepared" && <details className="mt-2"><summary className="cursor-pointer">Script for this call</summary><p className="mt-1 whitespace-pre-wrap">{item.text}</p></details>}{durable && <CancelDraft item={item} channel="automated_voice" locked={locked} act={act} />}{durable && <UnknownOutcome item={item} channel="automated_voice" locked={locked} act={act} />}</li>)}</ul>}
+        {calls.length > 0 && <ul aria-label={durable ? "Scripted calls" : "Simulated calls"} className="mt-3 space-y-3 border-t border-slate-100 pt-3">{calls.map((item, index) => <li key={item.operationId} className="text-xs text-slate-600"><div className="flex flex-wrap justify-between gap-1"><span>Call #{index + 1} · <time dateTime={item.createdAt}>{chaseAttemptTime(item.createdAt)}</time></span><span className="font-medium">{item.unknownResolution ? "Original outcome unknown · investigated" : communicationsStatus(item.status)}</span></div>{item.needsStaffReview && <span className="text-amber-800">Needs staff review</span>}<DeliveryError item={item} />{item.blockedReason && <p className="mt-1 text-amber-800">{communicationsReason(item.blockedReason)} · Checked {chaseAttemptTime(item.lastCheckedAt)}</p>}{durable && item.status === "prepared" && <><p className="mt-2 whitespace-pre-wrap">{item.text}</p>{voiceEnabled && <AuthorizeDraft operationId={item.operationId} channel="automated_voice" locked={locked} act={act} />}</>}{durable && item.status !== "prepared" && <details className="mt-2"><summary className="cursor-pointer">Script for this call</summary><p className="mt-1 whitespace-pre-wrap">{item.text}</p></details>}{durable && <CancelDraft item={item} channel="automated_voice" locked={locked} act={act} />}{durable && <UnknownOutcome item={item} channel="automated_voice" locked={locked} act={act} />}</li>)}</ul>}
         {responses.length > 0 && <details open className="mt-3 text-xs text-slate-600"><summary className="cursor-pointer font-medium">Keypad responses ({responses.length})</summary><ul className="mt-2 space-y-2">{responses.map((item) => <li key={item.eventId}><span className="font-medium text-amber-800">{communicationsDisposition(item.disposition)}</span><span className="ml-1 text-slate-500">· {chaseAttemptTime(item.occurredAt)}</span></li>)}</ul></details>}
       </section>}
       {manageChase && !durable && <details className="border-t border-slate-200 pt-3 text-xs text-slate-600"><summary className="cursor-pointer font-medium">Demo events</summary>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { communicationError, communicationsDisposition, communicationsReason, communicationsStatus, readCommunications, smsThread } from "./caseCommunications.js";
+import { communicationError, communicationsDeliveryError, communicationsDisposition, communicationsReason, communicationsStatus, readCommunications, smsThread } from "./caseCommunications.js";
 
 const at = "2026-09-26T14:00:00.123456+00:00";
 const operation = (extra = {}) => ({ operationId: "one", caseId: "case-a", channel: "sms", direction: "outbound",
@@ -91,6 +91,48 @@ const durable = (extra = {}) => payload({
   policy: { hash: "a".repeat(64), approved: true, canApprove: false, outboundEnabled: false,
     practiceName: "Synthetic Practice", timezone: "UTC", quietHours: [21, 8], maxTotalTouches: 8, maxTouches24h: 2 },
   ...extra,
+});
+
+test("delivery error codes survive safe projection without vendor text or new authority", () => {
+  const issue = { code: "30034", source: "callback" };
+  const view = readCommunications(durable({ operations: [operation({ operationId: uuid, simulated: false,
+    status: "undelivered", cancelable: false, deliveryError: issue, providerMessage: "PRIVATE-CANARY" })],
+    events: [event({ direction: "callback", kind: "sms_status", status: "undelivered", deliveryError: issue,
+      providerMessage: "PRIVATE-CANARY" })] }), "case-a");
+  assert.deepEqual(smsThread(view)[0].deliveryError, issue);
+  assert.deepEqual(view.events[0].deliveryError, issue);
+  assert.equal(view.operations[0].cancelable, false);
+  assert.equal(JSON.stringify(view).includes("PRIVATE-CANARY"), false);
+  assert.match(communicationsDeliveryError(issue, "undelivered"), /Provider code 30034:.*registration.*administrator/);
+  assert.match(communicationsDeliveryError({ code: "21610", source: "submission" }, "rejected"), /opted out.*stopped/);
+  assert.match(communicationsDeliveryError({ code: "999999", source: "callback" }, "failed"), /Provider code 999999:.*administrator/);
+});
+
+test("missing delivery codes and pending or successful statuses do not imply failure", () => {
+  for (const deliveryError of [undefined, null]) {
+    const view = readCommunications(durable({ operations: [operation({ operationId: uuid, simulated: false,
+      status: "undelivered", deliveryError })] }), "case-a");
+    assert.equal(view.operations[0].deliveryError, null);
+  }
+  for (const status of ["prepared", "authorized", "queued", "sent", "delivered", "read", "completed"]) {
+    assert.equal(communicationsDeliveryError({ code: "30034", source: "callback" }, status), null);
+  }
+  const issue = { code: "transport_uncertain", source: "submission" };
+  const view = readCommunications(durable({ operations: [operation({ operationId: uuid, simulated: false,
+    status: "unknown", deliveryError: issue, cancelable: false })] }), "case-a");
+  assert.equal(view.operations[0].status, "unknown");
+  assert.match(communicationsDeliveryError(issue, "unknown"), /could not be confirmed.*will not be sent again/);
+});
+
+test("untrusted delivery diagnostics cannot enter the rendered contract", () => {
+  const read = (deliveryError, status = "failed") => readCommunications(durable({
+    operations: [operation({ operationId: uuid, simulated: false, status, deliveryError })] }), "case-a");
+  for (const issue of ["30034", {}, { code: 30034, source: "callback" },
+    { code: "30034", source: "callback", message: "PRIVATE-CANARY" },
+    { code: "30034", source: "untrusted" }, { code: "transport_uncertain", source: "callback" },
+    ...["1234567", "30034\n", "30034\r", "PRIVATE-CANARY", "https://private.invalid", "__proto__"]
+      .map((code) => ({ code, source: "callback" }))]) assert.throws(() => read(issue));
+  assert.throws(() => read({ code: "30034", source: "callback" }, "delivered"));
 });
 
 test("SMS preparation and authorization are separate, bounded server decisions", () => {

@@ -74,6 +74,36 @@ function instant(value) {
 }
 const require = (condition) => { if (!condition) throw new Error("Communications could not be verified."); };
 
+const DELIVERY_PROBLEMS = new Set(["failed", "undelivered", "rejected", "unknown", "busy", "no-answer", "canceled"]);
+const SUBMISSION_CODES = new Set(["transport_uncertain", "provider_uncertain", "invalid_provider_response", "provider_rejected"]);
+const providerCode = (value) => typeof value === "string" && value === value.trim() && /^[0-9]{1,6}$/.test(value);
+function readDeliveryError(value, status, durable, callback = false) {
+  if (value == null) return null; // Earlier servers/history have no code.
+  require(durable && DELIVERY_PROBLEMS.has(status) && object(value)
+    && Object.keys(value).sort().join(",") === "code,source"
+    && ["submission", "callback"].includes(value.source) && (!callback || value.source === "callback")
+    && typeof value.code === "string" && (providerCode(value.code)
+      || value.source === "submission" && SUBMISSION_CODES.has(value.code)));
+  return { code: value.code, source: value.source };
+}
+
+export function communicationsDeliveryError(issue, status) {
+  if (!issue || !DELIVERY_PROBLEMS.has(status)) return null;
+  const checked = readDeliveryError(issue, status, true);
+  if (status === "unknown") return `${providerCode(checked.code) ? `Provider code ${checked.code}: ` : ""}Submission could not be confirmed. Check the provider's records; this operation will not be sent again.`;
+  const explanations = {
+    "30034": "The sender's carrier registration is incomplete. Ask an administrator to check A2P registration before another send.",
+    "21610": "The recipient has opted out. Keep outreach stopped and review consent.",
+    "30003": "The recipient's phone was unreachable. Verify the contact before considering another message.",
+    "30005": "The destination number was not recognized. Verify the contact.",
+    "30006": "The destination cannot receive this message. Verify that the contact supports SMS.",
+    "30007": "The message was filtered. Ask an administrator to review the sender and message; do not repeatedly resend.",
+  };
+  return providerCode(checked.code)
+    ? `Provider code ${checked.code}: ${explanations[checked.code] || "The provider reported a delivery problem. Ask an administrator to review this code before another send."}`
+    : "The provider rejected this request. Ask an administrator to review the sender configuration before another send.";
+}
+
 /** Project only the selected case; provider IDs and staff identifiers stay private. */
 export function readCommunications(value, chaseId) {
   const durable = value?.mode === "durable";
@@ -108,6 +138,7 @@ export function readCommunications(value, chaseId) {
       blockedReason: held ? item.blockedReason : null, lastCheckedAt: held ? item.lastCheckedAt : null,
       cancelable: durable && item.cancelable === true, canceledAt: durable ? item.canceledAt || null : null,
       canResolveUnknown: durable && item.canResolveUnknown === true,
+      deliveryError: readDeliveryError(item.deliveryError, item.status, durable),
       unknownResolution: resolution ? { decision: resolution.decision, vendorReference: resolution.vendorReference,
         resolvedAt: resolution.resolvedAt } : null };
   });
@@ -120,6 +151,7 @@ export function readCommunications(value, chaseId) {
       && (item.mediaCount == null || (Number.isSafeInteger(item.mediaCount) && item.mediaCount >= 0 && item.mediaCount <= 10)));
     return { eventId: item.eventId, kind: item.kind, channel: item.channel, direction: item.direction,
       text: item.text, status: item.status, disposition: item.disposition,
+      deliveryError: readDeliveryError(item.deliveryError, item.status, durable && item.direction === "callback", true),
       occurredAt: item.occurredAt, needsStaffReview: item.needsStaffReview,
       operationId: item.operationId || null, mediaCount: item.mediaCount || 0 };
   });
@@ -208,7 +240,7 @@ export function smsThread(view) {
         status: item.status, at: item.createdAt, needsStaffReview: item.needsStaffReview,
         operationId: item.operationId, blockedReason: item.blockedReason, lastCheckedAt: item.lastCheckedAt,
         cancelable: item.cancelable, canceledAt: item.canceledAt, canResolveUnknown: item.canResolveUnknown,
-        unknownResolution: item.unknownResolution })),
+        unknownResolution: item.unknownResolution, deliveryError: item.deliveryError })),
     ...view.events.filter((item) => item.channel === "sms" && item.direction === "inbound" && (item.text || item.mediaCount))
       .map((item) => ({ id: `event:${item.eventId}`, direction: "inbound", text: item.text,
         status: item.status || "received", at: item.occurredAt, needsStaffReview: item.needsStaffReview, mediaCount: item.mediaCount })),

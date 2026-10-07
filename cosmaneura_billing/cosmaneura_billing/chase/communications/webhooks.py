@@ -68,6 +68,7 @@ def create_app(dispatcher=None):
     def ready():
         try:
             with service.store._db() as db:
+                db.execute("SELECT error_code FROM chase_communication_provider_events LIMIT 0")
                 for table in ("chase_communication_senders", "chase_communication_provider_events",
                               "chase_communication_bindings", "chase_contact_snapshots"):
                     db.execute(f"SELECT 1 FROM {table} LIMIT 0")

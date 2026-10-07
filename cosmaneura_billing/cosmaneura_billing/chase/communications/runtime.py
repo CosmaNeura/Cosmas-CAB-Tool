@@ -48,6 +48,7 @@ def dispatcher_from_settings(config, *, dsn=None, adapter=None, audit=None):
 def check_schema(config):
     dispatcher = dispatcher_from_settings(config)
     with dispatcher.store._db() as db:
+        db.execute("SELECT error_code FROM chase_communication_provider_events LIMIT 0")
         for suffix in ("senders", "bindings", "operations", "events", "suppressions",
                        "policy_decisions", "consent_decisions", "authorizations",
                        "dispatch_starts", "dispatch_receipts", "provider_events", "dispatch_checks", "cancellations", "unknown_resolutions", "event_reviews"):
