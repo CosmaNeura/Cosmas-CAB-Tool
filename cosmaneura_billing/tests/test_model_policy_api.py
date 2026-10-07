@@ -22,6 +22,8 @@ pytestmark = pytest.mark.skipif(not DSN, reason="explicit local synthetic Postgr
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
+    if not DSN:
+        pytest.skip("explicit local synthetic PostgreSQL fixture required")
     prepare_schema(DSN)
     fixture = prepare_model_fixture(DSN, tmp_path)
     monkeypatch.setattr(api, "get_orchestrator", lambda *a, **k: fixture.orchestrator)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,7 +149,10 @@ def test_container_installs_inference_and_metrics_without_auto_instrumentation()
     assert "opentelemetry-sdk" in project
     assert "azure-identity" in project
     assert "openai" in project
-    assert "[api,inference,postgres,messaging,telemetry]" in dockerfile
+    extras = re.findall(r'"(?:\.|cosmaneura-billing)\[([^]]+)\]"', dockerfile)
+    assert len(extras) == 2  # Both wheel construction and the runtime install.
+    required = {"api", "inference", "postgres", "messaging", "telemetry"}
+    assert all(required <= set(value.split(",")) for value in extras)
     assert "from openai import AzureOpenAI" in dockerfile
     assert "opentelemetry-instrumentation" not in project
     assert "azure-monitor-opentelemetry\"" not in project

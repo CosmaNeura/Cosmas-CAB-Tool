@@ -27,6 +27,8 @@ pytestmark = pytest.mark.skipif(not DSN, reason="explicit disposable integration
 
 @pytest.fixture
 def context():
+    if not DSN:
+        pytest.skip("explicit disposable integration database is absent")
     with psycopg.connect(DSN, autocommit=True) as db:
         assert db.info.dbname in {"cab_provider_receiver_test_20261002_r1", "cab_provider_model_test_20261002_r1"} and db.info.host == "127.0.0.1" and db.info.port == 32800
         # Full sparse chain is applied by the locked runner before the suite.

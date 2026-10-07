@@ -517,6 +517,7 @@ def test_worker_role_is_practice_bound_and_separates_delivery_authority():
             TEST_DSN, user=worker_role, password=worker_password,
         )
         with psycopg.connect(worker_dsn) as conn:
+            sms_schema = _relation_exists(conn, "chase_communication_policy_decisions")
             conn.execute(
                 "SELECT set_config('cosmaneura.practice_id', %s, true)",
                 (practice_a,),
@@ -600,8 +601,8 @@ def test_worker_role_is_practice_bound_and_separates_delivery_authority():
             ).fetchone()
             assert worker_privileges == (
                 False, False, False, False, False, False, False,
-                True, True, True, False, False, True, True, False, False,
-                False, True, False, False,
+                True, True, True, False, sms_schema, True, True, False, False,
+                sms_schema, True, False, False,
             )
 
             for table in (
@@ -626,11 +627,23 @@ def test_worker_role_is_practice_bound_and_separates_delivery_authority():
                 "WHERE role_name = %s",
                 (practice_b, worker_role),
             )
-            _expect_insufficient_privilege(
-                conn,
-                "SELECT cosmaneura_chase_admin_allowed(%s::uuid, %s::uuid)",
-                (tenant_a, admin_a),
-            )
+            if sms_schema:
+                # SMS rechecks approval and touch evidence. These read checks
+                # grant no staff-decision writes and remain practice-bound.
+                assert conn.execute(
+                    "SELECT cosmaneura_chase_admin_allowed(%s::uuid, %s::uuid)",
+                    (tenant_a, admin_a),
+                ).fetchone()[0] is True
+                assert conn.execute(
+                    "SELECT cosmaneura_chase_admin_allowed(%s::uuid, %s::uuid)",
+                    (tenant_b, admin_b),
+                ).fetchone()[0] is False
+            else:
+                _expect_insufficient_privilege(
+                    conn,
+                    "SELECT cosmaneura_chase_admin_allowed(%s::uuid, %s::uuid)",
+                    (tenant_a, admin_a),
+                )
             _expect_insufficient_privilege(
                 conn,
                 """INSERT INTO chase_items (
@@ -750,12 +763,19 @@ def test_worker_role_is_practice_bound_and_separates_delivery_authority():
                 "SELECT cosmaneura_record_accepted_delivery_attempt(%s)",
                 (delivery_id,),
             ).fetchone()[0] == 1
-            _expect_insufficient_privilege(
-                conn,
-                "SELECT attempt_no FROM chase_attempts "
-                "WHERE practice_id = %s AND delivery_id = %s",
-                (practice_a, delivery_id),
-            )
+            if sms_schema:
+                assert conn.execute(
+                    "SELECT attempt_no FROM chase_attempts "
+                    "WHERE practice_id = %s AND delivery_id = %s",
+                    (practice_a, delivery_id),
+                ).fetchall() == [(1,)]
+            else:
+                _expect_insufficient_privilege(
+                    conn,
+                    "SELECT attempt_no FROM chase_attempts "
+                    "WHERE practice_id = %s AND delivery_id = %s",
+                    (practice_a, delivery_id),
+                )
             assert conn.execute(
                 "SELECT cosmaneura_record_accepted_delivery_attempt(%s)",
                 (delivery_id,),

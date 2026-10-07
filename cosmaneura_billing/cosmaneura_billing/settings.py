@@ -955,7 +955,13 @@ class Settings:
                 raise SettingsError(
                     "real patient messaging requires the durable chase scheduler"
                 )
-            _validate_patient_upload_url(self.upload_url)
+            # Twilio SMS never renders upload_url, and its legacy upload/email
+            # lane is record-only. Other outreach topologies keep this gate.
+            if not (
+                self.chase_transport == "twilio"
+                and self.communications_enabled_channels == ("sms",)
+            ):
+                _validate_patient_upload_url(self.upload_url)
         if self.auth_mode not in _AUTH_MODES:
             raise SettingsError(
                 "COSMANEURA_AUTH_MODE must be disabled or container_apps"

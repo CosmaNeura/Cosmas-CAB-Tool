@@ -19,13 +19,14 @@ pytestmark = pytest.mark.skipif(not DSN, reason="disposable SMS PostgreSQL is no
 
 def services(lane, tmp_path):
     worker_role = "sms_service_" + uuid4().hex[:18]
+    worker_password = uuid4().hex
     provision = Settings(practice_id=lane.practice, database_url=DSN,
         chase_worker_database_role=worker_role,
-        chase_worker_database_password="synthetic-service-test-only")
+        chase_worker_database_password=worker_password)
     with psycopg.connect(DSN) as db:
         _provision_chase_worker_role(db, provision)
     info = conninfo_to_dict(DSN)
-    uri = f"postgresql://{worker_role}@{info['host']}:{info['port']}/{info['dbname']}"
+    uri = f"postgresql://{worker_role}:{worker_password}@{info['host']}:{info['port']}/{info['dbname']}"
     roster = tmp_path / "synthetic-roster.json"
     roster.write_text("[]")
     env = environment(COSMANEURA_PRACTICE_ID=lane.practice,
