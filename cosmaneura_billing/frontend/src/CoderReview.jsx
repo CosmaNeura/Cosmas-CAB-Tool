@@ -295,7 +295,8 @@ export default function CoderReview({
       try {
         const { review: response, encounter } = await loadCoderWorkspace(encounterId,
           encounters.find((item) => item.id === encounterId),
-          (path, body) => api(path, { method: "POST", body, signal: controller.signal }));
+          (path, body) => api(path, { method: "POST", body, signal: controller.signal }),
+          (verified) => { if (requestId === loadRequest.current) setHeaderEncounter(verified); });
         if (requestId !== loadRequest.current) return;
         setHeaderEncounter(encounter);
         if (!response) {
@@ -318,6 +319,7 @@ export default function CoderReview({
         activeLoadEncounter.current = null;
       } catch (error) {
         if (error?.name === "AbortError" || requestId !== loadRequest.current) return;
+        if (error?.message === "unverified-workspace-source" || [403, 404, 409].includes(error?.status)) setHeaderEncounter(null);
         setLoadError({ encounterId, message: coderErrorMessage(error, "load") });
         onStatusChange(encounterId, { processingStatus: "Coder load failed", reviewState: "Needs review" });
         activeLoadEncounter.current = null;
@@ -513,17 +515,22 @@ export default function CoderReview({
     <div className="space-y-5">
       <ProviderQueue encounters={encounters} selectedId={encounterId} statuses={statuses} onSelect={onSelect} selectionDisabled={navigationLocked || (frozen && !receipt)} title="Coder work queue" description="Choose a visit, make an explicit decision for every recommendation, then record the review." />
 
+      {headerEnabled && headerEncounter.encounterId === encounterId && <BillingHeader asyncEnabled={headerAsync}
+        encounter={headerEncounter} onStateChange={onHeaderState} disabled={frozen && !receipt || saving}
+        refreshKey={headerRefresh} generationAllowed={workspaceInferenceAllowed(headerEncounter)} />}
+
       {!encounterId ? (
         <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-7 text-center"><FileCheck2 size={26} className="mx-auto text-slate-500" aria-hidden="true" /><h2 className="mt-2 font-semibold text-slate-950">Choose an encounter for coder review</h2><p className="mt-1 text-sm text-slate-600">No recommendation is accepted until a coder makes an explicit decision.</p></section>
       ) : loadError?.encounterId === encounterId ? <ErrorNotice>{loadError.message}</ErrorNotice>
         : headerEncounter?.encounterId === encounterId && !workspaceInferenceAllowed(headerEncounter) ? (
           <section className="space-y-4"><p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-950">New coding generation is not approved for this source. You can read or edit its saved header; recording a new coder signoff requires a current authorized coding review.</p>
-            <BillingHeader asyncEnabled={headerAsync} encounter={headerEncounter} onStateChange={onHeaderState} generationAllowed={false} />
           </section>
         ) : !engine || engine.encounterId !== encounterId ? (
         <p role="status" className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm"><RefreshCw size={16} className="animate-spin" aria-hidden="true" />Loading evidence-linked coder review…</p>
       ) : engine.degraded ? (
-        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950 shadow-sm"><div className="flex gap-3"><AlertTriangle size={20} className="mt-0.5 shrink-0" aria-hidden="true" /><div><h2 className="font-semibold">No codes proposed for this encounter</h2><p className="mt-1 text-sm">{engine.degraded.detail}</p><p className="mt-2 text-sm">No code recommendations, prepared draft, or feedback actions are shown. Route this encounter to manual review.</p></div></div></section>
+        <section className="space-y-4">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950 shadow-sm"><div className="flex gap-3"><AlertTriangle size={20} className="mt-0.5 shrink-0" aria-hidden="true" /><div><h2 className="font-semibold">Coding review unavailable for this encounter</h2><p className="mt-1 text-sm">{engine.degraded.detail}</p><p className="mt-2 text-sm">No new recommendations, prepared draft, or coder signoff are available. You can read and edit any saved header; its code proposals still require coder review.</p></div></div></div>
+        </section>
       ) : (
         <>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="coder-review-heading">
@@ -542,8 +549,6 @@ export default function CoderReview({
 
           <DiagnosisSequencingNotice value={engine.diagnosisSequencing} />
           {headerEnabled && <>
-            <BillingHeader asyncEnabled={headerAsync} encounter={headerEncounter} onStateChange={onHeaderState}
-              disabled={frozen && !receipt || saving} refreshKey={headerRefresh} generationAllowed={workspaceInferenceAllowed(headerEncounter)} />
             <section className="rounded-2xl border border-teal-200 bg-teal-50 p-5" aria-labelledby="header-confirmation-heading">
               <h2 id="header-confirmation-heading" className="font-semibold text-teal-950">Review the saved header</h2>
               <p className="mt-1 text-sm text-teal-900">Review the facts, evidence, and documentation warnings above. For each human code proposal, record a decision and reason, then make matching code decisions below.</p>
