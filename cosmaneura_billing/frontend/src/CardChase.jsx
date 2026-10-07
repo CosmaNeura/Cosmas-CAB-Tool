@@ -590,7 +590,8 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
   };
 
   const seedSyntheticDemo = async () => {
-    if (!live || !demoSeed?.seedDigest) return;
+    if (!live || !demoSeed?.seedDigest || mutationNavigationRef.current
+      || actionBusy || reviewLocked || inboxLocked || athenaLocked || seeding) return;
     setSeeding(true);
     setSeedError(null);
     setSeedResult(null);
@@ -640,7 +641,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
       </header>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         {outbound && <details><summary className="cursor-pointer">{outbound.automaticContact ? "Outreach automation active" : "Manual outreach"} · Status details</summary><p className="mt-2">Outbound automation is {outbound.automaticContact ? "active" : "off"}; transport is {outbound.transport}. Manual actions only record work. Text drafts require separate staff authorization in Communications when available.</p></details>}
-        {demoSeed && <details><summary className="cursor-pointer">Demo setup</summary><div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"><p>Admin only. Fixed {demoSeed.caseCount}-case synthetic pack.</p><button onClick={seedSyntheticDemo} disabled={seeding} className="rounded-md border border-slate-300 px-2 py-1 font-medium disabled:opacity-50">{seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}</button>{seedResult && <p role="status">{syntheticSeedConfirmationMessage(seedResult)}</p>}{seedError && <p role="alert">{seedError}</p>}</div></details>}
+        {demoSeed && <details><summary className="cursor-pointer">Demo setup</summary><div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"><p>Admin only. Fixed {demoSeed.caseCount}-case synthetic pack.</p><button onClick={seedSyntheticDemo} disabled={seeding || mutationNavigationLocked || actionBusy || reviewLocked || inboxLocked || athenaLocked} className="rounded-md border border-slate-300 px-2 py-1 font-medium disabled:opacity-50">{seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}</button>{seedResult && <p role="status">{syntheticSeedConfirmationMessage(seedResult)}</p>}{seedError && <p role="alert">{seedError}</p>}</div></details>}
       </div>
       {caseRefreshError && <p role="alert" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{caseRefreshError}</p>}
       {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}

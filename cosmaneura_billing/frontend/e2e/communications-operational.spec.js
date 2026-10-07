@@ -198,6 +198,7 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   await page.route("**/api/session", (route) => route.fulfill({ json: {
     views: ["provider", "coder", "chase"], defaultView: "chase",
     capabilities: { manageChase: true },
+    actions: { seedSyntheticChase: { seedDigest: "b".repeat(64), caseCount: 4 } },
   } }));
   await page.route("**/api/encounters", (route) => route.fulfill({ json: [] }));
   const view = payload();
@@ -238,6 +239,8 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   // must preserve it until its outcome is confirmed by the same-action retry.
   await expect(page.getByRole("button", { name: /Synthetic patient B/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: /^Expired/ })).toBeDisabled();
+  await page.getByText("Demo setup", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Load synthetic demo tasks", exact: true })).toBeDisabled();
   await expect(page.getByRole("tab", { name: "Summary", exact: true })).toBeDisabled();
   await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Provider", exact: true })).toBeDisabled();
   await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Coder review", exact: true })).toBeDisabled();
@@ -246,6 +249,7 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: /Synthetic patient B/ })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^Expired/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Load synthetic demo tasks", exact: true })).toBeEnabled();
   await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Provider", exact: true })).toBeEnabled();
   await expect(panel.getByRole("list", { name: "SMS thread" }).getByRole("listitem")).toHaveCount(1);
   expect(bodies).toHaveLength(2);
