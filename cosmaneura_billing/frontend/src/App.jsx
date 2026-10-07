@@ -6,7 +6,7 @@ import { canLaunchHeader, canPreviewHandoff, headerLaunchRequest } from "./provi
 import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
-import { isSyntheticDemoEncounter } from "./providerBilling.js";
+import { isWorkspaceEncounterEntry } from "./workspaceSource.js";
 
 function Pill({ tone, title, children }) {
   return (
@@ -55,21 +55,21 @@ function BrandedMessage({ children }) {
 function SafetyBanner({ compact = false }) {
   return (
     <section
-      aria-label={compact ? "CardChase workflow status" : "Synthetic pilot safety status"}
+      aria-label={compact ? "CardChase workflow status" : "Billing review status"}
       className={`${compact ? "mb-4 rounded-lg py-2" : "mb-5 rounded-2xl py-3 shadow-sm"} border border-violet-200 bg-violet-50 px-4 text-violet-950`}
     >
       <div className="flex items-start gap-3">
         <ShieldCheck size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
         <div>
-          {!compact && <p className="text-sm font-semibold">Synthetic CAB demo boundary</p>}
+          {!compact && <p className="text-sm font-semibold">Billing review workspace</p>}
           <ul className={`${compact ? "" : "mt-1 "}flex flex-wrap gap-x-4 gap-y-1 text-xs leading-relaxed`}>
-            {!compact && <li>Synthetic data</li>}
+            {!compact && <li>Server-stored documentation</li>}
             <li>Decision support only</li>
             <li>Human review required</li>
             <li>No EHR or claim transmission</li>
-            <li>{compact ? "Contact work requires staff review" : "Patient outreach disabled by demo policy"}</li>
+            <li>{compact ? "Contact work requires staff review" : "Original clinical note unchanged"}</li>
           </ul>
-          {!compact && <p className="mt-1 text-xs text-violet-800">Only server-verified, read-only synthetic encounters are listed in this workspace.</p>}
+          {!compact && <p className="mt-1 text-xs text-violet-800">The queue includes authorized training cases and registered sources. Coding runs only with current source permission.</p>}
         </div>
       </div>
     </section>
@@ -122,7 +122,7 @@ function Workspace() {
         ));
         if (session.views.includes("provider") || session.views.includes("coder")) {
           const available = await api("/api/encounters");
-          const encs = available.filter(isSyntheticDemoEncounter);
+          const encs = available.filter((entry) => isWorkspaceEncounterEntry(entry, canLaunchHeader(session)));
           setEncounters(encs);
           setSelected((current) => (
             encs.some((e) => e.id === current) ? current : null
@@ -130,7 +130,7 @@ function Workspace() {
           setEncounterStatuses(Object.fromEntries(encs.map((encounter) => [encounter.id, {
             reviewState: "Not reviewed this session",
             completenessState: "Not checked",
-            coderReview: "Required (demo policy)",
+            coderReview: "Required",
             processingStatus: "Ready to open",
           }])));
         }
@@ -189,7 +189,7 @@ function Workspace() {
               <Pill tone="bg-emerald-50 text-emerald-700 ring-emerald-200"
                     title={health.cptStatus}>
                 <Wifi size={12} className="mr-1" />
-                synthetic pilot service connected
+                billing service connected
               </Pill>
             )}
           </div>
@@ -239,9 +239,9 @@ function Workspace() {
           <p>Loading available encounters…</p>
         ) : encounters.length === 0 ? (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-sm">
-            <p className="text-sm font-medium">No synthetic demo encounter is loaded</p>
+            <p className="text-sm font-medium">No reviewable encounter is available</p>
             <p className="mt-1 text-sm text-amber-800">
-              Load the approved synthetic release-candidate fixture before starting a review.
+              Ask your administrator to load training cases or connect an authorized completed note.
               No mock claim or expected code has been substituted.
             </p>
           </div>

@@ -7,6 +7,7 @@ import {
 import { api } from "./api.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import { readWorkspaceEncounter, readWorkspaceResult, workspaceInferenceAllowed } from "./workspaceSource.js";
 import MdmDataReview from "./MdmDataReview.jsx";
 import { dataSectionSummary, readDataReview } from "./mdmDataReview.js";
 import MdmClinicalReview from "./MdmClinicalReview.jsx";
@@ -14,8 +15,8 @@ import { clinicalSectionSummary, readClinicalReview } from "./mdmClinicalReview.
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
 import { primaryBadge } from "./diagnosisSequencing.js";
 import {
-  completenessLabel, evidenceSupportedEm, isSyntheticDemoEncounter,
-  isCurrentEncounterResult, isLocatedEvidenceSpan, isValidEncounterVersion,
+  completenessLabel, evidenceSupportedEm,
+  isCurrentEncounterResult, isLocatedEvidenceSpan,
   preparedBillingBlock, sourceLabel,
   suggestedCandidates, visitTypeLabel,
 } from "./providerBilling.js";
@@ -291,21 +292,8 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
           return;
         }
         const listed = encounters.find((item) => item.id === selectedId);
-        if (!isSyntheticDemoEncounter(detail) || detail.dataClass !== listed?.dataClass
-            || !isValidEncounterVersion(detail.encounterVersion)) {
-          setLoadError("The server did not confirm this as an approved read-only synthetic encounter. Nothing was loaded.");
-          onStatusChange(selectedId, { processingStatus: "Synthetic check failed" });
-          activeDetailEncounter.current = null;
-          return;
-        }
-        const loaded = {
-          encounterId: detail.id, encounterType: detail.encounterType,
-          placeOfService: detail.placeOfService, submittedEm: detail.submittedEm || null,
-          intake: detail.intake || "", transcript: detail.transcript || "",
-          signedNote: detail.signedNote || "", dataClass: detail.dataClass,
-          readOnly: detail.readOnly === true, encounterVersion: detail.encounterVersion,
-          headerSource: detail.headerSource || null,
-        };
+        const loaded = await readWorkspaceEncounter(detail, selectedId, listed);
+        if (requestId !== detailRequest.current) return;
         setCompletenessLoading(true);
         try {
           const report = await api("/api/completeness", {
@@ -339,7 +327,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
   }, [selectedId, live, onStatusChange, encounters]);
 
   const runReview = async () => {
-    if (!encounter || !live) return;
+    if (!encounter || !live || !workspaceInferenceAllowed(encounter)) return;
     const requestedEncounterId = encounter.encounterId;
     const requestId = ++reviewRequest.current;
     ++copyRequest.current;
@@ -353,9 +341,7 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
       const review = await api("/api/encounters/billing-tab", { method: "POST", body: { encounterId: requestedEncounterId }, signal: controller.signal });
       if (requestId !== reviewRequest.current || selectedId !== requestedEncounterId) return;
       if (review.visit_id !== requestedEncounterId) throw new Error("encounter-mismatch-response");
-      if (!isSyntheticDemoEncounter(review) || review.dataClass !== encounter.dataClass) {
-        throw new Error("synthetic-boundary-response");
-      }
+      readWorkspaceResult(review, encounter, "visit_id");
       if (!isCurrentEncounterResult(review, encounter)) {
         throw new Error("encounter-version-response");
       }
@@ -439,17 +425,17 @@ export default function BillingReview({ encounters, selectedId, live, statuses, 
               <Pill>Documentation version {encounter.encounterVersion}</Pill>
               <Pill>Submitted E/M: {encounter.submittedEm || "none"}</Pill>
             </div>
-            <div className="mt-4 grid gap-2 md:grid-cols-3"><DocumentDisclosure title="Intake" text={encounter.intake} /><DocumentDisclosure title="Visit transcript" text={encounter.transcript} /><DocumentDisclosure title="Signed note" text={encounter.signedNote} /></div>
+            <div className="mt-4 grid gap-2 md:grid-cols-3"><DocumentDisclosure title="Intake" text={encounter.intake} /><DocumentDisclosure title="Visit transcript" text={encounter.transcript} /><DocumentDisclosure title="Clinical note" text={encounter.signedNote} /></div>
             <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button type="button" onClick={runReview} disabled={running} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-wait disabled:opacity-60">
+              <button type="button" onClick={runReview} disabled={running || !workspaceInferenceAllowed(encounter)} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-wait disabled:opacity-60">
                 {running ? <RefreshCw size={16} className="animate-spin" aria-hidden="true" /> : <ClipboardCheck size={16} aria-hidden="true" />}{running ? "Generating review…" : result ? "Regenerate billing review" : "Run billing review"}
               </button>
-              <p className="text-xs text-slate-500">Uses server-stored documentation. CAB does not edit the signed note.</p>
+              <p className="text-xs text-slate-500">Uses server-stored documentation. CAB does not edit the original clinical note.</p>
             </div>
             {reviewError && <div className="mt-4"><ErrorNotice>{reviewError}</ErrorNotice></div>}
           </section>
 
-          {encounter.headerSource && <BillingHeader key={`${encounter.encounterId}:${encounter.headerSource.bundleSha256}:${encounter.encounterVersion}`} encounter={encounter} />}
+          {encounter.headerSource && <BillingHeader key={`${encounter.encounterId}:${encounter.headerSource.bundleSha256}:${encounter.encounterVersion}`} encounter={encounter} generationAllowed={workspaceInferenceAllowed(encounter)} />}
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="completeness-heading">
             <h2 id="completeness-heading" className="text-base font-semibold text-slate-950">Documentation completeness</h2>

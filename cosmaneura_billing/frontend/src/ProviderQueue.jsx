@@ -6,7 +6,7 @@ import { sourceLabel, visitTypeLabel } from "./providerBilling.js";
 const DEFAULT_STATUS = Object.freeze({
   reviewState: "Not reviewed this session",
   completenessState: "Not checked",
-  coderReview: "Required (demo policy)",
+  coderReview: "Required",
   processingStatus: "Ready to open",
 });
 
@@ -40,7 +40,7 @@ export default function ProviderQueue({
         tabIndex={0}
       >
         <table className="min-w-[940px] w-full border-collapse text-left">
-          <caption className="sr-only">Synthetic encounters and their current in-session review status</caption>
+          <caption className="sr-only">Authorized encounters and their current in-session review status</caption>
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th scope="col" className="px-4 py-3 font-medium">Encounter</th>
@@ -64,9 +64,9 @@ export default function ProviderQueue({
                       onClick={() => onSelect(encounter.id)}
                       disabled={selectionDisabled}
                       aria-current={selected ? "true" : undefined}
-                      className="inline-flex min-h-10 items-center gap-2 rounded-lg px-2 py-1.5 text-left font-mono text-sm font-semibold text-slate-950 hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex min-h-10 max-w-72 items-center gap-2 rounded-lg px-2 py-1.5 text-left font-mono text-sm font-semibold text-slate-950 hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {encounter.id}<ArrowRight size={14} aria-hidden="true" />
+                      <span className="min-w-0 break-all">{encounter.id}</span><ArrowRight size={14} className="shrink-0" aria-hidden="true" />
                     </button>
                   </th>
                   <td className="px-3 py-3"><QueueValue>{visitTypeLabel(encounter.encounterType)}</QueueValue></td>
