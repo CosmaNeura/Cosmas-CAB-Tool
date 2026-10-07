@@ -36,6 +36,18 @@ class HeaderGenerate(HeaderOperation):
         return self
 
 
+class CoreHeaderGenerate(HeaderGenerate):
+    """Only the separate workload receiver accepts provider continuation consent."""
+    continuationConsent: bool | None = None
+
+    @model_validator(mode="after")
+    def continuation(self):
+        if "continuationConsent" in self.model_fields_set and (
+                self.continuationConsent is not True or self.responseMode != "async"):
+            raise ValueError("continuationConsent must be true with async mode")
+        return self
+
+
 class HeaderSave(HeaderOperation):
     headerId: str = Field(min_length=36, max_length=36)
     expectedRevision: int = Field(ge=0, le=100)

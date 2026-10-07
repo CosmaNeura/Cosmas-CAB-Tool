@@ -495,6 +495,7 @@ class Settings:
     # Additive header storage is only required when this release control is on.
     billing_header_enabled: bool = False
     billing_header_async_enabled: bool = False
+    billing_header_continuation_enabled: bool = False
     provider_handoff_enabled: bool = False
     athena_review_mode: str = "disabled"
     athena_credential_environment: str = ""
@@ -771,6 +772,10 @@ class Settings:
             raise SettingsError("COSMANEURA_BILLING_HEADER_ASYNC_ENABLED must be a boolean")
         if self.billing_header_async_enabled and (not self.billing_header_enabled or self.state_store != "postgres"):
             raise SettingsError("async header generation requires enabled PostgreSQL headers")
+        if type(self.billing_header_continuation_enabled) is not bool:
+            raise SettingsError("COSMANEURA_BILLING_HEADER_CONTINUATION_ENABLED must be a boolean")
+        if self.billing_header_continuation_enabled and not self.billing_header_async_enabled:
+            raise SettingsError("Core generation continuation requires async header generation")
         if type(self.provider_handoff_enabled) is not bool:
             raise SettingsError("COSMANEURA_PROVIDER_HANDOFF_ENABLED must be a boolean")
         if (not isinstance(self.review_context_signing_key, str)
@@ -1274,6 +1279,7 @@ class Settings:
             ).strip().lower(),
             billing_header_enabled=_parse_bool(env, "COSMANEURA_BILLING_HEADER_ENABLED", False),
             billing_header_async_enabled=_parse_bool(env, "COSMANEURA_BILLING_HEADER_ASYNC_ENABLED", False),
+            billing_header_continuation_enabled=_parse_bool(env, "COSMANEURA_BILLING_HEADER_CONTINUATION_ENABLED", False),
             provider_handoff_enabled=_parse_bool(env, "COSMANEURA_PROVIDER_HANDOFF_ENABLED", False),
             athena_review_mode=env.get("COSMANEURA_ATHENA_REVIEW_MODE", "disabled").strip().lower(),
             athena_credential_environment=env.get("COSMANEURA_ATHENA_CREDENTIAL_ENVIRONMENT", "").strip().lower(),
