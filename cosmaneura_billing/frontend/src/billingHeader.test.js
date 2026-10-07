@@ -1,7 +1,63 @@
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { armHeaderRequestDeadline, HEADER_REQUEST_TIMEOUT_MS, HEADER_GENERATION_TIMEOUT_MS } from "./billingHeader.js";
 import assert from "node:assert/strict";
 import { beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, factKeys, fieldAuthor, finishHeaderRequest, headerDraft, headerProposals, ownsHeaderRequest, headerReviewRequest, headerSourceKey, missingHeaderBaseline, readBillingHeader, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, headerDecisionIds, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes,  } from "./billingHeader.js";
+
+test("request deadline releases only its owner and preserves the exact retry command", (t) => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const pending = {current: null}, command = {path: "/api/encounters/header/save", body: {operationId: "same-operation"}};
+  let unresolved = null;
+  const expired = beginHeaderRequest(pending, command);
+  armHeaderRequestDeadline(pending, expired, () => { unresolved = command; });
+  t.mock.timers.tick(HEADER_REQUEST_TIMEOUT_MS - 1);
+  assert.equal(expired.controller.signal.aborted, false);
+  t.mock.timers.tick(1);
+  assert.equal(expired.controller.signal.aborted, true);
+  assert.equal(pending.current, null);
+  assert.equal(unresolved, command);
+  assert.equal(beginHeaderRequest(pending, {...command}, false, unresolved), null);
+  const retry = beginHeaderRequest(pending, command, false, unresolved);
+  assert.equal(retry.command, command);
+  assert.equal(ownsHeaderRequest(pending, expired), false);
+  assert.equal(finishHeaderRequest(pending, expired), false); // Late result cannot release the retry.
+  assert.equal(pending.current, retry);
+  cancelHeaderRequest(pending);
+});
+
+test("completion and unmount or supersession cancellation clear owned deadlines", (t) => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const pending = {current: null};
+  let timeouts = 0;
+  const done = beginHeaderRequest(pending);
+  armHeaderRequestDeadline(pending, done, () => timeouts++);
+  finishHeaderRequest(pending, done);
+  const replaced = beginHeaderRequest(pending);
+  armHeaderRequestDeadline(pending, replaced, () => timeouts++);
+  const current = beginHeaderRequest(pending, null, true);
+  armHeaderRequestDeadline(pending, current, () => timeouts++);
+  cancelHeaderRequest(pending, replaced); // Stale cleanup cannot cancel the current owner.
+  assert.equal(current.controller.signal.aborted, false);
+  cancelHeaderRequest(pending);
+  assert.equal(current.controller.signal.aborted, true);
+  t.mock.timers.tick(HEADER_GENERATION_TIMEOUT_MS);
+  assert.equal(timeouts, 0);
+});
+
+test("generation gets its longer finite budget instead of an ordinary read deadline", (t) => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const pending = {current: null};
+  let timeouts = 0;
+  const request = beginHeaderRequest(pending, {path: "/api/encounters/header/generate", body: {operationId: "generation"}});
+  armHeaderRequestDeadline(pending, request, () => timeouts++);
+  t.mock.timers.tick(HEADER_REQUEST_TIMEOUT_MS);
+  assert.equal(timeouts, 0);
+  assert.equal(ownsHeaderRequest(pending, request), true);
+  t.mock.timers.tick(HEADER_GENERATION_TIMEOUT_MS - HEADER_REQUEST_TIMEOUT_MS);
+  assert.equal(timeouts, 1);
+  assert.equal(request.controller.signal.aborted, true);
+  assert.equal(pending.current, null);
+});
 
 function fixture() {
   const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic provider", role: "provider"};

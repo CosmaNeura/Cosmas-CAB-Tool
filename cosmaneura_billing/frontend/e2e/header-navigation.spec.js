@@ -1,6 +1,6 @@
 import {createHash} from "node:crypto";
 import {expect, test} from "./sms-workspace.fixture.js";
-import {factKeys} from "../src/billingHeader.js";
+import {factKeys, HEADER_REQUEST_TIMEOUT_MS} from "../src/billingHeader.js";
 
 // Synthetic response fixtures exercise navigation in the actual built workspace.
 // Backend signoff and persistence are covered separately; no vendor is contacted.
@@ -9,11 +9,11 @@ const source = "athena_staff_review_preview_synthetic";
 const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic reviewer", role: "provider"};
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, operationalDenied = false} = {}) {
+async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, holdSave = false, operationalDenied = false} = {}) {
   const details = {}, views = {}, commands = [], persisted = new Set();
   const sourceKind = operationalDenied ? "provider_completed_note" : source;
   let coderRequests = 0;
-  let releaseRead;
+  let releaseRead, releaseSave, readHeld = false;
   for (const [index, id] of ids.entries()) {
     const note = `Synthetic documented visit ${id}.`;
     const pin = {encounterId: id, encounterVersion: 1, ingestionSource: sourceKind,
@@ -58,7 +58,10 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
     const body = route.request().postDataJSON(), id = body.encounterId;
     expect(body.expectedSource).toEqual(details[id].headerSource);
     if (!new URL(route.request().url()).pathname.endsWith("/save")) {
-      if (holdRead && id === ids[0]) await new Promise((resolve) => { releaseRead = resolve; });
+      if (holdRead && id === ids[0] && !readHeld) {
+        readHeld = true;
+        await new Promise((resolve) => { releaseRead = resolve; });
+      }
       return route.fulfill({json: {view: views[id]}});
     }
     commands.push(body);
@@ -73,6 +76,7 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
     revision.history = [...(view.revision?.history || []), {...revision}];
     views[id] = {...view, revision, revisionNumber: revision.number};
     persisted.add(body.operationId);
+    if (holdSave) await new Promise((resolve) => { releaseSave = resolve; });
     return route.fulfill(lostSave ? {status: 503, json: {}} : {json: {view: views[id], created: true}});
   });
   await page.goto("/");
@@ -86,11 +90,50 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   await header.getByRole("button", {name: "Edit header", exact: true}).click();
   await header.getByLabel("Reviewer note (optional)").fill("Keep my unsaved review.");
   await header.getByLabel("Reason for edit (required)").fill("Compared the synthetic documentation.");
-  return {header, commands, coderRequests: () => coderRequests, navigation: page.getByRole("navigation", {name: "Workspace"}),
+  return {header, commands, releaseSave: () => releaseSave(), coderRequests: () => coderRequests, navigation: page.getByRole("navigation", {name: "Workspace"}),
     prompt: page.getByRole("group", {name: "Confirm discarding header edits"})};
 }
 
 for (const workspace of ["provider", "coder"]) {
+  test(`${workspace} timed-out save retains exact retry and rejects its late response`, async ({page}) => {
+    await page.clock.install();
+    const {header, navigation, commands, releaseSave} = await setup(page, {workspace, lostSave: true, holdSave: true});
+    await header.getByRole("button", {name: "Save header edits", exact: true}).click();
+    await expect.poll(() => commands.length).toBe(1);
+    await page.clock.fastForward(HEADER_REQUEST_TIMEOUT_MS + 1);
+    await expect(header).toContainText("The header request timed out. Its outcome is unknown.");
+    await expect(header.getByRole("button", {name: "Retry same request", exact: true})).toBeEnabled();
+    await expect(navigation.getByRole("button", {name: "Card chase", exact: true})).toBeDisabled();
+    await expect(page.getByRole("button", {name: ids[1], exact: true})).toBeDisabled();
+    await header.getByRole("button", {name: "Retry same request", exact: true}).click();
+    await expect(header).toContainText("Header edits saved");
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toEqual(commands[0]);
+    await header.getByRole("button", {name: "Edit header", exact: true}).click();
+    await header.getByLabel("Reviewer note (optional)").fill("Newer unsaved edit after confirmed retry.");
+    releaseSave();
+    await page.clock.runFor(100);
+    await expect(header.getByLabel("Reviewer note (optional)")).toHaveValue("Newer unsaved edit after confirmed retry.");
+    await expect(header.getByRole("button", {name: "Retry same request", exact: true})).toHaveCount(0);
+    await expect(navigation.getByRole("button", {name: "Card chase", exact: true})).toBeEnabled();
+  });
+
+  test(`${workspace} timed-out read offers reload without blocking navigation`, async ({page}) => {
+    await page.clock.install();
+    const {header, navigation, releaseRead} = await setup(page, {workspace, holdRead: true});
+    await page.clock.fastForward(HEADER_REQUEST_TIMEOUT_MS + 1);
+    await expect(header).toContainText("Loading the header timed out.");
+    await expect(navigation.getByRole("button", {name: "Card chase", exact: true})).toBeEnabled();
+    await header.getByRole("button", {name: "Reload header", exact: true}).click();
+    await expect(header.getByRole("button", {name: "Edit header", exact: true})).toBeVisible();
+    await header.getByRole("button", {name: "Edit header", exact: true}).click();
+    await header.getByLabel("Reviewer note (optional)").fill("Keep this edit after the replacement read.");
+    releaseRead();
+    await page.clock.runFor(100);
+    await expect(header.getByLabel("Reviewer note (optional)")).toHaveValue("Keep this edit after the replacement read.");
+    await expect(header.getByRole("button", {name: "Reload header", exact: true})).toHaveCount(0);
+  });
+
   test(`${workspace} denied-model stored header preserves navigation and exact retry without inference`, async ({page}) => {
     const {header, prompt, navigation, commands, coderRequests} = await setup(page, {workspace, lostSave: true, operationalDenied: true});
     expect(coderRequests()).toBe(0);
