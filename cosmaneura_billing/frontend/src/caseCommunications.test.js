@@ -93,6 +93,21 @@ const durable = (extra = {}) => payload({
   ...extra,
 });
 
+test("unanswered and invalid historical keypad responses remain reviewable in a texting-only workspace", () => {
+  const view = readCommunications(durable({ enabledChannels: ["sms"], events: [
+    event({eventId: "silent-call", channel: "automated_voice", kind: "voice_gather", direction: "callback",
+      text: "", status: "in-progress", disposition: "no_input"}),
+    event({eventId: "invalid-key", channel: "automated_voice", kind: "voice_gather", direction: "callback",
+      text: "", status: "in-progress", disposition: "invalid_input"}),
+  ] }), "case-a");
+  assert.deepEqual(view.events.map((item) => communicationsDisposition(item.disposition)),
+    ["No keypad response", "Unrecognized keypad response"]);
+  assert.ok(view.events.every((item) => item.needsStaffReview));
+  assert.equal(view.actions.automatedVoice.allowed, false);
+  assert.deepEqual(view.enabledChannels, ["sms"]);
+  assert.deepEqual(smsThread(view), []);
+});
+
 test("delivery error codes survive safe projection without vendor text or new authority", () => {
   const issue = { code: "30034", source: "callback" };
   const view = readCommunications(durable({ operations: [operation({ operationId: uuid, simulated: false,

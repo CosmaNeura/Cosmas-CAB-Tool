@@ -43,6 +43,7 @@ export function communicationsReason(reason) { return Object.hasOwn(REASONS, rea
 export const CALL_DISPOSITIONS = Object.freeze({
   callback_requested: "Callback requested", reports_submitted: "Reported submitted · verification needed",
   stop_calls: "Requested no further calls",
+  no_input: "No keypad response", invalid_input: "Unrecognized keypad response",
 });
 export const SMS_DEMO_EVENTS = Object.freeze([
   ["sms_sent", "Sent"], ["sms_delivered", "Delivered"], ["sms_failed", "Failed"],
