@@ -102,7 +102,7 @@ function Workspace() {
   const coderReviewLockedRef = useRef(false);
 
   const updateHeaderNavigation = useCallback((state) => {
-    const next = { dirty: state?.dirty === true, busy: state?.busy === true };
+    const next = { dirty: state?.dirty === true, busy: state?.navigationBlocked === true };
     headerNavigationRef.current = next;
     setHeaderNavigation((current) => current.dirty === next.dirty && current.busy === next.busy ? current : next);
     if (!next.dirty || next.busy) setPendingNavigation(null);

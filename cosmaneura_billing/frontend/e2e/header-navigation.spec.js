@@ -9,8 +9,9 @@ const source = "athena_staff_review_preview_synthetic";
 const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic reviewer", role: "provider"};
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-async function setup(page, {workspace = "provider", lostSave = false} = {}) {
+async function setup(page, {workspace = "provider", lostSave = false, holdRead = false} = {}) {
   const details = {}, views = {}, commands = [], persisted = new Set();
+  let releaseRead;
   for (const [index, id] of ids.entries()) {
     const note = `Synthetic documented visit ${id}.`;
     const pin = {encounterId: id, encounterVersion: 1, ingestionSource: source,
@@ -48,10 +49,13 @@ async function setup(page, {workspace = "provider", lostSave = false} = {}) {
         evidenceSpans: [{source: "signed_note", text: "Synthetic"}]},
       dx: [], withheld: [], completeness: {complete: true, results: []}}});
   });
-  await page.route(/\/api\/encounters\/header(?:\/save)?$/, (route) => {
+  await page.route(/\/api\/encounters\/header(?:\/save)?$/, async (route) => {
     const body = route.request().postDataJSON(), id = body.encounterId;
     expect(body.expectedSource).toEqual(details[id].headerSource);
-    if (!new URL(route.request().url()).pathname.endsWith("/save")) return route.fulfill({json: {view: views[id]}});
+    if (!new URL(route.request().url()).pathname.endsWith("/save")) {
+      if (holdRead && id === ids[0]) await new Promise((resolve) => { releaseRead = resolve; });
+      return route.fulfill({json: {view: views[id]}});
+    }
     commands.push(body);
     if (persisted.has(body.operationId)) return route.fulfill({json: {view: views[id], created: false}});
     const view = views[id];
@@ -69,6 +73,11 @@ async function setup(page, {workspace = "provider", lostSave = false} = {}) {
   await page.goto("/");
   await page.getByRole("button", {name: ids[0], exact: true}).click();
   const header = page.getByRole("region", {name: "Billing header", exact: true});
+  if (holdRead) {
+    await expect(header).toContainText("Loading header…");
+    await expect.poll(() => typeof releaseRead).toBe("function");
+    return {header, releaseRead: () => releaseRead(), navigation: page.getByRole("navigation", {name: "Workspace"})};
+  }
   await header.getByRole("button", {name: "Edit header", exact: true}).click();
   await header.getByLabel("Reviewer note (optional)").fill("Keep my unsaved review.");
   await header.getByLabel("Reason for edit (required)").fill("Compared the synthetic documentation.");
@@ -77,6 +86,20 @@ async function setup(page, {workspace = "provider", lostSave = false} = {}) {
 }
 
 for (const workspace of ["provider", "coder"]) {
+  test(`${workspace} can leave an unanswered read without locking the workspace`, async ({page}) => {
+    const {header, navigation, releaseRead} = await setup(page, {workspace, holdRead: true});
+    await expect(navigation.getByRole("button", {name: "Card chase", exact: true})).toBeEnabled();
+    expect(await page.evaluate(() => {
+      const event = new Event("beforeunload", {cancelable: true});
+      window.dispatchEvent(event); return event.defaultPrevented;
+    })).toBe(false);
+    await page.getByRole("button", {name: ids[1], exact: true}).click();
+    await expect(header.getByRole("button", {name: "Edit header", exact: true})).toBeVisible();
+    releaseRead();
+    await expect(page.getByRole("button", {name: ids[1], exact: true})).toHaveAttribute("aria-current", "true");
+    await expect(page.getByRole("group", {name: "Confirm discarding header edits"})).toHaveCount(0);
+  });
+
   test(`${workspace} header draft survives canceled case and workspace navigation`, async ({page}) => {
     const {header, prompt, navigation} = await setup(page, {workspace});
     expect(await page.evaluate(() => {

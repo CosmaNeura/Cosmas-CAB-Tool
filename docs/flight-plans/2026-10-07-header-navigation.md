@@ -6,7 +6,9 @@ The standalone header already protected its own refresh action.
 
 The workspace now receives header dirty/request state, asks before discarding
 unsaved edits, and blocks case/workspace/handoff navigation until a pending
-request is resolved. A mutation announces its busy state before network I/O.
+mutation is resolved. A mutation announces its navigation lock before network I/O.
+Read-only loads remain cancelable by navigation, including an unanswered read;
+ordinary header/coder loading controls still receive their full busy state.
 Confirming a discard checks the current state again; beginning or completing a
 save clears an earlier discard prompt. Browser reload/close warns for unsaved
 edits and unresolved operations. Existing frozen coder-review controls remain.
