@@ -44,8 +44,18 @@ workspace; `Admin` is for the designated administrator.
 Unsaved edits cannot be exported. Editing a reviewed header requires a fresh
 coder review; its old receipt still describes the earlier revision. If saving
 is interrupted, use **Retry same request** or **Retry exact saved review**, as
-shown. For a confirmed conflict, use the offered reload action. If access or a
-feature is unavailable, contact the trainer instead of creating a replacement.
+shown. A timed-out save or generation has an unknown outcome; stay in the tab
+and retry the same request rather than starting a replacement. Other cases and
+tabs remain blocked while that outcome is unresolved. A failed header load offers
+**Reload header** and can be left. Before leaving unsaved edits, either save them
+or explicitly confirm their discard. For a confirmed conflict, use the offered
+reload action. If access or a feature is unavailable, contact the trainer instead
+of creating a replacement.
+
+If **New coding generation awaits approval** appears for a registered provider
+or Athena note, the source and any saved header remain available for review and
+editing. New generation and a fresh coder signoff await that source's model
+permission. The note's presence alone does not grant it.
 
 ## Practice CardChase
 
@@ -55,9 +65,18 @@ Load synthetic demo tasks** while outreach is off and transport is
 loading the twelve coding notes does not populate this queue.
 
 Select a case and use **Summary** for contact details and the available next
-action. **Activity** shows recorded attempts, their type and last contact.
-Manual actions record work; they do not send a text. For the first exercise,
-record only the trainer's assigned fictional action and confirm it in Activity.
+action. **Activity** shows attempt totals by type, the last attempt and contact
+history. Counts include recorded contacts and each platform dispatch start once,
+including failed or unknown attempts; unsent drafts are excluded. The latest 50
+entries are shown while totals cover the full history. Manual actions record
+work; they do not send a text. For the first exercise, record only the trainer's
+assigned fictional action and confirm it in Activity.
+
+For an authorized texting test, **Communications** shows current delivery status
+and any **Delivery problem** with an explanation. Accepted or sent does not prove
+delivery. Follow the displayed action; STOP and unknown outcomes require review,
+not repeated sending. Report a problem to the trainer with its code and the
+synthetic case ID, without including message content or phone numbers.
 
 | Feature | What to expect during training |
 |---|---|

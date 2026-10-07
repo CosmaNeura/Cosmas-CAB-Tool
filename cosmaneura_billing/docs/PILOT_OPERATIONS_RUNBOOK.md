@@ -6,7 +6,7 @@ The detailed infrastructure rationale remains in [`../../infra/README.md`](../..
 
 For staff training, start with the [MCD quickstart](MCD_TRAINING_QUICKSTART.md).
 Use the [current deployment guide](../../infra/BETA_DEPLOYMENT.md) for the full
-001–026 migration sequence, editable header, staff Athena review, SMS services
+001–027 migration sequence, editable header, staff Athena review, SMS services
 and separate Core receiver. The background-sync procedures below describe that
 older job; they do not replace the current staff review workflow.
 
@@ -103,6 +103,51 @@ Record the following in a credential-free release record before deployment:
    enforced, and every persona passes the matrix below. Open ingress only after
    those checks and PHI-safe log evidence are green.
 
+## Staff workflow recovery
+
+For a saved header or generated result, verify the selected case, source and
+revision before continuing. Registered provider notes and staff-reviewed Athena
+notes remain separate approved sources. **New coding generation awaits approval**
+means the saved header may still be read and edited; it does not authorize a new
+model request or a new coder signoff. Do not copy a note into a different case to
+work around unavailable source permission.
+
+Header loads and saves have a 30-second client deadline; generation has a
+five-minute deadline. A timed-out load offers **Reload header** and does not block
+changing visits. A timed-out save or generation has an unknown outcome: retain
+that tab and use **Retry same request**. The client preserves the same command
+and operation ID. This stops waiting in the browser; it does not cancel server
+work. Starting a replacement generation can repeat model work. Navigation stays
+blocked until the mutation is confirmed or a definitive response offers a
+refresh. Follow **Retry exact saved review** for an interrupted coder review.
+For a confirmed source/revision conflict, use the offered refresh/reload and
+review the current source again. Do not promise that an unknown request failed.
+
+In CardChase, **Activity** totals include recorded contacts and each platform
+dispatch start once, including failed or unknown attempts. Draft preparation,
+authorization and cancellation before dispatch do not count as contact attempts.
+Callbacks update an attempt's outcome rather than adding another attempt. The
+latest 50 entries are shown; totals and staff minutes cover the full history.
+Accepted or sent is not proof of delivery or that the recipient read a message.
+
+In **Communications**, use the current status and any **Delivery problem** label.
+The label includes a bounded provider code and a controlled explanation; retain
+only that code and the approved operation reference when escalating. Older events
+can lack a code. A later successful status can clear the current problem while
+its earlier event remains in history. An unknown submission needs investigation
+and resolution before a new operation; never blindly resend it. Common codes:
+
+| Code | Staff action |
+|---|---|
+| `30034` | Ask the administrator to resolve sender A2P registration before another send. |
+| `21610` | Keep outreach stopped; review the opt-out and consent. |
+| `30003`, `30005`, `30006` | Verify reachability, the destination number or SMS capability. |
+| `30007` | Ask the administrator to review filtering, sender and content; do not repeatedly resend. |
+
+Calls remain outside the SMS-only rollout. Existing keypad history can display
+**No keypad response** or **Unrecognized keypad response**; neither proves a
+completed patient action or permits a new call.
+
 ## Rollback
 
 1. Close external ingress and set every execution/outbound/model switch in the
@@ -172,7 +217,7 @@ an OAuth client, secret, token cache, runtime identity, or Key Vault grant:
 | Workload | Repository/owner | Expected read boundary |
 |---|---|---|
 | Provider lab chatbot/dashboard | Cosmas Sovereign | Certified FHIR R4 `system/DiagnosticReport.read` and `system/Observation.read`; Sovereign `ATHENA_*` configuration only |
-| Billing/Card Chase import | This repository | Certified reads where sufficient; otherwise the still-unapproved GET-only use of `athena/service/Athenanet.MDP.*`; `COSMANEURA_ATHENA_*` job configuration only |
+| Billing/Card Chase import | This repository | Certified reads where sufficient; otherwise combined Read/Write grants require recorded owner approval for the exact bounded GET scope. Legacy sync uses `COSMANEURA_ATHENA_*` job configuration only; staff review uses its separate dedicated credential |
 
 Before either is enabled, record client ID, owner, environment, exact scopes,
 expiration, and owning vault outside source control, and prove the client IDs

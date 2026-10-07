@@ -12,14 +12,21 @@ merged source; the deployment templates do not run that rehearsal themselves.
 Before any later Azure change, reconcile actual image/configuration/schema and
 deployed-only behavior, select the approved merged commit/image digest, and
 review the parameter difference. The normal runner expands through migrations
-001–026: unassigned SMS requires 018, provider handoff requires 019, its
+001–027: unassigned SMS requires 018, provider handoff requires 019, its
 empty source admission registry requires 020, and Athena identity bindings
 require 021; configured Athena review requires 022, operational read/storage
 requires 023, optional provider service dates require 024, and provider model
 source verification requires 025; the dedicated Core workload receiver requires
-026. Retain
+026. Communications delivery-error storage requires 027; configured runtime and
+callback readiness require its `chase_communication_provider_events.error_code` column.
+Earlier events retain no error code; do not invent a historical backfill. Retain
 the exact migration hashes, restricted-role grants and acceptance evidence.
 Nothing here authorizes patient data, live outreach or cloud promotion.
+
+An isolated SMS-only trial can leave the billing header, coding inference, Athena
+review and Core receiver disabled. Acceptance of that trial does not establish
+readiness of the full CAB training workspace. Enable and accept those capabilities
+through their own reviewed configuration; keep Session Prep in Sovereign.
 
 For operational Athena and registered provider coding, the API-only secure `modelDataPolicyJson`
 parameter carries the separately reviewed policy described in
@@ -216,7 +223,7 @@ for standalone MCD training. These defaults are not a snapshot of Azure.
 Run the current image's locked owner command
 `python -m cosmaneura_billing.migrations` through the existing migration job,
 with its owner DSN and runtime provisioning passwords supplied by secret
-references. It applies the complete001–026 set and then reconciles ordinary API,
+references. It applies the complete 001–027 set and then reconciles ordinary API,
 worker and optional importer grants. Compare the entire ledger before and after;
 the October2 owner read established only001–009. Do not run a hand-picked
 011/013 subset or silently replace a checksum. Keep the additive tables on rollback.
