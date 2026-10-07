@@ -195,6 +195,12 @@ test("staff verify contact and permission, prepare and explicitly authorize; no 
 });
 
 test("an uncertain prepare retries its same ID; stale case reads cannot replace the current case", async ({ page }) => {
+  await page.route("**/api/session", (route) => route.fulfill({ json: {
+    views: ["provider", "coder", "chase"], defaultView: "chase",
+    capabilities: { manageChase: true },
+    actions: { seedSyntheticChase: { seedDigest: "b".repeat(64), caseCount: 4 } },
+  } }));
+  await page.route("**/api/encounters", (route) => route.fulfill({ json: [] }));
   const view = payload();
   view.policy.approved = true;
   view.bindings.sms = { bindingId: binding, consentGranted: true };
@@ -229,8 +235,22 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   await panel.getByRole("button", { name: "Prepare SMS", exact: true }).click();
   await expect(panel.getByRole("button", { name: "Retry same action", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled();
+  // The exact pending command is owned by this case component. Navigation
+  // must preserve it until its outcome is confirmed by the same-action retry.
+  await expect(page.getByRole("button", { name: /Synthetic patient B/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Expired/ })).toBeDisabled();
+  await page.getByText("Demo setup", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Load synthetic demo tasks", exact: true })).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "Summary", exact: true })).toBeDisabled();
+  await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Provider", exact: true })).toBeDisabled();
+  await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Coder review", exact: true })).toBeDisabled();
+  await expect(page.getByRole("status").filter({ hasText: "A communications action is pending" })).toBeVisible();
   await panel.getByRole("button", { name: "Retry same action", exact: true }).click();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /Synthetic patient B/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Expired/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Load synthetic demo tasks", exact: true })).toBeEnabled();
+  await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Provider", exact: true })).toBeEnabled();
   await expect(panel.getByRole("list", { name: "SMS thread" }).getByRole("listitem")).toHaveCount(1);
   expect(bodies).toHaveLength(2);
   expect(bodies[0]).toEqual(bodies[1]);
@@ -244,6 +264,48 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   await expect(panel.getByRole("list", { name: "SMS thread" })).toContainText("No recorded messages yet");
   await expect(panel.getByRole("list", { name: "SMS thread" })).not.toContainText(view.operations[0].text);
   await expect(panel.getByText("+12025550100", { exact: true })).toHaveCount(0);
+});
+
+test("an in-flight demo reset blocks a new communications command", async ({ page }) => {
+  await page.route("**/api/session", (route) => route.fulfill({ json: {
+    views: ["chase"], defaultView: "chase", capabilities: { manageChase: true },
+    actions: { seedSyntheticChase: { seedDigest: "b".repeat(64), caseCount: 4 } },
+  } }));
+  const view = payload();
+  view.policy.approved = true;
+  view.bindings.sms = { bindingId: binding, consentGranted: true };
+  view.actions.sms = { allowed: true, reason: "" };
+  const commands = [];
+  await page.route("**/api/chase/communications**", (route) => {
+    const path = new URL(route.request().url()).pathname.slice(base.length);
+    if (path === "/unassigned-texts/count") return route.fulfill({ status: 404, json: {} });
+    const body = route.request().postDataJSON();
+    if (path === "/action") commands.push(body);
+    view.chaseId ||= body.chaseId;
+    return route.fulfill({ json: view });
+  });
+  let started, release;
+  const began = new Promise((resolve) => { started = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route("**/api/chase/demo-seed", async (route) => {
+    started(); await gate;
+    await route.fulfill({ json: { seedDigest: "b".repeat(64), installedCaseCount: 4,
+      openTaskCount: 4, replayed: true, outbound: { schedulerEnabled: false,
+        patientMessagingEnabled: false, operationallyActivated: false,
+        automaticContact: false, transport: "record_only" } } });
+  });
+  const panel = await open(page);
+  await panel.getByRole("button", { name: "Reminder", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Prepare SMS", exact: true })).toBeEnabled();
+  await page.getByText("Demo setup", { exact: true }).click();
+  await page.getByRole("button", { name: "Load synthetic demo tasks", exact: true }).click();
+  await began;
+  await expect(panel.getByRole("button", { name: "Prepare SMS", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("textbox", { name: "SMS draft", exact: true })).toBeDisabled();
+  release();
+  await expect(page.getByRole("status").filter({ hasText: "same 4-case synthetic pack" })).toBeVisible();
+  await expect(panel).toHaveCount(0);
+  expect(commands).toEqual([]);
 });
 
 test("a pending draft can be canceled; a started uncertain send cannot be recalled", async ({ page }) => {

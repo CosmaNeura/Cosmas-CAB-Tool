@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2, CreditCard, LockKeyhole, Phone,
   RefreshCw, Search, UserCheck,
@@ -100,9 +100,10 @@ function CaseActivity({ value }) {
 }
 
 function FollowUpTask({
-  task, loading, error, manageChase, actionBusy, actionError,
-  actionNotice, retryAction, onAction, onReviewCounts, onReviewLock, onAthenaLock, athenaLocked, onAthenaApplied, billingHeaderAvailable,
+  task, loading, error, manageChase, actionBusy: outerActionBusy, actionError,
+  actionNotice, retryAction, onAction, onReviewCounts, onReviewLock, onAthenaLock, athenaLocked, onAthenaApplied, billingHeaderAvailable, onMutationNavigationLock, mutationNavigationLocked, communicationsReviewLocked,
 }) {
+  const actionBusy = outerActionBusy || communicationsReviewLocked;
   const [outcome, setOutcome] = useState("reached");
   const [minutes, setMinutes] = useState("0");
   const [note, setNote] = useState("");
@@ -147,7 +148,8 @@ function FollowUpTask({
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 border-b border-slate-200 px-5">
         <div role="tablist" aria-label="Case sections" className="flex gap-5">
-          {panels.map((name) => <button key={name} type="button" role="tab" aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} aria-controls={`case-${name}`} id={`case-${name}-tab`} onClick={() => setPanel(name)} onKeyDown={(event) => {
+          {panels.map((name) => <button key={name} type="button" role="tab" disabled={mutationNavigationLocked && panel !== name} aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} aria-controls={`case-${name}`} id={`case-${name}-tab`} onClick={() => { if (!mutationNavigationLocked) setPanel(name); }} onKeyDown={(event) => {
+            if (mutationNavigationLocked) return;
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
             const next = event.key === "Home" ? panels[0] : event.key === "End" ? panels.at(-1) : panels[(panels.indexOf(name) + (event.key === "ArrowRight" ? 1 : -1) + panels.length) % panels.length];
@@ -156,7 +158,7 @@ function FollowUpTask({
         </div>
       </div>
       <div id="case-activity" role="tabpanel" aria-labelledby="case-activity-tab" hidden={panel !== "activity"} className="px-5 pb-5"><CaseActivity value={task.activity} /></div>
-      {hasCommunications && <div id="case-communications" role="tabpanel" aria-labelledby="case-communications-tab" hidden={panel !== "communications"} className="px-5 pb-1"><CaseCommunications task={task} active={panel === "communications"} manageChase={manageChase} blocked={actionBusy || athenaLocked} onReviewCounts={onReviewCounts} onReviewLock={onReviewLock} /></div>}
+      {hasCommunications && <div id="case-communications" role="tabpanel" aria-labelledby="case-communications-tab" hidden={panel !== "communications"} className="px-5 pb-1"><CaseCommunications task={task} active={panel === "communications"} manageChase={manageChase} blocked={outerActionBusy || athenaLocked} onReviewCounts={onReviewCounts} onReviewLock={onReviewLock} onMutationNavigationLock={onMutationNavigationLock} /></div>}
       {hasAthena && <div id="case-athena" role="tabpanel" aria-labelledby="case-athena-tab" hidden={panel !== "athena"} className="px-5 pb-1"><AthenaCaseReview task={task} active={panel === "athena"} manageChase={manageChase} blocked={actionBusy} onReviewLock={onAthenaLock} onApplied={onAthenaApplied} headerLaunchAvailable={billingHeaderAvailable} /></div>}
       <div id="case-summary" role="tabpanel" aria-labelledby="case-summary-tab" hidden={panel !== "summary"} className="p-5">
       {(() => {
@@ -365,7 +367,7 @@ function FollowUpTask({
   );
 }
 
-export default function CardChase({ live, demoSeed = null, manageChase = false, billingHeaderAvailable = false }) {
+export default function CardChase({ live, demoSeed = null, manageChase = false, billingHeaderAvailable = false, onNavigationLockChange }) {
   const [bucket, setBucket] = useState("");
   const [query, setQuery] = useState("");
   const [worklist, setWorklist] = useState(null);
@@ -379,6 +381,14 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
   const [taskError, setTaskError] = useState(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [reviewLocked, setReviewLocked] = useState(false);
+  const [mutationNavigationLocked, setMutationNavigationLocked] = useState(false);
+  const mutationNavigationRef = useRef(false);
+  const updateMutationNavigationLock = useCallback((locked) => {
+    mutationNavigationRef.current = locked === true;
+    setMutationNavigationLocked(locked === true);
+    onNavigationLockChange?.(locked === true);
+  }, [onNavigationLockChange]);
+  useEffect(() => () => onNavigationLockChange?.(false), [onNavigationLockChange]);
   const [athenaLocked, setAthenaLocked] = useState(false);
   const [caseRefreshError, setCaseRefreshError] = useState("");
   const caseRefresh = useRef(null);
@@ -516,6 +526,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
   };
 
   const openTask = async (row) => {
+    if (mutationNavigationRef.current) return;
     caseRefresh.current?.abort();
     setCaseRefreshError("");
     selectedChaseIdRef.current = row.chaseId;
@@ -538,7 +549,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
   const submitAction = async (
     payload, successMessage, actionId = null, targetChaseId = task?.chaseId,
   ) => {
-    if (!manageChase || !targetChaseId || inboxLocked || athenaLocked) return;
+    if (!manageChase || !targetChaseId || seeding || reviewLocked || inboxLocked || athenaLocked) return;
     const chaseId = targetChaseId;
     setActionBusy(true);
     setActionError(null);
@@ -579,7 +590,8 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
   };
 
   const seedSyntheticDemo = async () => {
-    if (!live || !demoSeed?.seedDigest) return;
+    if (!live || !demoSeed?.seedDigest || mutationNavigationRef.current
+      || actionBusy || reviewLocked || inboxLocked || athenaLocked || seeding) return;
     setSeeding(true);
     setSeedError(null);
     setSeedResult(null);
@@ -629,7 +641,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
       </header>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         {outbound && <details><summary className="cursor-pointer">{outbound.automaticContact ? "Outreach automation active" : "Manual outreach"} · Status details</summary><p className="mt-2">Outbound automation is {outbound.automaticContact ? "active" : "off"}; transport is {outbound.transport}. Manual actions only record work. Text drafts require separate staff authorization in Communications when available.</p></details>}
-        {demoSeed && <details><summary className="cursor-pointer">Demo setup</summary><div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"><p>Admin only. Fixed {demoSeed.caseCount}-case synthetic pack.</p><button onClick={seedSyntheticDemo} disabled={seeding} className="rounded-md border border-slate-300 px-2 py-1 font-medium disabled:opacity-50">{seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}</button>{seedResult && <p role="status">{syntheticSeedConfirmationMessage(seedResult)}</p>}{seedError && <p role="alert">{seedError}</p>}</div></details>}
+        {demoSeed && <details><summary className="cursor-pointer">Demo setup</summary><div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"><p>Admin only. Fixed {demoSeed.caseCount}-case synthetic pack.</p><button onClick={seedSyntheticDemo} disabled={seeding || mutationNavigationLocked || actionBusy || reviewLocked || inboxLocked || athenaLocked} className="rounded-md border border-slate-300 px-2 py-1 font-medium disabled:opacity-50">{seeding ? "Loading synthetic tasks…" : "Load synthetic demo tasks"}</button>{seedResult && <p role="status">{syntheticSeedConfirmationMessage(seedResult)}</p>}{seedError && <p role="alert">{seedError}</p>}</div></details>}
       </div>
       {caseRefreshError && <p role="alert" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{caseRefreshError}</p>}
       {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
@@ -646,14 +658,14 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
           <div className="border-b border-slate-200 p-4">
             <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-900">Work queue</h2><span className="text-xs text-slate-500">{shown.length} shown</span></div>
             <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"><Search size={15} className="text-slate-400" /><input type="search" aria-label="Search cases" placeholder="Search cases…" value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></label>
-            <div className="mt-3 flex flex-wrap gap-1.5">{FILTERS.map(([value, label]) => <button type="button" key={value || "all"} onClick={() => setBucket(value)} disabled={actionBusy || inboxLocked || athenaLocked} aria-pressed={bucket === value} className={`rounded-md px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${bucket === value ? "bg-sky-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label}{counts ? ` · ${number(value ? counts.by_bucket?.[value] : counts.open)}` : ""}</button>)}</div>
+            <div className="mt-3 flex flex-wrap gap-1.5">{FILTERS.map(([value, label]) => <button type="button" key={value || "all"} onClick={() => { if (!mutationNavigationRef.current) setBucket(value); }} disabled={actionBusy || inboxLocked || athenaLocked || mutationNavigationLocked} aria-pressed={bucket === value} className={`rounded-md px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${bucket === value ? "bg-sky-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label}{counts ? ` · ${number(value ? counts.by_bucket?.[value] : counts.open)}` : ""}</button>)}</div>
           </div>
           <div className="overflow-x-auto">
             <div className="min-w-[440px]">
               <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500"><span>Case / status</span><span>Reason</span><span>Visit</span><span className="text-right">Touches</span></div>
               {loading && !worklist ? <p className="p-5 text-sm text-slate-500">Loading follow-up work…</p> : !shown.length ? <p className="p-5 text-sm text-slate-500">{query ? "No cases match your search." : "No open tasks match this filter."}</p> : <div className="max-h-[650px] divide-y divide-slate-100 overflow-y-auto">{shown.map((row) => {
                 const [statusLabel, statusTone] = STATUS[row.state] || [row.state, "bg-slate-100 text-slate-600 ring-slate-300"];
-                return <button type="button" key={row.chaseId} onClick={() => openTask(row)} disabled={actionBusy || inboxLocked || athenaLocked} aria-pressed={selectedChaseId === row.chaseId} className={`grid w-full grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] items-center gap-2 border-l-[3px] px-3 py-3 text-left disabled:opacity-60 ${selectedChaseId === row.chaseId ? "border-sky-700 bg-sky-50" : "border-transparent hover:bg-slate-50"}`}>
+                return <button type="button" key={row.chaseId} onClick={() => openTask(row)} disabled={actionBusy || inboxLocked || athenaLocked || mutationNavigationLocked} aria-pressed={selectedChaseId === row.chaseId} className={`grid w-full grid-cols-[minmax(0,1.7fr)_minmax(0,0.8fr)_5rem_3rem] items-center gap-2 border-l-[3px] px-3 py-3 text-left disabled:opacity-60 ${selectedChaseId === row.chaseId ? "border-sky-700 bg-sky-50" : "border-transparent hover:bg-slate-50"}`}>
                   <span className="min-w-0"><span className="block truncate text-sm font-medium text-slate-900">{row.patientLabel}</span><span className="mt-1 inline-block"><Pill tone={statusTone}>{statusLabel}</Pill></span>{reviewCounts(row.communicationReview)?.pending > 0 && <span className="mt-1 block text-[11px] font-medium text-amber-800">{row.communicationReview.pending} communication event{row.communicationReview.pending === 1 ? "" : "s"} to review</span>}</span>
                   <span className="text-xs text-slate-500">{row.bucket}<span className="mt-1 block text-[10px]">Priority {number(row.priority)}</span></span>
                   <span className="text-xs text-slate-500">{row.appointmentAt ? row.appointmentAt.slice(5, 10) : "—"}</span><span className="text-right text-sm font-medium text-slate-600">{number(row.touches)}</span>
@@ -666,6 +678,8 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
         <FollowUpTask
           onReviewCounts={updateReviewCounts}
           onReviewLock={setReviewLocked}
+          onMutationNavigationLock={updateMutationNavigationLock}
+          mutationNavigationLocked={mutationNavigationLocked}
           onAthenaLock={setAthenaLocked}
           athenaLocked={athenaLocked}
           onAthenaApplied={refreshAppliedCase}
@@ -675,7 +689,8 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
           loading={taskLoading}
           error={taskError}
           manageChase={manageChase}
-          actionBusy={actionBusy || inboxLocked}
+          actionBusy={actionBusy || inboxLocked || seeding}
+          communicationsReviewLocked={reviewLocked}
           actionError={actionError}
           actionNotice={actionNotice}
           retryAction={retry ? () => submitAction(

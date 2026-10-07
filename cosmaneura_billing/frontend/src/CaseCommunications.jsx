@@ -138,12 +138,13 @@ function OutreachSetup({ view, locked, act }) {
 }
 
 
-export default function CaseCommunications({ task, active, manageChase, blocked, onReviewCounts, onReviewLock }) {
+export default function CaseCommunications({ task, active, manageChase, blocked, onReviewCounts, onReviewLock, onMutationNavigationLock }) {
   const [view, setView] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [retry, setRetry] = useState(null);
+  const [mutationPending, setMutationPending] = useState(false);
   const [requiresRefresh, setRequiresRefresh] = useState(false);
   const [draft, setDraft] = useState("");
   const [reply, setReply] = useState("");
@@ -174,8 +175,19 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
     return () => onReviewLock?.(false);
   }, [busy, retry, requiresRefresh, reviewLocked, onReviewLock]);
 
+  useEffect(() => {
+    onMutationNavigationLock?.(mutationPending || !!retry);
+  }, [mutationPending, retry, onMutationNavigationLock]);
+  useEffect(() => () => onMutationNavigationLock?.(false), [onMutationNavigationLock]);
+
   async function run(command = null) {
     if (request.current.busy || blocked) return;
+    if (command) {
+      // Publish synchronously before the request: changing cases must not
+      // unmount the component that owns an uncertain exact command.
+      onMutationNavigationLock?.(true);
+      setMutationPending(true);
+    }
     background.current?.abort();
     background.current = null;
     const sequence = ++request.current.sequence;
@@ -222,6 +234,7 @@ export default function CaseCommunications({ task, active, manageChase, blocked,
       if (sequence === request.current.sequence) {
         request.current.busy = false;
         setBusy(false);
+        setMutationPending(false);
       }
     }
   }
