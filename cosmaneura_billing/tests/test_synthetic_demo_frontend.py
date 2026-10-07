@@ -249,7 +249,7 @@ def test_admin_only_server_capability_drives_digest_pinned_synthetic_seed():
     assert "console." not in CHASE + SEED
 
 
-def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
+def test_card_chase_uses_fixed_post_routes_and_manual_controls_only_record_work():
     assert 'api("/api/chase/worklist"' in CHASE
     assert 'api("/api/chase/task"' in CHASE
     assert 'api("/api/chase/demo-seed"' in CHASE
@@ -260,9 +260,13 @@ def test_card_chase_uses_fixed_post_routes_and_never_initiates_contact():
     assert "encodeURIComponent" not in CHASE
     assert "tel:" not in CHASE
     assert "mailto:" not in CHASE
-    assert "does not dial, text, email, or open an external link" in CHASE
+    contact = CHASE.split("{task.contact ? (", 1)[1].split(") : (", 1)[0]
+    assert "{task.contact.destination}" in contact
+    for navigation in ("href=", "onClick=", "onSubmit=", "window.open", "location.assign"):
+        assert navigation not in contact
+    assert "task.systemOfRecord.url" not in CHASE
+    assert "window.open" not in CHASE
     assert "They never call, text, email, or write to a source system." in CHASE
-    assert "it does not write to a source system or contact the patient" in CHASE
     assert "crypto.randomUUID()" in CHASE
     assert "retry.actionId" in CHASE
     assert "retry.chaseId" in CHASE

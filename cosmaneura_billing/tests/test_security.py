@@ -478,6 +478,7 @@ def test_role_policies_and_server_owned_chase_actor(tmp_path):
     ).json() == {
         "views": ["provider"],
         "defaultView": "provider",
+        "patientOutreachEnabled": False,
         "capabilities": {"manageChase": False},
     }
     assert client.post(
