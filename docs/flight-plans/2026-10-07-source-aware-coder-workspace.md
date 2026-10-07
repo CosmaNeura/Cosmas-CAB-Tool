@@ -45,4 +45,9 @@ long-source-ID wrapping were checked against that same saved receipt.
 Recovery: revert this UI/projection change; stored sources, edits, and signoffs
 remain intact and existing standalone header links continue working. No
 deployment, account setup, or clinical activation is included. Draft navigation
-guards are a separate follow-on outcome.
+guards are supplied by separate PR88. This branch composes its callback with
+source-policy handling on both provider and coder header mounts, including the
+denied-generation saved-header path. Final integration checks passed all 17
+existing frontend wiring contracts, 58 Node reader checks, the production build,
+and nine navigation browser cases, including two denied-model exact-save cases.
+The prior real-PG signoff evidence is retained; backend bytes are unchanged.

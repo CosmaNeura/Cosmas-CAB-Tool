@@ -42,7 +42,8 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   useEffect(() => () => cancelHeaderRequest(pending), []);
 
   useEffect(() => {
-    onStateChange({view, dirty: !!draft, busy: busy || !!retry, stale});
+    onStateChange({view, dirty: !!draft, busy: busy || !!retry,
+      navigationBlocked: !!retry || !!pending.current?.command, stale});
   }, [view, draft, busy, retry, stale, onStateChange]);
   useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
 
@@ -50,6 +51,9 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
     if (!request) return NOOP;
     const {controller} = request;
+    // Mutations and exact retries cannot be abandoned. A read may be canceled
+    // by changing visits, even if the server never answers.
+    onStateChange({view, dirty: !!draft, busy: true, navigationBlocked: !!command, stale});
     setBusy(true); setError(""); setNotice("");
     void (async () => {
       try {
