@@ -27,7 +27,10 @@ workspace; `Admin` is for the designated administrator.
    visit details and any documentation warnings.
 2. Choose **Generate billing header**. If a saved header already appears, review
    it. Read each suggestion with its source quotation; a held or unresolved
-   result is not an accepted code.
+   result is not an accepted code. When asynchronous generation is enabled,
+   **Generating billing header…** means the saved operation is being checked.
+   If **Resume status** appears, use it to check that operation; it does not
+   start another generation. Report a failed or unknown outcome to the trainer.
 3. Choose **Edit header** to make a justified correction or code proposal. Select
    supporting source evidence for code proposals, confirm any proposed primary
    and diagnosis order, enter **Reason for edit (required)**, then choose
@@ -42,15 +45,18 @@ workspace; `Admin` is for the designated administrator.
    Reopen the case to confirm that the same edits and review receipt remain.
 
 Unsaved edits cannot be exported. Editing a reviewed header requires a fresh
-coder review; its old receipt still describes the earlier revision. If saving
-is interrupted, use **Retry same request** or **Retry exact saved review**, as
-shown. A timed-out save or generation has an unknown outcome; stay in the tab
-and retry the same request rather than starting a replacement. Other cases and
-tabs remain blocked while that outcome is unresolved. A failed header load offers
+coder review; its old receipt still describes the earlier revision. An interrupted
+save or unconfirmed initial generation request offers **Retry same request**;
+an interrupted coder review offers **Retry exact saved review**. Keep the tab
+open and use that exact request. Navigation remains blocked while its mutation
+outcome is unresolved. After asynchronous generation has been acknowledged,
+**Resume status** checks the existing work. A status timeout or terminal failed
+or unknown result does not require staying in that case; it never authorizes a
+replacement generation for the same source. A failed header load offers
 **Reload header** and can be left. Before leaving unsaved edits, either save them
 or explicitly confirm their discard. For a confirmed conflict, use the offered
-reload action. If access or a feature is unavailable, contact the trainer instead
-of creating a replacement.
+reload action. If access, generation or a feature is unavailable, contact the
+trainer instead of creating a replacement.
 
 If **New coding generation awaits approval** appears for a registered provider
 or Athena note, the source and any saved header remain available for review and
@@ -88,6 +94,14 @@ A hidden or unavailable vendor feature is not a missing patient record. The
 application supports these workflows; the trainer will identify which are
 connected for this session. Neither the twelve-case pack nor local test results
 prove a live vendor connection.
+
+If the separately configured Cosmas MD page offers **Keep this generation
+authorized while I stay signed in, for up to six minutes.**, that unchecked
+option applies only to the generation you are about to request. Its authority
+ends earlier if sign-in, source permission or the session ends. **Stop renewing
+generation authorization** stops renewal; it does not promise to cancel work
+already attempted. **Resume status** only checks the outcome. This option is
+not part of the standalone CAB training dashboard.
 
 ## Finish the exercise
 
