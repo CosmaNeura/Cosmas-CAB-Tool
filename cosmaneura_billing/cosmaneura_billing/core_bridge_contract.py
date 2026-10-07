@@ -93,7 +93,7 @@ def authorization_request(operation, purpose, request_sha):
         "sourceTextSha256": operation["source"]["textSha256"]}
 
 
-def verify_authorization(value, operation, purpose, request_sha, *, now=None, async_generation=False):
+def verify_authorization(value, operation, purpose, request_sha, *, now=None, async_generation=False, continuation=False):
     """Verify the authenticated Core response; its body is not a bearer token."""
     try:
         keys = {"schemaVersion", "allowed", "operationId", "purpose", "requestSha256", "operationSha256",
@@ -101,6 +101,9 @@ def verify_authorization(value, operation, purpose, request_sha, *, now=None, as
         if async_generation:
             require(purpose == "header.generate")
             keys.add("generationExpiresAt")
+        if continuation:
+            require(async_generation)
+            keys.update(("generationContinuationRequired", "generationAuthorizedUntil"))
         require(type(value) is dict and set(value) == keys and value["allowed"] is True
                 and value["schemaVersion"] == "core-cab-authorization.v1")
         require(value["operationId"] == operation["operationId"] and value["purpose"] == purpose
@@ -116,6 +119,10 @@ def verify_authorization(value, operation, purpose, request_sha, *, now=None, as
             deadline = timestamp(value["generationExpiresAt"])
             require(current < deadline and expires <= deadline
                     and (deadline-issued).total_seconds() <= 362)
+            if continuation:
+                authorized_until = timestamp(value["generationAuthorizedUntil"])
+                require(value["generationContinuationRequired"] is True
+                        and current < authorized_until <= deadline and expires <= authorized_until)
         return value
     except CoreBridgeError:
         raise

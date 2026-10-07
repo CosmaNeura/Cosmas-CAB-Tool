@@ -107,13 +107,16 @@ class CoreLease:
         self.authorization = None
         self.active = False
         self.async_generation = False
+        self.continuation_required = False
         self.generation_deadline = None
 
     def recheck(self):
         require(self.active and datetime.now(timezone.utc).timestamp() < self.workload.expires_at)
         self.authorization = verify_authorization(self.authorizer(self.operation, self.purpose, self.request_sha),
                                                   self.operation, self.purpose, self.request_sha,
-                                                  async_generation=self.async_generation)
+                                                  async_generation=self.async_generation,
+                                                  continuation=self.continuation_required)
+        require(datetime.now(timezone.utc).timestamp() < self.workload.expires_at)
         if self.async_generation:
             deadline = self.authorization["generationExpiresAt"]
             require(self.generation_deadline is None or self.generation_deadline == deadline)
@@ -147,6 +150,7 @@ def captured_generation(*, async_mode):
     return {"operation": lease.operation, "requestSha": lease.request_sha, "principal": lease.principal,
             "workload": lease.workload, "connection": lease.connection_id, "policy": lease.policy,
             "authorizer": lease.worker_authorizer, "async": async_mode,
+            "continuation": lease.continuation_required,
             "generationExpiresAt": lease.generation_deadline}
 
 
@@ -161,6 +165,7 @@ def worker_lease(capture, services):
         authorizer=capture["authorizer"] or CoreOperationAuthorizer(capture["policy"]))
     lease.connection_id, lease.policy = connection, capture["policy"]
     lease.async_generation = capture["async"]
+    lease.continuation_required = capture["continuation"]
     lease.generation_deadline = capture["generationExpiresAt"] if capture["async"] else None
     return lease
 
@@ -306,7 +311,7 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
     from starlette.concurrency import run_in_threadpool
     from . import api
     from .access_audit import build_access_event, classify_access
-    from .billing_header_routes import HeaderRead, HeaderGenerate, HeaderSave, HeaderOperation, read_header, generate_header, save_header, generation_status
+    from .billing_header_routes import HeaderRead, CoreHeaderGenerate, HeaderSave, HeaderOperation, read_header, generate_header, save_header, generation_status
     from .billing_header import BillingHeaderError
     from .persistence import PostgresContext, postgres_services
     from .model_admission import parse_policy
@@ -405,7 +410,12 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
                           principal=principal, workload=workload, authorizer=authorizer)
         lease.connection_id = connection_id
         lease.policy, lease.worker_authorizer = policy, worker_authorizer
-        lease.async_generation = purpose == "header.generate" and body["command"].get("responseMode") == "async"
+        if purpose == "header.generate":
+            generate = CoreHeaderGenerate.model_validate(body["command"])
+            lease.async_generation = generate.responseMode == "async"
+            lease.continuation_required = generate.continuationConsent is True
+            require(not lease.continuation_required or settings.billing_header_continuation_enabled,
+                    "generation_continuation_unavailable", 409)
         request.state.principal = principal
         event_id = str(uuid4())
         request.state.audit_event_id = event_id
@@ -430,7 +440,7 @@ def create_core_bridge(*, settings=None, policy=None, verifier=None, authorizer=
                     result["launchPath"] = None  # Core owns browser identity and continuation.
                 else:
                     kind = purpose.split(".")[1]
-                    cls, handler = {"read": (HeaderRead, read_header), "generate": (HeaderGenerate, generate_header),
+                    cls, handler = {"read": (HeaderRead, read_header), "generate": (CoreHeaderGenerate, generate_header),
                                     "save": (HeaderSave, save_header), "generation-status": (HeaderOperation, generation_status)}[kind]
                     command = cls.model_validate(body["command"])
                     require(command.encounterId == receipt["encounterId"]
