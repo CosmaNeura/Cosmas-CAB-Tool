@@ -125,7 +125,7 @@ def test_coder_review_rejects_stale_or_untrusted_responses_and_freezes_exact_ret
     assert "setFrozen(true)" in CODER
     assert "savingRef.current" in CODER
     assert "onNavigationLockChange(true)" in CODER
-    assert "selectionDisabled={frozen && !receipt}" in CODER
+    assert "selectionDisabled={navigationLocked || (frozen && !receipt)}" in CODER
     assert 'addEventListener("beforeunload"' in CODER
     assert "Reload after confirmed conflict" in CODER
     assert "Sign in again in a new tab" in CODER
@@ -133,9 +133,9 @@ def test_coder_review_rejects_stale_or_untrusted_responses_and_freezes_exact_ret
     assert "The server outcome is unknown" in CODER
     assert "Discard frozen draft" not in CODER
     assert "coderReviewLocked && view === \"coder\"" in APP
-    assert APP.count("onNavigationLockChange={setCoderReviewLocked}") == 1
+    assert APP.count("onNavigationLockChange={updateCoderNavigationLock}") == 1
     coder_call = APP.split("<CoderReview", 1)[1]
-    assert "onNavigationLockChange={setCoderReviewLocked}" in coder_call
+    assert "onNavigationLockChange={updateCoderNavigationLock}" in coder_call
 
 
 def test_coder_copy_describes_feedback_and_prepared_preview_without_transmission_claims():
