@@ -306,6 +306,6 @@ def test_degraded_results_suppress_claim_cards_and_feedback_actions():
     coder_degraded = CODER.index(") : engine.degraded ? (")
     coder_normal = CODER.index(") : (", coder_degraded)
     coder_banner = CODER[coder_degraded:coder_normal]
-    assert "No codes proposed for this encounter" in coder_banner
-    assert "No code recommendations, prepared draft, or feedback actions are shown" in coder_banner
+    assert "Coding review unavailable for this encounter" in coder_banner
+    assert "No new recommendations, prepared draft, or coder signoff are available" in coder_banner
     assert "Submit &amp; next" not in coder_banner

@@ -29,7 +29,7 @@ export default function BillingHeader(props) {
   return <HeaderContents key={headerSourceKey(props.encounter)} {...props} />;
 }
 
-function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true, asyncEnabled = false}) {
+function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true, asyncEnabled = false, workspaceInvalidated = false}) {
   const [view, setView] = useState(null), [draft, setDraft] = useState(null);
   const [reason, setReason] = useState(""), [error, setError] = useState("");
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
@@ -38,6 +38,11 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   const [notice, setNotice] = useState("");
   const pending = useRef(null), unresolvedCommand = useRef(null), generationRef = useRef(null);
   const active = useRef(true), pollTimer = useRef(null), dirtyRef = useRef(false);
+  // A sibling workspace failure cannot abandon this source's command or make
+  // it current again when a late header response arrives.
+  const invalidatedRef = useRef(false);
+  invalidatedRef.current ||= workspaceInvalidated;
+  const invalidated = invalidatedRef.current;
   dirtyRef.current = !!draft;
   const pin = encounter.headerSource;
 
@@ -45,9 +50,9 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   useEffect(() => { active.current = true; return () => { active.current = false; clearTimeout(pollTimer.current); cancelHeaderRequest(pending); }; }, []);
 
   useEffect(() => {
-    onStateChange({view, dirty: !!draft, busy: busy || !!retry,
-      navigationBlocked: !!retry || !!pending.current?.command || (busy && !!generation), stale});
-  }, [view, draft, busy, retry, generation, stale, onStateChange]);
+    onStateChange({view: invalidated ? null : view, dirty: !!draft, busy: busy || !!retry,
+      navigationBlocked: !!retry || !!pending.current?.command || (busy && !!generation), stale: stale || invalidated});
+  }, [view, draft, busy, retry, generation, stale, invalidated, onStateChange]);
   useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
 
   function retireGeneration() {
@@ -56,6 +61,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   }
 
   function run(command = null, refresh = false) {
+    if (invalidatedRef.current && (!command || command !== unresolvedCommand.current)) return NOOP;
     if (command?.path.endsWith("generation-status") && generationRef.current !== command) return NOOP;
     if (generationRef.current && command?.path === BASE + "/generate") return NOOP;
     const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
@@ -63,13 +69,13 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     const {controller} = request;
     // Mutations and exact retries cannot be abandoned. A read may be canceled
     // by changing visits, even if the server never answers.
-    onStateChange({view, dirty: !!draft, busy: true, navigationBlocked: !!command, stale});
+    onStateChange({view: invalidatedRef.current ? null : view, dirty: !!draft, busy: true, navigationBlocked: !!command, stale: stale || invalidatedRef.current});
     setBusy(true); setError(""); setNotice("");
     armHeaderRequestDeadline(pending, request, () => {
       const observing = command?.path.endsWith("generation-status");
       unresolvedCommand.current = observing ? null : command;
       setRetry(unresolvedCommand.current); setBusy(false);
-      onStateChange({view, dirty: !!draft, busy: !!command && !observing, navigationBlocked: !!command && !observing, stale});
+      onStateChange({view: invalidatedRef.current ? null : view, dirty: !!draft, busy: !!command && !observing, navigationBlocked: !!command && !observing, stale: stale || invalidatedRef.current});
       setError(command?.path.endsWith("generation-status")
         ? "Status timed out. Resume status for this operation." : command
         ? "The header request timed out. Its outcome is unknown. Retry the same request to confirm it."
@@ -89,7 +95,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
             generationRef.current = state; setGeneration(state);
             if (result.status === "running" && Date.now() < state.until) {
               setNotice("Generating billing header…");
-              pollTimer.current = setTimeout(() => { if (active.current && generationRef.current === state && !dirtyRef.current) run(state); }, 2_000);
+              pollTimer.current = setTimeout(() => { if (active.current && !invalidatedRef.current && generationRef.current === state && !dirtyRef.current) run(state); }, 2_000);
             } else setError(result.status === "failed" ? "Generation failed. Resume status to check this operation."
               : result.status === "unknown" ? "Generation was interrupted or its outcome is unknown. Resume status for this operation."
               : "Generation is still pending. Resume status to check this operation.");
@@ -127,6 +133,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   }
 
   function command(path, body = {}) {
+    if (invalidatedRef.current) return;
     if (path === "/generate" && !generationAllowed) return;
     run({path: BASE + path, body: {encounterId: encounter.encounterId, expectedSource: pin,
       operationId: crypto.randomUUID(), ...(path === "/generate" && asyncEnabled ? {responseMode: "async"} : {}), ...body}});
@@ -149,7 +156,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     URL.revokeObjectURL(url);
     setNotice("Billing header text downloaded with source citations.");
   }
-  const disabled = hostDisabled || busy || !!retry || stale;
+  const disabled = hostDisabled || busy || !!retry || stale || invalidated;
   const h = view?.header;
   const currentDraft = view ? headerDraft(view) : null;
   const proposedOrder = view ? proposedDiagnosisOrder(view) : [];
@@ -159,13 +166,14 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
   return <section aria-label="Billing header" aria-busy={busy} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="font-semibold text-slate-950">Billing header</h2><p className="mt-1 text-xs text-slate-600">Visit facts and code proposals for first review · clinical note unchanged</p></div>
-      {h && !draft && <div className="flex flex-wrap gap-2"><button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>
+      {h && !draft && !invalidated && <div className="flex flex-wrap gap-2"><button className={button} disabled={disabled} onClick={startEdit}>Edit header</button>
         <button className={button} disabled={disabled} onClick={copyHeader}>Copy header with evidence</button>
         <button className={button} disabled={disabled} onClick={downloadHeader}>Download header text</button></div>}
-      {!h && loaded && !stale && <button className={button} disabled={disabled || !!generation || !generationAllowed} onClick={() => command("/generate")}>Generate billing header</button>}
+      {!h && loaded && !stale && !invalidated && <button className={button} disabled={disabled || !!generation || !generationAllowed} onClick={() => command("/generate")}>Generate billing header</button>}
     </div>
-    <SourceVisitContext value={encounter.sourceVisitContext} expectedSource={pin} />
-    {!generationAllowed && <div role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">
+    {!invalidated && <SourceVisitContext value={encounter.sourceVisitContext} expectedSource={pin} />}
+    {invalidated && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">This workspace is no longer current. New header actions are unavailable. Any pending request still requires its own confirmation; retry that exact request if its outcome is unknown. Retained unsaved inputs can be explicitly canceled.</p>}
+    {!generationAllowed && !invalidated && <div role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">
       <p className="font-semibold">New coding generation awaits approval</p>
       <p className="mt-1">The clinical note and any saved header remain available for review and editing. New generation requires approval to send the note to the coding model.</p>
     </div>}
@@ -173,10 +181,10 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     {notice && <p role="status" className="mt-3 text-sm text-emerald-800">{notice}</p>}
     {error && <div role="alert" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"><p>{error}</p>
       {retry && <button className={`${button} mt-2`} disabled={busy} onClick={() => run(retry)}>Retry same request</button>}
-      {generation && !stale && <button className={`${button} mt-2`} disabled={busy} onClick={() => { const state = {...generation, until: Date.now() + 300_000}; generationRef.current = state; setGeneration(state); run(state); }}>Resume status</button>}
-      {!retry && !stale && <button className={`${button} mt-2`} disabled={busy || !!draft} onClick={() => run()}>Reload header</button>}
+      {generation && !stale && !invalidated && <button className={`${button} mt-2`} disabled={busy} onClick={() => { const state = {...generation, until: Date.now() + 300_000}; generationRef.current = state; setGeneration(state); run(state); }}>Resume status</button>}
+      {!retry && !stale && !invalidated && <button className={`${button} mt-2`} disabled={busy || !!draft} onClick={() => run()}>Reload header</button>}
     </div>}
-    {h && <>
+    {h && !invalidated && <>
       <p className="mt-4 text-xs font-medium text-slate-600">{view.signoff ? "Coder review recorded" : "Coder review pending"} · {h.generation.inferenceMode === "mock" ? "Offline synthetic engine" : "Billing engine"} · revision {view.revisionNumber}</p>
       {view.previousSignoff && <p role="status" className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Header edits require a fresh coder review. The prior receipt covered revision {view.previousSignoff.headerRevision}.</p>}
       {view.signoff && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
@@ -260,8 +268,8 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         </div>)}
         <button type="button" className={button} disabled={draft.codes.length >= 20} onClick={() => setDraft(replaceHeaderCodes(draft, [...draft.codes, {id: `human-${crypto.randomUUID()}`, kind: "ICD10", code: "", label: "", evidenceIds: []}]))}>Add code proposal</button>
       </fieldset>
-      <DiagnosisMapping {...{view, draft, disabled}} onChoose={(row) => setDraft((current) => replaceHeaderCodes(current,
-        current.codes.some((c) => c.id === row.id) ? current.codes.map((c) => c.id === row.id ? row : c) : [...current.codes, row]))} />
+      {!invalidated && <DiagnosisMapping {...{view, draft, disabled}} onChoose={(row) => setDraft((current) => replaceHeaderCodes(current,
+        current.codes.some((c) => c.id === row.id) ? current.codes.map((c) => c.id === row.id ? row : c) : [...current.codes, row]))} />}
       <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" disabled={disabled || !draftDiagnoses.length} checked={draft.diagnosisOrderConfirmed === true} onChange={(event) => setDraft({...draft, diagnosisOrderConfirmed: event.target.checked})} />
         <span>I confirm {draftDiagnoses[0]?.code || "the first diagnosis"} as my proposed primary and the displayed diagnosis order. Saving sends this proposal for coder review. Code, order, or evidence edits clear this confirmation.</span>
       </label>
@@ -272,7 +280,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
         <button type="button" className={button} disabled={disabled} onClick={() => setDraft(headerDraft({...view, revision: null}))}>Reset editor to generated values</button>
       </div>
     </form>}
-    {view?.revision && <details className="mt-5 border-t border-slate-200 pt-3 text-xs"><summary className="cursor-pointer font-medium">Revision history ({view.revisionNumber})</summary>
+    {view?.revision && !invalidated && <details className="mt-5 border-t border-slate-200 pt-3 text-xs"><summary className="cursor-pointer font-medium">Revision history ({view.revisionNumber})</summary>
       <ol className="mt-3 space-y-3">{[...view.revision.history].reverse().map((revision) => <li key={revision.id} className="rounded-lg bg-slate-50 p-3">
         <p className="font-medium">Revision {revision.number} · {revision.actor.name} ({revision.actor.role}) · {new Date(revision.createdAt).toLocaleString()}</p>
         <p className="mt-1">Reason: {revision.reason}</p>

@@ -40,9 +40,10 @@ export function readWorkspaceResult(result, encounter, idField = "encounterId") 
 }
 
 /** Read source first so a denied policy never starts a new coder-model request. */
-export async function loadCoderWorkspace(encounterId, listed, request) {
+export async function loadCoderWorkspace(encounterId, listed, request, onVerifiedEncounter = () => {}) {
   const detail = await request("/api/encounters/detail", { encounterId });
   const encounter = await readWorkspaceEncounter(detail, encounterId, listed);
+  onVerifiedEncounter(encounter);
   if (!workspaceInferenceAllowed(encounter)) return { encounter, review: null };
   const review = await request("/api/encounters/coder-view", { encounterId });
   return { encounter, review: readWorkspaceResult(review, encounter) };
