@@ -16,7 +16,8 @@ import { loadCoderWorkspace, workspaceInferenceAllowed } from "./workspaceSource
 import {mappingAddition} from "./diagnosisMapping.js";
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
 import { primaryBadge } from "./diagnosisSequencing.js";
-import { diagnosisOrderDecisionId, headerDecisionIds, headerProposals, headerReviewRequest,
+import { armHeaderRequestDeadline, beginHeaderRequest, cancelHeaderRequest, finishHeaderRequest,
+  ownsHeaderRequest, diagnosisOrderDecisionId, headerDecisionIds, headerProposals, headerReviewRequest,
   missingHeaderBaseline, proposedDiagnosisOrder, readBillingHeader } from "./billingHeader.js";
 import {
   completenessLabel, sourceLabel,
@@ -250,7 +251,7 @@ export default function CoderReview({
   const headerIdentity = useRef(null);
   const loadRequest = useRef(0);
   const saveRequest = useRef(0);
-  const saveAbort = useRef(null);
+  const pendingSave = useRef(null);
   const savingRef = useRef(false);
   const reviewId = useRef(null);
   const pendingPayload = useRef(null);
@@ -262,7 +263,7 @@ export default function CoderReview({
   useEffect(() => {
     const requestId = ++loadRequest.current;
     ++saveRequest.current;
-    saveAbort.current?.abort();
+    cancelHeaderRequest(pendingSave);
     const controller = new AbortController();
     setEngine(null); setDecisions({}); setAdditions([]); setSeconds(0);
     setReceipt(null); setLoadError(null); setSaveError(null); setSaveErrorStatus(null);
@@ -275,7 +276,7 @@ export default function CoderReview({
     const cancelRequests = () => {
       if (loadRequest.current === requestId) ++loadRequest.current;
       controller.abort();
-      saveAbort.current?.abort();
+      cancelHeaderRequest(pendingSave);
       ++saveRequest.current;
       if (activeLoadEncounter.current === encounterId) {
         onStatusChange(encounterId, { processingStatus: "Coder review canceled" });
@@ -442,18 +443,28 @@ export default function CoderReview({
       onNavigationLockChange(true);
     }
     const payload = pendingPayload.current;
+    const composed = pendingHeaderRequest.current;
+    const path = composed ? "/api/encounters/header/signoff" : "/api/feedback";
+    const request = beginHeaderRequest(pendingSave, {path, body: composed || payload});
+    if (!request) return;
     const requestId = ++saveRequest.current;
-    const controller = new AbortController();
-    saveAbort.current?.abort();
-    saveAbort.current = controller;
+    const {controller} = request;
     savingRef.current = true;
     setSaving(true); setSaveError(null); setSaveErrorStatus(null);
     onStatusChange(encounterId, { processingStatus: "Saving coder review" });
+    // Retire the request before aborting, even if the transport/body never settles.
+    // The frozen payload and navigation lock remain until an exact retry confirms it.
+    armHeaderRequestDeadline(pendingSave, request, () => {
+      savingRef.current = false;
+      setSaving(false);
+      setSaveError("The coder review request timed out. Retry the exact saved review to confirm its outcome.");
+      setSaveErrorStatus(null);
+      onStatusChange(encounterId, { processingStatus: "Save confirmation unavailable" });
+    });
     try {
-      const composed = pendingHeaderRequest.current;
-      const response = await api(composed ? "/api/encounters/header/signoff" : "/api/feedback",
+      const response = await api(path,
         { method: "POST", body: composed || payload, signal: controller.signal });
-      if (requestId !== saveRequest.current || encounterId !== payload.encounter_id) return;
+      if (!ownsHeaderRequest(pendingSave, request) || requestId !== saveRequest.current || encounterId !== payload.encounter_id) return;
       if (response.ok !== true || response.reviewId !== payload.review_id || typeof response.replayed !== "boolean") throw new Error("invalid-feedback-receipt");
       if (composed) {
         const verified = readBillingHeader(response.view, headerEncounter);
@@ -466,7 +477,7 @@ export default function CoderReview({
       onNavigationLockChange(false);
       onStatusChange(encounterId, { processingStatus: response.replayed ? "Exact replay confirmed" : "Review recorded", reviewState: coderQueueState({ engine, draftValid: true, saved: true }) });
     } catch (error) {
-      if (error?.name === "AbortError" || requestId !== saveRequest.current) return;
+      if (!ownsHeaderRequest(pendingSave, request) || error?.name === "AbortError" || requestId !== saveRequest.current) return;
       setSaveError(coderErrorMessage(error, verifyingReplay ? "verify" : "save"));
       setSaveErrorStatus(error?.status || null);
       if (pendingHeaderRequest.current && [403, 404, 409].includes(error?.status)) {
@@ -483,7 +494,7 @@ export default function CoderReview({
         onNavigationLockChange(false);
       }
     } finally {
-      if (requestId === saveRequest.current) {
+      if (finishHeaderRequest(pendingSave, request) && requestId === saveRequest.current) {
         savingRef.current = false;
         setSaving(false);
       }
