@@ -9,7 +9,7 @@ const source = "athena_staff_review_preview_synthetic";
 const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic reviewer", role: "provider"};
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, holdSave = false, operationalDenied = false} = {}) {
+async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, holdSave = false, operationalDenied = false, editHeader = true, headers = true} = {}) {
   const details = {}, views = {}, commands = [], persisted = new Set();
   const sourceKind = operationalDenied ? "provider_completed_note" : source;
   let coderRequests = 0;
@@ -23,7 +23,7 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
       ...(operationalDenied ? {ingestionSource: sourceKind,
         inferencePolicy: {allowed: false, reason: "operational_source_model_not_approved"}} : {}),
       encounterType: "office_established", placeOfService: "11", submittedEm: "99213",
-      signedNote: note, transcript: "", intake: "", headerSource: pin};
+      signedNote: note, transcript: "", intake: "", ...(headers ? {headerSource: pin} : {})};
     views[id] = {revision: null, revisionNumber: 0, header: {
       schemaVersion: "provider-billing-header.v1",
       headerId: `22222222-2222-4222-8222-22222222222${index + 2}`,
@@ -40,7 +40,7 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   }
   await page.route("**/api/session", (route) => route.fulfill({json: {
     views: ["provider", "coder", "chase"], defaultView: workspace,
-    capabilities: {billingHeader: true, providerHandoff: true}, persona: "Synthetic reviewer",
+    capabilities: {billingHeader: headers, providerHandoff: true}, persona: "Synthetic reviewer",
   }}));
   await page.route("**/api/encounters", (route) => route.fulfill({json: Object.values(details)}));
   await page.route("**/api/encounters/detail", (route) => route.fulfill({json: details[route.request().postDataJSON().encounterId]}));
@@ -82,6 +82,7 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   await page.goto("/");
   await page.getByRole("button", {name: ids[0], exact: true}).click();
   const header = page.getByRole("region", {name: "Billing header", exact: true});
+  if (!editHeader) return {header, views, navigation: page.getByRole("navigation", {name: "Workspace"})};
   if (holdRead) {
     await expect(header).toContainText("Loading header…");
     await expect.poll(() => typeof releaseRead).toBe("function");
@@ -92,6 +93,71 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   await header.getByLabel("Reason for edit (required)").fill("Compared the synthetic documentation.");
   return {header, commands, releaseSave: () => releaseSave(), coderRequests: () => coderRequests, navigation: page.getByRole("navigation", {name: "Workspace"}),
     prompt: page.getByRole("group", {name: "Confirm discarding header edits"})};
+}
+
+for (const headers of [true, false]) {
+  test(`coder ${headers ? "header signoff" : "feedback"} deadline preserves exact retry even when a response body ignores abort`, async ({page}) => {
+    await page.clock.install();
+    const path = headers ? "/api/encounters/header/signoff" : "/api/feedback";
+    // Hold the first parsed body indefinitely, including after AbortSignal fires.
+    // This exercises request ownership independently of fetch abort behavior.
+    await page.addInitScript(({path}) => {
+      const original = window.fetch;
+      let first = true;
+      window.fetch = async (...args) => {
+        const response = await original(...args);
+        if (new URL(args[0], location.href).pathname !== path || !first) return response;
+        first = false;
+        const body = await response.json();
+        return {ok: response.ok, status: response.status, json: () => new Promise((resolve) => {
+          window.releaseExpiredCoderBody = () => resolve(body);
+        })};
+      };
+    }, {path});
+    const {header, views, navigation} = await setup(page, {workspace: "coder", editHeader: false, headers});
+    const requests = [];
+    await page.route(`**${path}`, async (route) => {
+      const body = route.request().postDataJSON();
+      requests.push(route.request().postData());
+      const feedback = headers ? body.feedback : body;
+      const response = {ok: true, reviewId: feedback.review_id, replayed: requests.length > 1};
+      if (headers) {
+        const view = views[body.encounterId];
+        view.signoff ||= {id: actor.id, reviewId: feedback.review_id, headerId: body.headerId,
+          headerRevision: body.expectedRevision, expectedSource: body.expectedSource,
+          actor: {...actor, role: "coder"}, createdAt: "2026-10-07T12:02:00Z",
+          status: "recorded", recommendationDigest: "c".repeat(64),
+          humanProposalDecisions: body.humanProposalDecisions, baselineDecisions: body.baselineDecisions,
+          codeDecisions: feedback.decisions, reviewerNote: feedback.overall_note};
+        Object.assign(response, {view, headerSignoff: view.signoff});
+      }
+      await route.fulfill({json: response});
+    });
+    const accept = page.getByRole("group", {name: "Decision for 99213"}).getByRole("button", {name: "Accept", exact: true});
+    await accept.click();
+    if (headers) await page.getByLabel("I reviewed this header’s facts, code proposals, evidence, and documentation warnings.").check();
+    await page.getByRole("button", {name: headers ? "Record coder review and header" : "Save review and prepare preview", exact: true}).click();
+    await expect.poll(() => requests.length).toBe(1);
+    await expect.poll(() => page.evaluate(() => typeof window.releaseExpiredCoderBody)).toBe("function");
+    await page.clock.fastForward(HEADER_REQUEST_TIMEOUT_MS + 1);
+    await expect(page.getByRole("alert")).toContainText("The coder review request timed out.");
+    const retry = page.getByRole("button", {name: "Retry exact saved review", exact: true});
+    await expect(retry).toBeEnabled();
+    await expect(accept).toBeDisabled();
+    await expect(navigation.getByRole("button", {name: "Provider", exact: true})).toBeDisabled();
+    await expect(page.getByRole("button", {name: ids[1], exact: true})).toBeDisabled();
+    if (headers) await expect(header.getByRole("button", {name: "Edit header", exact: true})).toBeDisabled();
+    await retry.click();
+    await expect(page.getByText("Review recorded · exact replay confirmed", {exact: true})).toBeVisible();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toBe(requests[0]);
+    await page.evaluate(() => window.releaseExpiredCoderBody());
+    await page.clock.runFor(HEADER_REQUEST_TIMEOUT_MS + 1);
+    await expect(page.getByText("Review recorded · exact replay confirmed", {exact: true})).toBeVisible();
+    await expect(page.getByText("Review recorded · first write confirmed", {exact: true})).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(navigation.getByRole("button", {name: "Provider", exact: true})).toBeEnabled();
+  });
 }
 
 for (const workspace of ["provider", "coder"]) {
