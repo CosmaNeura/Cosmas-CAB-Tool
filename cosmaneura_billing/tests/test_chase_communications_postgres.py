@@ -48,6 +48,10 @@ def schema():
                 db.execute((root / "005_accepted_delivery_attempt.up.sql").read_text(), prepare=False)
             if db.execute("SELECT to_regclass(%s)", ("public." + table,)).fetchone()[0] is None:
                 db.execute((root / (name + ".up.sql")).read_text(), prepare=False)
+        if not db.execute("""SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='chase_communication_provider_events'
+                  AND column_name='error_code'""").fetchone():
+            db.execute((root / "027_communications_delivery_errors.up.sql").read_text(), prepare=False)
 
 
 @pytest.fixture

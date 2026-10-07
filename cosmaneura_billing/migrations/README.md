@@ -408,3 +408,14 @@ The separately composed `cosmaneura_billing.core_bridge:app` remains disabled
 unless `COSMANEURA_CORE_BRIDGE_POLICY_JSON` and the source/runtime mappings are
 configured. Install the `core_bridge` extra; the shared image includes it but
 keeps its normal API entrypoint. Down preserves all identity and audit history.
+
+`027_communications_delivery_errors` adds a nullable, numeric error code to
+immutable provider callback evidence. Receipt codes already exist. The staff
+projection exposes only bounded codes relevant to the effective delivery status;
+it never returns raw vendor diagnostics. Apply this expand rung before updating
+the communications API/callback reader; their readiness checks require the
+column. Earlier application versions tolerate the extra column. Existing callback
+hashes and replay identities stay unchanged, and old events are not backfilled.
+Rollback retains the column and all history; the down file deliberately refuses
+to delete delivery evidence. No send, consent, retry or reconciliation authority
+is added.

@@ -43,6 +43,22 @@ def voice(status="in-progress"):
             "From": FROM, "To": TO, "Direction": "outbound-api", "SequenceNumber": "2"}
 
 
+@pytest.mark.parametrize("code", [None, "", "0", "30034", "999999"])
+def test_callback_error_code_is_bounded_and_vendor_message_is_discarded(code):
+    values = {**sms("undelivered"), "ErrorMessage": "PRIVATE-CANARY", "MoreInfo": "https://private.invalid/PRIVATE-CANARY"}
+    if code is not None:
+        values["ErrorCode"] = code
+    event = TwilioAdapter(CONFIG).parse_webhook("sms_status", *signed("sms_status", values))
+    assert event.error_code == (code or None)
+    assert "PRIVATE-CANARY" not in json.dumps(asdict(event))
+
+
+@pytest.mark.parametrize("code", ["1234567", "30034\n", "true", "1.0", "private_url", "https://private.invalid"])
+def test_callback_non_code_diagnostics_are_rejected(code):
+    with pytest.raises(TwilioError, match="invalid_error_code"):
+        TwilioAdapter(CONFIG).parse_webhook("sms_status", *signed("sms_status", {**sms("failed"), "ErrorCode": code}))
+
+
 def test_official_twilio_signature_vector_is_exact_including_query():
     params = {"CallSid": "CA1234567890ABCDE", "Caller": "+14158675310", "Digits": "1234",
               "From": "+14158675310", "To": "+18005551212"}
