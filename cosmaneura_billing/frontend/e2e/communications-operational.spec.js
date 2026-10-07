@@ -519,3 +519,38 @@ test("communications stay hidden unless the server advertises a supported capabi
   }
   expect(unexpected).toEqual([]);
 });
+
+
+test("assigned text replies show reported attachments without loading their contents", async ({ page }) => {
+  const view = payload();
+  view.enabledChannels = ["sms"];
+  const replyText = "Synthetic patient: I sent images of the card.";
+  view.events = [
+    { eventId: "synthetic-text-and-media", kind: "sms_inbound", channel: "sms", direction: "inbound",
+      text: replyText, status: "received", disposition: "reply_received", occurredAt: at, needsStaffReview: true, mediaCount: 2 },
+    { eventId: "synthetic-media-only", kind: "sms_inbound", channel: "sms", direction: "inbound",
+      text: "", status: "received", disposition: "reply_received", occurredAt: at, needsStaffReview: true, mediaCount: 1 },
+  ];
+  const mutations = [];
+  await page.route("**/api/chase/communications**", async (route) => {
+    const path = new URL(route.request().url()).pathname.slice(base.length);
+    if (path === "/unassigned-texts/count") return route.fulfill({ status: 404, json: {} });
+    const body = route.request().postDataJSON();
+    if (path === "/review-events") return route.fulfill({ json: {
+      schemaVersion: "communications-review.v1", chaseId: body.chaseId,
+      totalPending: 0, heldPending: 0, truncated: false, items: [],
+    } });
+    if (path) mutations.push(path);
+    view.chaseId = body.chaseId;
+    return route.fulfill({ json: view });
+  });
+  const panel = await open(page);
+  const thread = panel.getByRole("list", { name: "SMS thread", exact: true });
+  await expect(thread).toContainText(replyText);
+  await expect(thread.getByLabel("Reported attachments", { exact: true })).toHaveCount(2);
+  await expect(thread.getByLabel("Reported attachments", { exact: true }).nth(0)).toHaveText("2 attachments reported; attachment content is not loaded.");
+  await expect(thread.getByLabel("Reported attachments", { exact: true }).nth(1)).toHaveText("1 attachment reported; attachment content is not loaded.");
+  await expect(thread.getByRole("link")).toHaveCount(0);
+  await expect(thread.locator("img")).toHaveCount(0);
+  expect(mutations).toEqual([]);
+});
