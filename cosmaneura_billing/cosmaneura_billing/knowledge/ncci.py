@@ -24,6 +24,9 @@ from __future__ import annotations
 
 import csv
 import gzip
+import hashlib
+import json
+import zlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,6 +95,33 @@ def _col(header: list[str], *needles: str) -> int | None:
 
 
 _BUNDLED_DIR = Path(__file__).resolve().parent.parent / "data" / "ncci"
+_COMPILED_NAME = "catalog_practitioner_2026q3.v1.json.gz"
+_COMPILED_SHA256 = "5e2ebb3880e4d54554f6287b23291d264eb5a2bbfb9c5a570df4276d40a8dc49"
+_COMPILED_SCHEMA = "cosmaneura.ncci-practitioner.v1"
+_NORMALIZATION_VERSION = "remove-dot-strip-upper.v1"
+_COMPILED_BUILD = {
+    "generatorVersion": "cosmaneura.ncci-compiler.v1",
+    "generatorSha256": "907dae686f8c04d0ec887caabac4f172d078e2d7ac6387bf87e3657063ce1cc8",
+    "loaderSha256": "f02919eef2cf99b61b55aed3374530dd1cf486da91b6fa0a55357f8f8294ae89",
+}
+_COMPILED_SOURCES = {
+    "ptp_practitioner_2026q3_v322.tsv.gz": "6073decceb4fbe0ea0dde36e5306c738faa7f34d3f9be5c1672fc3f38c9a8dc0",
+    "mue_practitioner_2026q3.tsv.gz": "61fafdf8ae348d9a32cb5c13eaf556119e6840772e536b6696c28c4f7271175a",
+}
+_COMPILED_COUNTS = {
+    "ptpLoadedRows": 1728585, "ptpPairs": 1728585,
+    "mueLoadedRows": 15162, "mueCodes": 15162,
+}
+_COMPRESSED_LIMIT = 16 * 1024 * 1024
+_JSON_LIMIT = 64 * 1024 * 1024
+
+
+def _sha_file(path: Path) -> str:
+    result = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
 
 
 class NCCIEdits:
@@ -134,7 +164,68 @@ class NCCIEdits:
         ptp, mue = find("ptp"), find("mue")
         if ptp is None and mue is None:
             return None
+        if ptp is not None and mue is not None:
+            compiled = cls._from_compiled(d, ptp, mue)
+            if compiled is not None:
+                return compiled
         return cls.from_files(ptp_path=ptp, mue_path=mue)
+
+    @classmethod
+    def _from_compiled(cls, d: Path, ptp: Path, mue: Path) -> "NCCIEdits | None":
+        """Use only the hash-reviewed bundled derivative; custom files still parse.
+
+        The pinned digest authenticates every key/value, including normalized
+        strings, duplicate last-wins and source row counts. JSON's native decoder
+        reuses repeated object keys within this instance; no global string pool.
+        Missing, altered or malformed cache/source falls back to the text loader.
+        """
+        cache = d / _COMPILED_NAME
+        if {ptp.name, mue.name} != set(_COMPILED_SOURCES) or not cache.is_file():
+            return None
+        try:
+            if not 0 < cache.stat().st_size <= _COMPRESSED_LIMIT or _sha_file(cache) != _COMPILED_SHA256:
+                return None
+            if any(_sha_file(p) != _COMPILED_SOURCES[p.name] for p in (ptp, mue)):
+                return None
+            with gzip.open(cache, "rb") as stream:
+                raw = stream.read(_JSON_LIMIT + 1)
+            if not 0 < len(raw) <= _JSON_LIMIT:
+                return None
+            data = json.loads(raw)
+            del raw
+            if type(data) is not dict or set(data) != {"schemaVersion", "normalizationVersion", "build", "sources", "counts", "codes", "ptp", "mue"}:
+                return None
+            if (data["schemaVersion"] != _COMPILED_SCHEMA or
+                    data["normalizationVersion"] != _NORMALIZATION_VERSION or
+                    data["build"] != _COMPILED_BUILD or data["sources"] != _COMPILED_SOURCES):
+                return None
+            counts, pairs, units = data["counts"], data["ptp"], data["mue"]
+            if type(counts) is not dict or set(counts) != {"ptpLoadedRows", "ptpPairs", "mueLoadedRows", "mueCodes", "codeStrings"}:
+                return None
+            if (any(type(v) is not int for v in counts.values()) or
+                    {k: v for k, v in counts.items() if k != "codeStrings"} != _COMPILED_COUNTS):
+                return None
+            if type(pairs) is not dict or type(units) is not dict or len(units) != counts["mueCodes"]:
+                return None
+            total = 0
+            for values in pairs.values():
+                if type(values) is not dict or not values:
+                    return None
+                total += len(values)
+            # Per-pair keys/modifiers are verified at generation and covered by
+            # the exact cache digest; repeating that 1.7M-row loop defeats loading.
+            codes = data["codes"]
+            if total != counts["ptpPairs"] or type(codes) is not list or not 0 < len(codes) <= 100000:
+                return None
+            if len(codes) != counts["codeStrings"] or any(type(code) is not str for code in codes) or len(set(codes)) != len(codes):
+                return None
+            self = cls()
+            self._ptp, self._mue, self._pair_count = pairs, units, total
+            # Subsequent custom loads retain their existing per-instance pooling.
+            self._codes = {code: code for code in codes}
+            return self
+        except (OSError, ValueError, TypeError, EOFError, RecursionError, zlib.error):
+            return None
 
     @classmethod
     def from_files(cls, ptp_path: str | Path | None = None,

@@ -76,6 +76,7 @@ include = ["cosmaneura_billing*"]
     "data/mcd/*.csv.gz",
     "data/mcd/*.md",
     "data/ncci/*.tsv.gz",
+    "data/ncci/*.json.gz",
     "data/ncci/*.md",
     "benchmarks/data/*.csv",
 ]
