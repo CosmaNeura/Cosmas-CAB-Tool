@@ -32,6 +32,75 @@ def test_dark_settings_never_activate_legacy_worker_or_expose_vendor_token():
     assert legacy.provider == "record_only" and legacy.scheduler_enabled is False
 
 
+def activated_sms_environment(**changes):
+    return environment(**{
+        "COSMANEURA_ENV": "staging",
+        "COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS": "sms",
+        "COSMANEURA_COMMUNICATIONS_TEST_MODE": "true",
+        "COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS": "+12025550188",
+        "COSMANEURA_CHASE_SCHEDULER_ENABLED": "true",
+        "COSMANEURA_PATIENT_MESSAGING_ENABLED": "true",
+        "COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED": "true",
+        "COSMANEURA_CHASE_GATE_HMAC_KEY": "synthetic-gate-key-that-is-32-bytes",
+        **changes,
+    })
+
+
+@pytest.mark.parametrize("deployed_environment", ["staging", "production"])
+def test_activated_sms_composes_without_an_unused_upload_route(
+    deployed_environment, monkeypatch,
+):
+    import psycopg
+    from cosmaneura_billing.chase.communications.runtime import dispatcher_from_settings
+
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: pytest.fail("constructor database I/O"))
+    env = activated_sms_environment(COSMANEURA_ENV=deployed_environment)
+    assert "COSMANEURA_UPLOAD_URL" not in env
+    config = Settings.from_env(env)
+    staff = dispatcher_from_settings(config)
+    outbound = worker.configured_dispatcher(environ=env, outbound=True)
+    assert staff.adapter is None
+    assert outbound.adapter.transport is not None
+    assert staff.policy == outbound.policy
+    assert staff.policy.scheduler_enabled and staff.policy.patient_messaging_enabled
+    assert staff.policy.operationally_activated and staff.policy.test_mode
+    assert staff.policy.enabled_channels == ("sms",)
+    assert staff.policy.test_recipients == ("+12025550188",)
+    assert all(config.upload_url not in template["text"] for template in staff.policy.templates)
+
+    legacy = DeliveryConfiguration.from_settings(config)
+    assert legacy.provider == "record_only"
+    assert not legacy.scheduler_enabled and not legacy.operational_enabled
+
+
+@pytest.mark.parametrize("changes", [
+    {"COSMANEURA_ENV": "test"},
+    {"COSMANEURA_AUTH_MODE": "disabled"},
+    {"COSMANEURA_STATE_STORE": "local"},
+    {"COSMANEURA_CHASE_STORE": "memory"},
+    {"COSMANEURA_COMMUNICATIONS_ENABLED": "false"},
+    {"COSMANEURA_CHASE_TRANSPORT": "record_only"},
+    {"COSMANEURA_CHASE_SCHEDULER_ENABLED": "false"},
+    {"COSMANEURA_PATIENT_MESSAGING_ENABLED": "false"},
+    {"COSMANEURA_PATIENT_MESSAGING_OPERATIONALLY_ACTIVATED": "false"},
+    {"COSMANEURA_CHASE_GATE_HMAC_KEY": "too-short"},
+    {"COSMANEURA_TWILIO_FROM_NUMBER": ""},
+])
+def test_sms_upload_route_exception_preserves_activation_guards(changes):
+    with pytest.raises(SettingsError):
+        Settings.from_env(activated_sms_environment(**changes))
+
+
+@pytest.mark.parametrize("channels", ["automated_voice", "sms,automated_voice"])
+def test_voice_enabled_topologies_keep_the_upload_route_requirement(channels):
+    with pytest.raises(SettingsError, match="secure upload route"):
+        Settings.from_env(activated_sms_environment(
+            COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS=channels,
+            COSMANEURA_COMMUNICATIONS_TEST_MODE="false",
+            COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS="",
+        ))
+
+
 @pytest.mark.parametrize("changes", [
     {"COSMANEURA_TWILIO_FROM_NUMBER": ""}, {"COSMANEURA_TWILIO_ACCOUNT_SID": "bad"},
     {"COSMANEURA_TWILIO_CALLBACK_BASE_URL": "http://insecure.invalid"},
