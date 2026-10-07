@@ -1539,13 +1539,19 @@ def chase_worklist(
     if communications_available:
         from .chase.communications.runtime import dispatcher_from_settings
         from .chase.communications.event_review import CommunicationsEventReview
+        from .chase.communications.activity import CommunicationsActivity
         from .chase.communications.store import CommunicationsError
         try:
-            counts = CommunicationsEventReview(dispatcher_from_settings(config)).counts([r["chaseId"] for r in projected])
+            dispatcher = dispatcher_from_settings(config)
+            case_ids = [r["chaseId"] for r in projected]
+            with dispatcher.store._db() as db:
+                counts = CommunicationsEventReview(dispatcher).counts(case_ids, db=db)
+                attempts = CommunicationsActivity(dispatcher.store).counts(case_ids, db=db)
         except CommunicationsError as exc:
             raise HTTPException(exc.status, exc.code) from None
         for row in projected:
             row["communicationReview"] = counts[row["chaseId"]]
+            row["touches"] += attempts[row["chaseId"]]
     return {
         "counts": ctx["store"].counts(),
         "rows": projected,
@@ -1569,6 +1575,16 @@ def chase_task(request: Request, req: ChaseTargetRequest) -> dict[str, Any]:
         item, _request_settings(request), principal=principal,
     )
     if _request_settings(request).communications_enabled and principal.has_any_role(("Admin", "BillingStaff")):
+        from .chase.activity import combine_activity
+        from .chase.communications.activity import CommunicationsActivity
+        from .chase.communications.runtime import dispatcher_from_settings
+        from .chase.communications.store import CommunicationsError
+        try:
+            dispatch = CommunicationsActivity(dispatcher_from_settings(_request_settings(request)).store).read(req.chaseId)
+        except CommunicationsError as exc:
+            raise HTTPException(exc.status, exc.code) from None
+        result["activity"] = combine_activity(result["activity"], dispatch)
+        result["touches"] += dispatch["totalAttempts"]
         result["communications"] = {"available": True, "mode": "durable"}
     if _request_settings(request).athena_review_mode != "disabled" and principal.has_any_role(("Admin", "BillingStaff")):
         result["athenaReview"] = {"available": True, "mode": _request_settings(request).athena_review_mode,

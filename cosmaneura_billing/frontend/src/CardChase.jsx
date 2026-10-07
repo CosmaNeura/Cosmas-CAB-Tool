@@ -70,13 +70,13 @@ function CaseActivity({ value }) {
           </dl>
           {activity.lastAttempt ? (
             <div className="mt-3 border-t border-slate-100 pt-3">
-              <p className="text-xs font-medium text-slate-500">Last recorded contact</p>
+              <p className="text-xs font-medium text-slate-500">Last contact attempt</p>
               <p className="mt-1 text-sm text-slate-800"><time dateTime={activity.lastAttempt.at}>{chaseAttemptTime(activity.lastAttempt.at)}</time></p>
               <p className="mt-1 text-xs text-slate-600">{CHASE_CHANNELS[activity.lastAttempt.channel]} · {chaseOutcomeLabel(activity.lastAttempt.outcome)}</p>
             </div>
           ) : <p className="mt-3 text-sm text-slate-600">No recorded contact attempts.</p>}
           <p className="mt-3 text-xs leading-relaxed text-slate-500">
-            Counts cover recorded contacts; queued messages and failed delivery events are not included. Sent or accepted does not confirm delivery or that the patient read it.
+            Counts include recorded contacts and each platform dispatch attempt once, including failed or uncertain attempts. Unsent drafts are excluded. Sent or accepted does not confirm delivery or that the patient read it.
           </p>
           {activity.history.length > 0 && (
             <details className="mt-3 border-t border-slate-200 pt-3">
