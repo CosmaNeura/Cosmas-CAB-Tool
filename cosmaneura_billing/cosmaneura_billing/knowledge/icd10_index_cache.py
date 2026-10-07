@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import io
 import json
+from functools import lru_cache
 from pathlib import Path
 import re
 import zlib
@@ -126,6 +127,14 @@ def decode_index(blob: bytes, entries: tuple[tuple[str, str], ...]) -> dict:
     return index
 
 
+@lru_cache(maxsize=4)
+def _cached_decode(blob: bytes, entries: tuple[tuple[str, str], ...], decoder_binding: tuple) -> dict:
+    # Like _description_index, this private public-data index is shared by
+    # readers, never mutated. Binding includes decoder metadata and bounds so
+    # a changed validation contract cannot reuse an earlier acceptance.
+    return decode_index(blob, entries)
+
+
 def load_index(entries: tuple[tuple[str, str], ...], current_path: Path) -> dict | None:
     """Use only the exact bundled source. Never write or repair a runtime cache."""
     try:
@@ -140,7 +149,10 @@ def load_index(entries: tuple[tuple[str, str], ...], current_path: Path) -> dict
         blob = _read(CACHE, MAX_COMPRESSED)
         if hashlib.sha256(blob).hexdigest() != CACHE_SHA256:
             return None
-        return decode_index(blob, entries)
+        binding = (FORMAT, GENERATOR_VERSION, GENERATOR_SHA256, CATALOG_SHA256,
+                   TERMS_SHA256, TERMS_VERSION, MAX_COMPRESSED, MAX_DECOMPRESSED,
+                   MAX_ENTRIES, MAX_TERMS, MAX_TOKEN)
+        return _cached_decode(blob, entries, binding)
     except (OSError, ValueError, TypeError, KeyError, IndexError, OverflowError,
             RecursionError, EOFError, zlib.error):
         return None

@@ -55,6 +55,38 @@ def test_complete_order_and_ambiguity_preserved(small_cache):
     assert actual[diagnosis_terms.meaning_key("Pain right hand")] == ("A001", "A003")
 
 
+def test_warm_reuse_still_validates_current_inputs(small_cache, monkeypatch):
+    catalog, path, _, _, expected = small_cache
+    cache._cached_decode.cache_clear()
+    decode = cache.decode_index
+    calls = []
+    monkeypatch.setattr(cache, "decode_index", lambda *args: (calls.append(True), decode(*args))[1])
+    first = cache.load_index(ENTRIES, catalog)
+    assert first == expected
+    assert cache.load_index(tuple(list(ENTRIES)), catalog) is first
+    assert len(calls) == 1
+    original_catalog, original_cache = catalog.read_bytes(), path.read_bytes()
+    catalog.write_bytes(b"changed source after warm load")
+    assert cache.load_index(ENTRIES, catalog) is None
+    catalog.write_bytes(original_catalog)
+    path.write_bytes(b"changed payload after warm load")
+    assert cache.load_index(ENTRIES, catalog) is None
+    path.write_bytes(original_cache)
+    with monkeypatch.context() as patch:
+        patch.setattr(diagnosis_terms, "VERSION", "changed after warm load")
+        assert cache.load_index(ENTRIES, catalog) is None
+    with monkeypatch.context() as patch:
+        patch.setattr(diagnosis_terms, "__file__", str(catalog))
+        assert cache.load_index(ENTRIES, catalog) is None
+    assert len(calls) == 1  # Changed source/payload is rejected before memo access.
+    with monkeypatch.context() as patch:
+        patch.setattr(cache, "FORMAT", "changed decoder contract")
+        assert cache.load_index(ENTRIES, catalog) is None
+    assert len(calls) == 2  # Metadata changes cannot reuse prior decoder acceptance.
+    assert cache.load_index(ENTRIES, catalog) is first
+    assert cache._cached_decode.cache_info().maxsize == 4
+
+
 @pytest.mark.parametrize("mutation", [
     lambda d: d.update(extra=True),
     lambda d: d.pop("format"),
