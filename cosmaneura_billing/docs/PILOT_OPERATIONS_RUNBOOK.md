@@ -6,9 +6,12 @@ The detailed infrastructure rationale remains in [`../../infra/README.md`](../..
 
 For staff training, start with the [MCD quickstart](MCD_TRAINING_QUICKSTART.md).
 Use the [current deployment guide](../../infra/BETA_DEPLOYMENT.md) for the full
-001–027 migration sequence, editable header, staff Athena review, SMS services
-and separate Core receiver. The background-sync procedures below describe that
-older job; they do not replace the current staff review workflow.
+001–028 migration sequence, editable header, staff Athena review, SMS services
+and separate Core receiver. Migration 028 adds durable generation state;
+asynchronous generation remains default off and needs the matching restricted
+runtime function grant when enabled. Apply the ordered current migration chain
+even when that capability is dormant. The background-sync procedures below
+describe that older job; they do not replace the current staff review workflow.
 
 ## Owners and escalation
 
@@ -112,16 +115,50 @@ means the saved header may still be read and edited; it does not authorize a new
 model request or a new coder signoff. Do not copy a note into a different case to
 work around unavailable source permission.
 
-Header loads and saves have a 30-second client deadline; generation has a
-five-minute deadline. A timed-out load offers **Reload header** and does not block
-changing visits. A timed-out save or generation has an unknown outcome: retain
-that tab and use **Retry same request**. The client preserves the same command
-and operation ID. This stops waiting in the browser; it does not cancel server
-work. Starting a replacement generation can repeat model work. Navigation stays
-blocked until the mutation is confirmed or a definitive response offers a
-refresh. Follow **Retry exact saved review** for an interrupted coder review.
-For a confirmed source/revision conflict, use the offered refresh/reload and
+Header loads, saves and status reads have a 30-second client deadline. A timed-out
+load offers **Reload header** and does not block changing visits. A timed-out save
+or unconfirmed initial Generate submission has an unknown mutation outcome:
+retain that tab and use **Retry same request** with the same command and operation
+ID. Navigation stays blocked until that mutation is confirmed or a definitive
+response offers a refresh. Follow **Retry exact saved review** for an interrupted
+coder review. For a source/revision conflict, use the offered refresh/reload and
 review the current source again. Do not promise that an unknown request failed.
+
+When async generation is enabled, the server durably claims one pipeline for
+the admitted encounter/source version before starting its supervised child.
+**Generating billing header…** and **Resume status** observe that saved operation;
+status reads and exact Generate replay do not start another inference. A new
+operation ID for an already claimed source also cannot restart it. The dashboard
+observes for five minutes at a time; **Resume status** starts another observation
+window, not a new server deadline. The server deadline is at most six minutes
+from the claim and can be shorter because of the original authorization expiry.
+A status timeout, failed result or unknown result can be left once no header
+request or unsaved edit is pending. Preserve the approved operation reference for
+investigation; do not copy the note to another case to evade the source barrier.
+Failed/unknown is not a guarantee that no model attempt occurred. Previously
+saved headers remain readable/editable where current permissions allow.
+
+Async generation and Core continuation are separate, default-off capabilities.
+Clients without async enabled retain the legacy synchronous Generate request and
+five-minute browser wait; its uncertain submission still requires exact retry.
+Do not apply that legacy retry behavior to an acknowledged async status poll.
+
+In separately configured Cosmas MD, **Keep this generation authorized while I
+stay signed in, for up to six minutes.** explicitly opts into renewal for the
+original Generate intent. Renewal requires the same verified provider/session,
+practice, operation and current source admission before prior authority lapses.
+It cannot extend the original six-minute maximum, revive a lapsed/terminal intent,
+or exceed the original CAB workload token expiry. **Stop renewing generation
+authorization**, leaving the page or losing sign-in stops renewal; work already
+attempted may continue only within its remaining authority. **Resume status**
+remains read-only and cannot renew. This Core option does not appear in standalone
+CAB. Release the receiver before enabling the matching Core capability.
+
+Local synthetic personas, cached extraction previews and authored Linux model
+responses prove their recorded local scenarios only. Hosted training still needs
+its reviewed image/configuration, exact database migration/grants, real assigned
+staff identities and source/model policy. They do not establish live vendor access
+or authorize an operational activation.
 
 In CardChase, **Activity** totals include recorded contacts and each platform
 dispatch start once, including failed or unknown attempts. Draft preparation,
