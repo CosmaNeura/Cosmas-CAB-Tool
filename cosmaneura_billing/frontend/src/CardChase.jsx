@@ -549,7 +549,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
   const submitAction = async (
     payload, successMessage, actionId = null, targetChaseId = task?.chaseId,
   ) => {
-    if (!manageChase || !targetChaseId || reviewLocked || inboxLocked || athenaLocked) return;
+    if (!manageChase || !targetChaseId || seeding || reviewLocked || inboxLocked || athenaLocked) return;
     const chaseId = targetChaseId;
     setActionBusy(true);
     setActionError(null);
@@ -689,7 +689,7 @@ export default function CardChase({ live, demoSeed = null, manageChase = false, 
           loading={taskLoading}
           error={taskError}
           manageChase={manageChase}
-          actionBusy={actionBusy || inboxLocked}
+          actionBusy={actionBusy || inboxLocked || seeding}
           communicationsReviewLocked={reviewLocked}
           actionError={actionError}
           actionNotice={actionNotice}

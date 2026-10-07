@@ -266,6 +266,48 @@ test("an uncertain prepare retries its same ID; stale case reads cannot replace 
   await expect(panel.getByText("+12025550100", { exact: true })).toHaveCount(0);
 });
 
+test("an in-flight demo reset blocks a new communications command", async ({ page }) => {
+  await page.route("**/api/session", (route) => route.fulfill({ json: {
+    views: ["chase"], defaultView: "chase", capabilities: { manageChase: true },
+    actions: { seedSyntheticChase: { seedDigest: "b".repeat(64), caseCount: 4 } },
+  } }));
+  const view = payload();
+  view.policy.approved = true;
+  view.bindings.sms = { bindingId: binding, consentGranted: true };
+  view.actions.sms = { allowed: true, reason: "" };
+  const commands = [];
+  await page.route("**/api/chase/communications**", (route) => {
+    const path = new URL(route.request().url()).pathname.slice(base.length);
+    if (path === "/unassigned-texts/count") return route.fulfill({ status: 404, json: {} });
+    const body = route.request().postDataJSON();
+    if (path === "/action") commands.push(body);
+    view.chaseId ||= body.chaseId;
+    return route.fulfill({ json: view });
+  });
+  let started, release;
+  const began = new Promise((resolve) => { started = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route("**/api/chase/demo-seed", async (route) => {
+    started(); await gate;
+    await route.fulfill({ json: { seedDigest: "b".repeat(64), installedCaseCount: 4,
+      openTaskCount: 4, replayed: true, outbound: { schedulerEnabled: false,
+        patientMessagingEnabled: false, operationallyActivated: false,
+        automaticContact: false, transport: "record_only" } } });
+  });
+  const panel = await open(page);
+  await panel.getByRole("button", { name: "Reminder", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Prepare SMS", exact: true })).toBeEnabled();
+  await page.getByText("Demo setup", { exact: true }).click();
+  await page.getByRole("button", { name: "Load synthetic demo tasks", exact: true }).click();
+  await began;
+  await expect(panel.getByRole("button", { name: "Prepare SMS", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("textbox", { name: "SMS draft", exact: true })).toBeDisabled();
+  release();
+  await expect(page.getByRole("status").filter({ hasText: "same 4-case synthetic pack" })).toBeVisible();
+  await expect(panel).toHaveCount(0);
+  expect(commands).toEqual([]);
+});
+
 test("a pending draft can be canceled; a started uncertain send cannot be recalled", async ({ page }) => {
   const view = payload();
   view.policy.approved = true;
