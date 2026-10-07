@@ -49,7 +49,7 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
     coderRequests += 1;
     const {encounterId} = route.request().postDataJSON();
     if (coderOutcome) await new Promise((resolve) => { releaseCoder = resolve; });
-    if (coderOutcome === "http503") return route.fulfill({status: 503, json: {detail: "Authored synthetic coding outage."}});
+    if (coderOutcome === "http503" || coderOutcome === "http403") return route.fulfill({status: coderOutcome === "http403" ? 403 : 503, json: {detail: "Authored synthetic coding outage."}});
     return route.fulfill({json: {encounterId, encounterVersion: 1, readOnly: true, dataClass: source,
       reviewContext: "synthetic-browser-context", submittedEm: "99213",
       em: coderOutcome === "degraded" ? null : {kind: "EM", code: "99213", why: "Authored fixture", evidence: "Synthetic",
@@ -330,5 +330,41 @@ test("coder can save a verified existing header through degraded and HTTP-failed
     await page.unroute("**/api/encounters/coder-view");
     await page.unroute(/\/api\/encounters\/header(?:\/save)?$/);
   }
+  expect(forbidden).toEqual([]);
+});
+
+test("late coder denial preserves the pending header save and its exact retry without restoring workspace actions", async ({page}) => {
+  await page.clock.install();
+  const forbidden = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (["/api/encounters/header/generate", "/api/encounters/header/signoff", "/api/feedback"].includes(path)) forbidden.push(path);
+  });
+  const {header, commands, navigation, releaseCoder, releaseSave} = await setup(page,
+    {workspace: "coder", coderOutcome: "http403", holdSave: true});
+  await header.getByRole("button", {name: "Save header edits", exact: true}).click();
+  await expect.poll(() => commands.length).toBe(1);
+  releaseCoder();
+  await expect(header).toContainText("This workspace is no longer current.");
+  await expect(header.getByLabel("Reviewer note (optional)")).toHaveValue("Keep my unsaved review.");
+  await expect(header.getByLabel("Reviewer note (optional)")).toBeDisabled();
+  await expect(header).not.toContainText("Original pipeline suggestions");
+  await expect(navigation.getByRole("button", {name: "Provider", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: ids[1], exact: true})).toBeDisabled();
+  await page.clock.fastForward(HEADER_REQUEST_TIMEOUT_MS + 1);
+  await header.getByRole("button", {name: "Retry same request", exact: true}).click();
+  await expect(header).toContainText("Header edits saved for review.");
+  expect(commands).toHaveLength(2);
+  expect(commands[1]).toEqual(commands[0]);
+  await expect(header).toContainText("This workspace is no longer current.");
+  await expect(header.getByRole("button", {name: "Edit header", exact: true})).toHaveCount(0);
+  await expect(header.getByRole("button", {name: "Reload header", exact: true})).toHaveCount(0);
+  await expect(header.getByRole("button", {name: "Generate billing header", exact: true})).toHaveCount(0);
+  await expect(navigation.getByRole("button", {name: "Provider", exact: true})).toBeEnabled();
+  releaseSave();
+  await page.clock.runFor(100);
+  await expect(header).toContainText("This workspace is no longer current.");
+  await expect(header.getByRole("button", {name: "Edit header", exact: true})).toHaveCount(0);
+  expect(commands).toHaveLength(2);
   expect(forbidden).toEqual([]);
 });

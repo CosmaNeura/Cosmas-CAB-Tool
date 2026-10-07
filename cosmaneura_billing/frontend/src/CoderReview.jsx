@@ -239,6 +239,7 @@ export default function CoderReview({
   const [showValidation, setShowValidation] = useState(false);
   const [frozen, setFrozen] = useState(false);
   const [headerEncounter, setHeaderEncounter] = useState(null);
+  const [headerWorkspaceInvalidated, setHeaderWorkspaceInvalidated] = useState(false);
   const [headerState, setHeaderState] = useState(null);
   const [headerChoices, setHeaderChoices] = useState({});
   const [baselineChoices, setBaselineChoices] = useState({});
@@ -268,7 +269,7 @@ export default function CoderReview({
     setEngine(null); setDecisions({}); setAdditions([]); setSeconds(0);
     setReceipt(null); setLoadError(null); setSaveError(null); setSaveErrorStatus(null);
     setSaving(false); setShowValidation(false); setFrozen(false);
-    setHeaderEncounter(null); setHeaderState(null); setHeaderChoices({}); setBaselineChoices({});
+    setHeaderEncounter(null); setHeaderWorkspaceInvalidated(false); setHeaderState(null); setHeaderChoices({}); setBaselineChoices({});
     setHeaderAcknowledged(false); setHeaderRefresh(0); headerIdentity.current = null;
     onNavigationLockChange(false);
     savingRef.current = false;
@@ -319,7 +320,9 @@ export default function CoderReview({
         activeLoadEncounter.current = null;
       } catch (error) {
         if (error?.name === "AbortError" || requestId !== loadRequest.current) return;
-        if (error?.message === "unverified-workspace-source" || [403, 404, 409].includes(error?.status)) setHeaderEncounter(null);
+        // Keep an already verified header's pending command and dirty inputs
+        // owned until its own response. This failure invalidates new actions.
+        if (error?.message === "unverified-workspace-source" || [403, 404, 409].includes(error?.status)) setHeaderWorkspaceInvalidated(true);
         setLoadError({ encounterId, message: coderErrorMessage(error, "load") });
         onStatusChange(encounterId, { processingStatus: "Coder load failed", reviewState: "Needs review" });
         activeLoadEncounter.current = null;
@@ -517,6 +520,7 @@ export default function CoderReview({
 
       {headerEnabled && headerEncounter.encounterId === encounterId && <BillingHeader asyncEnabled={headerAsync}
         encounter={headerEncounter} onStateChange={onHeaderState} disabled={frozen && !receipt || saving}
+        workspaceInvalidated={headerWorkspaceInvalidated}
         refreshKey={headerRefresh} generationAllowed={workspaceInferenceAllowed(headerEncounter)} />}
 
       {!encounterId ? (
