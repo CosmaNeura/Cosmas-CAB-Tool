@@ -33,6 +33,7 @@ from pathlib import Path
 
 from ..settings import Settings, SettingsError
 from .diagnosis_terms import concept_signature, meaning_key, supported_by_quote, uncertain
+from .icd10_index_cache import load_index
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _FULL_CSV = _DATA_DIR / "icd10cm_ccsr_full.csv.gz"
@@ -90,6 +91,7 @@ class ICD10CCSR:
         # current_csv="" to disable explicitly.
         self._current: dict[str, tuple[bool, str]] = {}
         cur = _FY_CURRENT_CSV if current_csv is None else current_csv
+        self._current_path = Path(cur) if cur else None
         if cur and Path(cur).exists():
             self._load_current(Path(cur))
         self._terminology_index: dict | None = None
@@ -187,9 +189,11 @@ class ICD10CCSR:
 
     def _ensure_index(self) -> None:
         if self._terminology_index is None:
-            self._terminology_index = _description_index(tuple(
+            entries = tuple(
                 (raw, desc) for raw, (billable, desc) in self._current.items() if billable
-            ))
+            )
+            cached = load_index(entries, self._current_path) if self._current_path else None
+            self._terminology_index = cached if cached is not None else _description_index(entries)
 
     def supports(self, code: str, quote: str) -> bool:
         """Support check for an existing candidate, including learned remaps."""
