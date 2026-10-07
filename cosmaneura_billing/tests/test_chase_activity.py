@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from cosmaneura_billing.chase.activity import build_activity
+from cosmaneura_billing.chase.activity import build_activity, combine_activity
 from cosmaneura_billing.chase.models import Attempt, Channel
 
 
@@ -137,3 +137,36 @@ def test_known_recorded_outcomes_are_not_promoted_to_delivery(outcome):
 @pytest.mark.parametrize("attempts", [None, "PRIVATE-CONTAINER-CANARY", [None], [{}]])
 def test_invalid_record_container_is_unavailable(attempts):
     assert build_activity(attempts) is None
+
+
+def test_combined_latest_fifty_preserve_full_totals_minutes_ties_and_sources():
+    legacy = build_activity([_attempt(at="2026-01-01T12:00:00Z")] * 55)
+    dispatch = build_activity([_attempt(channel=Channel.SMS, actor="system", minutes_spent=0,
+                                       at="2026-02-01T12:00:00Z", outcome="delivered")] * 53)
+    originals = deepcopy((legacy, dispatch))
+    result = combine_activity(legacy, dispatch)
+    assert result["totalAttempts"] == 108 and result["staffMinutes"] == 137.5
+    assert result["countsByChannel"] == {"phone": 55, "email": 0, "sms": 53, "portal": 0}
+    assert len(result["history"]) == 50 and result["truncated"]
+    assert all(row["channel"] == "sms" for row in result["history"])
+    result["history"][0]["outcome"] = "unknown"
+    assert (legacy, dispatch) == originals and result["lastAttempt"]["outcome"] == "delivered"
+    assert combine_activity(None, dispatch) is None
+
+
+def test_worklist_dispatch_counts_batch_without_loading_history_or_contacts():
+    from types import SimpleNamespace
+    from cosmaneura_billing.chase.communications.activity import CommunicationsActivity
+    class Database:
+        calls = []
+        def execute(self, query, params):
+            self.calls.append((query, params))
+            return SimpleNamespace(fetchall=lambda: [{"case_id": case, "total": 2} for case in params[1]])
+    db = Database()
+    projection = CommunicationsActivity(SimpleNamespace(practice_id="practice"))
+    ids = [f"case-{index}" for index in range(205)]
+    assert projection.counts(ids + ids[:1], db=db) == dict.fromkeys(ids, 2)
+    assert [len(params[1]) for _, params in db.calls] == [100, 100, 5]
+    assert all("provider_events" not in query and "text" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
+               for query, _ in db.calls)
+    assert projection.counts([], db=db) == {} and len(db.calls) == 3

@@ -14,6 +14,13 @@ const OUTCOMES = Object.freeze({
   bounced: "Bounced",
   recorded: "Recorded",
   unknown: "Outcome unavailable",
+  queued: "Queued by provider — delivery unconfirmed", scheduled: "Scheduled by provider",
+  sending: "Sending", read: "Read reported by provider", failed: "Failed", undelivered: "Not delivered",
+  rejected: "Rejected by provider", canceled: "Canceled by provider", initiated: "Call starting",
+  ringing: "Ringing", "in-progress": "Call answered", completed: "Call completed",
+  busy: "Busy", "no-answer": "No answer",
+  confirmed_delivered: "Delivery confirmed by staff", confirmed_not_sent: "Confirmed not sent by staff",
+  confirmed_attempted: "Attempt confirmed by staff — delivery unknown",
 });
 
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);

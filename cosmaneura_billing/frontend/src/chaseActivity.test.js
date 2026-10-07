@@ -85,3 +85,20 @@ test("formats valid offset instants and fractional minutes without trusting serv
   assert.equal(chaseMinutesLabel(2.25), "2.25");
   assert.ok(readChaseActivity({ ...payload([attempt({ minutes: 2.675 })]), staffMinutes: 2.67 }));
 });
+
+test("platform attempts preserve delivery, rejection, and investigation distinctions", () => {
+  for (const outcome of ["queued", "sending", "delivered", "undelivered", "rejected", "unknown", "failed",
+    "ringing", "in-progress", "completed", "busy", "no-answer", "canceled", "confirmed_delivered",
+    "confirmed_not_sent", "confirmed_attempted"]) {
+    const result = readChaseActivity(payload([attempt({channel: "sms", performer: "system", minutes: 0, outcome})]));
+    assert.equal(result.totalAttempts, 1);
+    assert.equal(result.lastAttempt.outcome, outcome);
+    assert.equal(result.staffMinutes, 0);
+  }
+  assert.match(chaseOutcomeLabel("queued"), /delivery unconfirmed/);
+  assert.equal(chaseOutcomeLabel("completed"), "Call completed");
+  assert.notEqual(chaseOutcomeLabel("completed"), chaseOutcomeLabel("delivered"));
+  assert.match(chaseOutcomeLabel("rejected"), /Rejected/);
+  assert.match(chaseOutcomeLabel("confirmed_not_sent"), /not sent/);
+  assert.notEqual(chaseOutcomeLabel("confirmed_delivered"), chaseOutcomeLabel("delivered"));
+});

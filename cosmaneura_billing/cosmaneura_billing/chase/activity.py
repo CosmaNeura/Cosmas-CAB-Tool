@@ -1,7 +1,7 @@
 """Bounded, read-only presentation of a case's recorded contact attempts.
 
-This projection reads only Attempt records, never pending tasks or delivery
-events. A recorded outcome is not independent confirmation of patient contact
+The legacy projection reads Attempt records; the communications adapter adds
+one entry per durable dispatch start. A recorded outcome is not confirmation of patient contact
 or delivery. Unusable records make the projection unavailable rather than
 producing partial counts; unknown outcome text is never reflected to the UI.
 """
@@ -97,3 +97,22 @@ def build_activity(attempts: Sequence[Attempt]) -> dict[str, Any] | None:
         "history": history,
         "truncated": len(attempts) > HISTORY_LIMIT,
     }
+
+
+def combine_activity(legacy: dict[str, Any] | None, dispatch: dict[str, Any]) -> dict[str, Any] | None:
+    """Merge trusted read projections without changing legacy scheduler records.
+
+    Fifty entries from each source suffice for the combined latest fifty. Full
+    counts and staff minutes come from each source's untruncated totals.
+    """
+    if legacy is None:
+        return None
+    history = sorted((dict(row) for row in legacy["history"] + dispatch["history"]),
+                     key=lambda row: _timestamp(row["at"]), reverse=True)[:HISTORY_LIMIT]
+    total = legacy["totalAttempts"] + dispatch["totalAttempts"]
+    return {"schemaVersion": SCHEMA_VERSION, "totalAttempts": total,
+            "countsByChannel": {channel: legacy["countsByChannel"][channel] + dispatch["countsByChannel"][channel]
+                                for channel in CHANNELS},
+            "staffMinutes": legacy["staffMinutes"],
+            "lastAttempt": dict(history[0]) if history else None,
+            "history": history, "truncated": total > HISTORY_LIMIT}
