@@ -162,9 +162,12 @@ class NCCIEdits:
                 a, b = _norm(r[c1]), _norm(r[c2])
                 if not a or not b:
                     continue
-                a, b = self._code(a), self._code(b)
+                # These codes are already normalized; retain one canonical string.
+                a, b = self._codes.setdefault(a, a), self._codes.setdefault(b, b)
                 mod = (r[cm].strip()[:1] if cm is not None and cm < len(r) and r[cm].strip() else "9")
-                pairs = self._ptp.setdefault(a, {})
+                pairs = self._ptp.get(a)
+                if pairs is None:
+                    pairs = self._ptp[a] = {}
                 if b not in pairs:
                     self._pair_count += 1
                 pairs[b] = mod
