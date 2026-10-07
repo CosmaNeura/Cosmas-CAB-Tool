@@ -96,10 +96,18 @@ function Workspace() {
   const [selected, setSelected] = useState(null);
   const [encounterStatuses, setEncounterStatuses] = useState({});
   const [coderReviewLocked, setCoderReviewLocked] = useState(false);
+  const [chaseNavigationLocked, setChaseNavigationLocked] = useState(false);
   const [headerNavigation, setHeaderNavigation] = useState({ dirty: false, busy: false });
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const headerNavigationRef = useRef({ dirty: false, busy: false });
   const coderReviewLockedRef = useRef(false);
+  const chaseNavigationLockedRef = useRef(false);
+
+  const updateChaseNavigationLock = useCallback((locked) => {
+    chaseNavigationLockedRef.current = locked === true;
+    setChaseNavigationLocked(locked === true);
+    if (locked) setPendingNavigation(null);
+  }, []);
 
   const updateHeaderNavigation = useCallback((state) => {
     const next = { dirty: state?.dirty === true, busy: state?.navigationBlocked === true };
@@ -115,7 +123,7 @@ function Workspace() {
 
   function navigate(target) {
     // Recheck at confirmation time: a save may have started after the prompt opened.
-    if (headerNavigationRef.current.busy || coderReviewLockedRef.current) return;
+    if (headerNavigationRef.current.busy || coderReviewLockedRef.current || chaseNavigationLockedRef.current) return;
     setPendingNavigation(null);
     updateHeaderNavigation({ dirty: false, busy: false });
     if (target.kind === "encounter") setSelected(target.value);
@@ -125,16 +133,16 @@ function Workspace() {
   function requestNavigation(target) {
     if ((target.kind === "encounter" && target.value === selected)
       || (target.kind === "workspace" && target.value === view)) return;
-    if (headerNavigationRef.current.busy || coderReviewLockedRef.current) return;
+    if (headerNavigationRef.current.busy || coderReviewLockedRef.current || chaseNavigationLockedRef.current) return;
     if (headerNavigationRef.current.dirty) setPendingNavigation(target);
     else navigate(target);
   }
-  const navigationLocked = headerNavigation.busy || coderReviewLocked;
+  const navigationLocked = headerNavigation.busy || coderReviewLocked || chaseNavigationLocked;
 
   useEffect(() => {
     const warnBeforeUnload = (event) => {
       if (!headerNavigationRef.current.dirty && !headerNavigationRef.current.busy
-        && !coderReviewLockedRef.current) return;
+        && !coderReviewLockedRef.current && !chaseNavigationLockedRef.current) return;
       event.preventDefault();
       event.returnValue = true;
     };
@@ -266,6 +274,7 @@ function Workspace() {
           {handoffAvailable && view === "provider" && <a role="link" href={navigationLocked ? undefined : "/?view=handoff"} aria-disabled={navigationLocked} onClick={(event) => { event.preventDefault(); requestNavigation({kind: "handoff"}); }} className="text-sm font-medium text-slate-600 underline">Try a synthetic note handoff</a>}
           {headerNavigation.busy && <p role="status" className="text-xs font-medium text-amber-800">A header request is pending. Finish or retry it before changing visits or workspaces.</p>}
           {coderReviewLocked && view === "coder" && <p role="status" className="text-xs font-medium text-amber-800">Resolve this frozen coder review before leaving. Unknown outcomes must use the exact retry.</p>}
+          {chaseNavigationLocked && view === "chase" && <p role="status" className="text-xs font-medium text-amber-800">A communications action is pending. Finish or retry that exact action before changing cases or workspaces.</p>}
         </div>
 
         {pendingNavigation && <section role="group" aria-label="Confirm discarding header edits" className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
@@ -289,6 +298,7 @@ function Workspace() {
             demoSeed={chaseDemoSeed}
             manageChase={manageChase}
             billingHeaderAvailable={billingHeaderAvailable}
+            onNavigationLockChange={updateChaseNavigationLock}
           />
         ) : !encountersLoaded ? (
           <p>Loading available encounters…</p>
