@@ -12,6 +12,7 @@ import {
 } from "./coderReview.js";
 import ProviderQueue from "./ProviderQueue.jsx";
 import BillingHeader from "./BillingHeader.jsx";
+import { headerProgressFromView } from "./headerProgress.js";
 import { loadCoderWorkspace, workspaceInferenceAllowed } from "./workspaceSource.js";
 import {mappingAddition} from "./diagnosisMapping.js";
 import DiagnosisSequencingNotice from "./DiagnosisSequencingNotice.jsx";
@@ -226,6 +227,7 @@ export default function CoderReview({
   encounterId, encounters = [], live, statuses = {}, onSelect = NOOP,
   onStatusChange = NOOP, onNavigationLockChange = NOOP,
   onHeaderNavigationChange = NOOP, navigationLocked = false, headerAsync = false,
+  savedProgress, onProgressChange = NOOP, onRefreshProgress, refreshingProgress, progressRefreshDisabled,
 }) {
   const [engine, setEngine] = useState(null);
   const [decisions, setDecisions] = useState({});
@@ -455,6 +457,7 @@ export default function CoderReview({
     const requestId = ++saveRequest.current;
     const {controller} = request;
     savingRef.current = true;
+    if (composed) onProgressChange(encounterId, null);
     setSaving(true); setSaveError(null); setSaveErrorStatus(null);
     onStatusChange(encounterId, { processingStatus: "Saving coder review" });
     // Retire the request before aborting, even if the transport/body never settles.
@@ -476,6 +479,7 @@ export default function CoderReview({
         if (!verified?.signoff || verified.signoff.reviewId !== payload.review_id
           || verified.header.headerId !== composed.headerId || verified.revisionNumber !== composed.expectedRevision
           || JSON.stringify(response.headerSignoff) !== JSON.stringify(verified.signoff)) throw new Error("invalid-header-receipt");
+        onProgressChange(encounterId, headerProgressFromView(verified, headerEncounter.headerSource));
         setHeaderRefresh((value) => value + 1);
       }
       setReceipt({ ...response, payload });
@@ -516,10 +520,12 @@ export default function CoderReview({
 
   return (
     <div className="space-y-5">
-      <ProviderQueue encounters={encounters} selectedId={encounterId} statuses={statuses} onSelect={onSelect} selectionDisabled={navigationLocked || (frozen && !receipt)} title="Coder work queue" description="Choose a visit, make an explicit decision for every recommendation, then record the review." />
+      <ProviderQueue encounters={encounters} selectedId={encounterId} statuses={statuses} onSelect={onSelect} selectionDisabled={navigationLocked || (frozen && !receipt)} title="Coder work queue" description="Choose a visit, make an explicit decision for every recommendation, then record the review."
+        savedProgress={savedProgress} onRefreshProgress={onRefreshProgress} refreshingProgress={refreshingProgress} progressRefreshDisabled={progressRefreshDisabled} />
 
       {headerEnabled && headerEncounter.encounterId === encounterId && <BillingHeader asyncEnabled={headerAsync}
         encounter={headerEncounter} onStateChange={onHeaderState} disabled={frozen && !receipt || saving}
+        onProgressChange={onProgressChange}
         workspaceInvalidated={headerWorkspaceInvalidated}
         refreshKey={headerRefresh} generationAllowed={workspaceInferenceAllowed(headerEncounter)} />}
 

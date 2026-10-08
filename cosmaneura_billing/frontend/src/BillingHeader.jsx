@@ -5,6 +5,7 @@ import MdmClinicalReview from "./MdmClinicalReview.jsx";
 import DiagnosisMapping from "./DiagnosisMapping.jsx";
 import {mappingReviewText} from "./diagnosisMapping.js";
 import { api } from "./api.js";
+import { headerProgressFromView } from "./headerProgress.js";
 import { armHeaderRequestDeadline, beginHeaderRequest, cancelHeaderRequest, exportBillingHeader, fieldAuthor, finishHeaderRequest, headerDraft, headerSourceKey, ownsHeaderRequest, readBillingHeader, readHeaderGeneration, acceptedDiagnosisOrder, diagnosisOrderDecisionId, diagnosisOrderReviewText, moveHeaderDiagnosis, proposedDiagnosisOrder, replaceHeaderCodes } from "./billingHeader.js";
 
 const button = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-50";
@@ -29,7 +30,7 @@ export default function BillingHeader(props) {
   return <HeaderContents key={headerSourceKey(props.encounter)} {...props} />;
 }
 
-function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true, asyncEnabled = false, workspaceInvalidated = false}) {
+function HeaderContents({encounter, onStateChange = NOOP, onProgressChange = NOOP, disabled: hostDisabled = false, refreshKey = 0, generationAllowed = true, asyncEnabled = false, workspaceInvalidated = false}) {
   const [view, setView] = useState(null), [draft, setDraft] = useState(null);
   const [reason, setReason] = useState(""), [error, setError] = useState("");
   const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
@@ -54,6 +55,13 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
       navigationBlocked: !!retry || !!pending.current?.command || (busy && !!generation), stale: stale || invalidated});
   }, [view, draft, busy, retry, generation, stale, invalidated, onStateChange]);
   useEffect(() => () => onStateChange({view: null, dirty: false, busy: false, stale: true}), [onStateChange]);
+  useEffect(() => {
+    if (draft || busy || retry || stale || invalidated || error || generation || !loaded) onProgressChange(encounter.encounterId, null);
+    else onProgressChange(encounter.encounterId, view ? headerProgressFromView(view, pin) : {
+      schemaVersion: "billing-header-progress.v1", encounterVersion: pin.encounterVersion,
+      bundleSha256: pin.bundleSha256, ingestionSource: pin.ingestionSource,
+      status: "not_generated", revisionNumber: null, reviewedRevision: null});
+  }, [view, draft, busy, retry, stale, invalidated, error, generation, loaded, onProgressChange, encounter.encounterId, pin]);
 
   function retireGeneration() {
     clearTimeout(pollTimer.current); pollTimer.current = null;
@@ -66,6 +74,7 @@ function HeaderContents({encounter, onStateChange = NOOP, disabled: hostDisabled
     if (generationRef.current && command?.path === BASE + "/generate") return NOOP;
     const request = beginHeaderRequest(pending, command, refresh, unresolvedCommand.current);
     if (!request) return NOOP;
+    onProgressChange(encounter.encounterId, null);
     const {controller} = request;
     // Mutations and exact retries cannot be abandoned. A read may be canceled
     // by changing visits, even if the server never answers.
