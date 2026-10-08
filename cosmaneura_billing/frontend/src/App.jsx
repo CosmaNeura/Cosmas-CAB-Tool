@@ -7,6 +7,7 @@ import BillingReview from "./BillingReview.jsx";
 import CardChase from "./CardChase.jsx";
 import CoderReview from "./CoderReview.jsx";
 import { isWorkspaceEncounterEntry } from "./workspaceSource.js";
+import { applyProgressRefresh, readHeaderProgress } from "./headerProgress.js";
 
 function Pill({ tone, title, children }) {
   return (
@@ -96,6 +97,9 @@ function Workspace() {
   const [encountersLoaded, setEncountersLoaded] = useState(false);
   const [selected, setSelected] = useState(null);
   const [encounterStatuses, setEncounterStatuses] = useState({});
+  const [savedProgress, setSavedProgress] = useState(null);
+  const [refreshingProgress, setRefreshingProgress] = useState(false);
+  const progressVersion = useRef(0), progressPins = useRef({}), progressRequest = useRef(null);
   const [coderReviewLocked, setCoderReviewLocked] = useState(false);
   const [chaseNavigationLocked, setChaseNavigationLocked] = useState(false);
   const [headerNavigation, setHeaderNavigation] = useState({ dirty: false, busy: false });
@@ -158,6 +162,36 @@ function Workspace() {
     }));
   }, []);
 
+  const updateSavedProgress = useCallback((id, value) => {
+    const parsed = readHeaderProgress(value), known = progressPins.current[id];
+    const verified = parsed && (!known || (parsed.encounterVersion === known.encounterVersion
+      && parsed.bundleSha256 === known.bundleSha256 && parsed.ingestionSource === known.ingestionSource)) ? parsed : null;
+    ++progressVersion.current;
+    setSavedProgress((current) => current ? {...current, [id]: verified} : current);
+  }, []);
+
+  async function refreshSavedProgress() {
+    if (progressRequest.current || headerNavigationRef.current.busy || headerNavigationRef.current.dirty || coderReviewLockedRef.current) return;
+    const controller = new AbortController(); progressRequest.current = controller;
+    const captured = ++progressVersion.current;
+    setSavedProgress((current) => current && Object.fromEntries(Object.keys(current).map((id) => [id, null])));
+    setRefreshingProgress(true);
+    const deadline = window.setTimeout(() => controller.abort(), 10_000);
+    try {
+      const available = await api("/api/encounters", {signal: controller.signal});
+      if (controller.signal.aborted || progressVersion.current !== captured || !Array.isArray(available)) return;
+      const entries = available.filter((entry) => encounters.some((known) => known.id === entry.id)
+        && isWorkspaceEncounterEntry(entry));
+      progressPins.current = Object.fromEntries(entries.map((entry) => [entry.id, readHeaderProgress(entry.headerProgress)]));
+      setSavedProgress((current) => applyProgressRefresh(current, entries, captured, progressVersion.current));
+    } catch (error) {
+      if ([401, 403].includes(error?.status)) setAuthStatus(error.status);
+      // Other unconfirmed progress stays unavailable; the editor is untouched.
+    }
+    finally { window.clearTimeout(deadline); progressRequest.current = null; setRefreshingProgress(false); }
+  }
+  useEffect(() => () => progressRequest.current?.abort(), []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -178,6 +212,10 @@ function Workspace() {
         if (session.views.includes("provider") || session.views.includes("coder")) {
           const available = await api("/api/encounters");
           const encs = available.filter((entry) => isWorkspaceEncounterEntry(entry, canLaunchHeader(session)));
+          if (canLaunchHeader(session)) {
+            progressPins.current = Object.fromEntries(encs.map((entry) => [entry.id, readHeaderProgress(entry.headerProgress)]));
+            setSavedProgress({...progressPins.current});
+          }
           setEncounters(encs);
           setSelected((current) => (
             encs.some((e) => e.id === current) ? current : null
@@ -314,6 +352,9 @@ function Workspace() {
           </div>
         ) : view === "provider" ? (
           <BillingReview
+            progressRefreshDisabled={headerNavigation.dirty}
+            savedProgress={savedProgress} onProgressChange={updateSavedProgress}
+            onRefreshProgress={refreshSavedProgress} refreshingProgress={refreshingProgress}
             headerAsync={headerAsync}
             encounters={encounters}
             selectedId={selected}
@@ -326,6 +367,9 @@ function Workspace() {
           />
         ) : (
           <CoderReview
+            progressRefreshDisabled={headerNavigation.dirty}
+            savedProgress={savedProgress} onProgressChange={updateSavedProgress}
+            onRefreshProgress={refreshSavedProgress} refreshingProgress={refreshingProgress}
             headerAsync={headerAsync}
             encounterId={selected}
             encounters={encounters}

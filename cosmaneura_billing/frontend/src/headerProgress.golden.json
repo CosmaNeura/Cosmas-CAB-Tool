@@ -1,0 +1,11 @@
+{
+  "reviewed": {
+    "schemaVersion": "billing-header-progress.v1",
+    "encounterVersion": 1,
+    "bundleSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ingestionSource": "synthetic_fixture",
+    "status": "reviewed",
+    "revisionNumber": 0,
+    "reviewedRevision": 0
+  }
+}

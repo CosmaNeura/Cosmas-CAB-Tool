@@ -2,6 +2,7 @@ import React from "react";
 import { ArrowRight, ClipboardList } from "lucide-react";
 
 import { sourceLabel, visitTypeLabel } from "./providerBilling.js";
+import { headerProgressLabel } from "./headerProgress.js";
 
 const DEFAULT_STATUS = Object.freeze({
   reviewState: "Not reviewed this session",
@@ -19,6 +20,7 @@ export default function ProviderQueue({
   title = "Encounter work queue",
   description = "Choose a visit to check documentation and generate evidence-linked billing guidance.",
   selectionDisabled = false,
+  savedProgress = null, onRefreshProgress, refreshingProgress = false, progressRefreshDisabled = false,
 }) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white shadow-sm" aria-labelledby="encounter-queue-heading">
@@ -30,8 +32,12 @@ export default function ProviderQueue({
           <p className="mt-1 text-sm text-slate-600">{description}</p>
         </div>
         <p className="max-w-sm text-xs leading-relaxed text-slate-500">
-          Review and processing labels describe this browser session; they do not claim that a review was saved or transmitted.
+          {savedProgress ? "Saved header progress comes from persisted records. Review and processing labels describe this browser session."
+            : "Review and processing labels describe this browser session; they do not claim that a review was saved or transmitted."}
         </p>
+        {savedProgress && <button type="button" onClick={onRefreshProgress} disabled={selectionDisabled || refreshingProgress || progressRefreshDisabled}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium disabled:opacity-50">
+          {refreshingProgress ? "Refreshing saved progress…" : "Refresh saved progress"}</button>}
       </div>
       <div
         className="overflow-x-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"
@@ -40,12 +46,13 @@ export default function ProviderQueue({
         tabIndex={0}
       >
         <table className="min-w-[940px] w-full border-collapse text-left">
-          <caption className="sr-only">Authorized encounters and their current in-session review status</caption>
+          <caption className="sr-only">Authorized encounters, {savedProgress ? "saved header progress, and " : ""}current in-session review status</caption>
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th scope="col" className="px-4 py-3 font-medium">Encounter</th>
               <th scope="col" className="px-3 py-3 font-medium">Visit type</th>
               <th scope="col" className="px-3 py-3 font-medium">Review state</th>
+              {savedProgress && <th scope="col" className="px-3 py-3 font-medium">Saved header progress</th>}
               <th scope="col" className="px-3 py-3 font-medium">Completeness</th>
               <th scope="col" className="px-3 py-3 font-medium">Coder review policy</th>
               <th scope="col" className="px-3 py-3 font-medium">Provenance</th>
@@ -71,6 +78,7 @@ export default function ProviderQueue({
                   </th>
                   <td className="px-3 py-3"><QueueValue>{visitTypeLabel(encounter.encounterType)}</QueueValue></td>
                   <td className="px-3 py-3"><QueueValue>{state.reviewState}</QueueValue></td>
+                  {savedProgress && <td className="px-3 py-3"><QueueValue>{headerProgressLabel(savedProgress[encounter.id])}</QueueValue></td>}
                   <td className="px-3 py-3"><QueueValue>{state.completenessState}</QueueValue></td>
                   <td className="px-3 py-3"><QueueValue>{state.coderReview}</QueueValue></td>
                   <td className="max-w-44 px-3 py-3"><QueueValue>{sourceLabel(encounter.dataClass)}</QueueValue></td>

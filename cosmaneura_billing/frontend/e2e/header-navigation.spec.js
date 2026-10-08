@@ -9,11 +9,12 @@ const source = "athena_staff_review_preview_synthetic";
 const actor = {id: "11111111-1111-4111-8111-111111111111", name: "Synthetic reviewer", role: "provider"};
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, holdSave = false, operationalDenied = false, coderOutcome = null, editHeader = true, headers = true} = {}) {
+async function setup(page, {workspace = "provider", lostSave = false, holdRead = false, holdSave = false, operationalDenied = false, coderOutcome = null, editHeader = true, headers = true, queueProgress = false, holdQueueRefresh = false} = {}) {
   const details = {}, views = {}, commands = [], persisted = new Set();
   const sourceKind = operationalDenied ? "provider_completed_note" : source;
   let coderRequests = 0;
   let releaseRead, releaseSave, releaseCoder, readHeld = false;
+  let queueReads = 0, releaseQueue;
   for (const [index, id] of ids.entries()) {
     const note = `Synthetic documented visit ${id}.`;
     const pin = {encounterId: id, encounterVersion: 1, ingestionSource: sourceKind,
@@ -42,7 +43,14 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
     views: ["provider", "coder", "chase"], defaultView: workspace,
     capabilities: {billingHeader: headers, providerHandoff: true}, persona: "Synthetic reviewer",
   }}));
-  await page.route("**/api/encounters", (route) => route.fulfill({json: Object.values(details)}));
+  await page.route("**/api/encounters", async (route) => {
+    const rows = Object.values(details).map((detail) => ({...detail, ...(queueProgress ? {headerProgress: {
+      schemaVersion: "billing-header-progress.v1", encounterVersion: 1,
+      bundleSha256: detail.headerSource.bundleSha256, ingestionSource: sourceKind,
+      status: "awaiting_review", revisionNumber: views[detail.id].revisionNumber, reviewedRevision: null}} : {})}));
+    if (holdQueueRefresh && queueReads++ === 1) await new Promise((resolve) => { releaseQueue = resolve; });
+    return route.fulfill({json: rows});
+  });
   await page.route("**/api/encounters/detail", (route) => route.fulfill({json: details[route.request().postDataJSON().encounterId]}));
   await page.route("**/api/completeness", (route) => route.fulfill({json: {complete: true, results: []}}));
   await page.route("**/api/encounters/coder-view", async (route) => {
@@ -85,7 +93,8 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   await page.goto("/");
   await page.getByRole("button", {name: ids[0], exact: true}).click();
   const header = page.getByRole("region", {name: "Billing header", exact: true});
-  if (!editHeader) return {header, views, navigation: page.getByRole("navigation", {name: "Workspace"})};
+  if (!editHeader) return {header, views, releaseSave: () => releaseSave(), saveHeld: () => typeof releaseSave === "function", queueHeld: () => typeof releaseQueue === "function",
+    releaseQueue: () => releaseQueue(), navigation: page.getByRole("navigation", {name: "Workspace"})};
   if (holdRead) {
     await expect(header).toContainText("Loading header…");
     await expect.poll(() => typeof releaseRead).toBe("function");
@@ -97,6 +106,30 @@ async function setup(page, {workspace = "provider", lostSave = false, holdRead =
   return {header, views, commands, releaseSave: () => releaseSave(), releaseCoder: () => releaseCoder(), coderRequests: () => coderRequests, navigation: page.getByRole("navigation", {name: "Workspace"}),
     prompt: page.getByRole("group", {name: "Confirm discarding header edits"})};
 }
+
+test("saved header queue progress survives reload and a late refresh cannot discard edits or replace a new receipt", async ({page}) => {
+  const state = await setup(page, {queueProgress: true, holdQueueRefresh: true, holdSave: true, editHeader: false});
+  const row = page.getByRole("row").filter({has: page.getByRole("button", {name: ids[0], exact: true})});
+  await expect(row).toContainText("Revision 0 · awaiting coder review");
+  await page.getByRole("button", {name: "Refresh saved progress", exact: true}).click();
+  await expect.poll(state.queueHeld).toBe(true);
+  await state.header.getByRole("button", {name: "Edit header", exact: true}).click();
+  await state.header.getByLabel("Reviewer note (optional)").fill("Keep this unsaved synthetic note.");
+  await state.header.getByLabel("Reason for edit (required)").fill("Compared source documentation.");
+  await expect(page.getByRole("button", {name: "Refreshing saved progress…", exact: true})).toBeDisabled();
+  await expect(row).toContainText("Saved progress unavailable");
+  await expect(state.header.getByLabel("Reviewer note (optional)")).toHaveValue("Keep this unsaved synthetic note.");
+  await state.header.getByRole("button", {name: "Save header edits", exact: true}).click();
+  await expect(row).toContainText("Saved progress unavailable");
+  await expect.poll(state.saveHeld).toBe(true);
+  state.releaseSave();
+  await expect(row).toContainText("Revision 1 · awaiting coder review");
+  state.releaseQueue();
+  await expect(page.getByRole("button", {name: "Refresh saved progress", exact: true})).toBeEnabled();
+  await expect(row).toContainText("Revision 1 · awaiting coder review");
+  await page.reload();
+  await expect(page.getByRole("row").filter({has: page.getByRole("button", {name: ids[0], exact: true})})).toContainText("Revision 1 · awaiting coder review");
+});
 
 for (const headers of [true, false]) {
   test(`coder ${headers ? "header signoff" : "feedback"} deadline preserves exact retry even when a response body ignores abort`, async ({page}) => {

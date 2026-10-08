@@ -880,14 +880,47 @@ def liveness() -> dict[str, str]:
 
 @router.get("/api/encounters")
 def list_encounters(request: Request) -> list[dict[str, Any]]:
-    _require_view(request, "provider")
+    principal = _require_view(request, "provider")
     _request_orchestrator(request)
     return [{
         "id": b.encounter_id,
         "encounterType": b.encounter_type,
         "submittedEm": b.submitted_em_code,
         **_encounter_data_policy(row, request),
+        **_encounter_header_progress(row, request, principal),
     } for row in _request_encounter_store(request).all() for b in [row.bundle]]
+
+
+def _encounter_header_progress(stored, request, principal):
+    config = _request_settings(request)
+    if not config.billing_header_enabled:
+        return {}
+    from . import billing_header as header
+    pin = header.source_snapshot(stored)
+    unavailable = {"schemaVersion": "billing-header-progress.v1",
+                   "encounterVersion": pin["encounterVersion"], "bundleSha256": pin["bundleSha256"],
+                   "ingestionSource": pin["ingestionSource"],
+                   "status": "unavailable", "revisionNumber": None, "reviewedRevision": None}
+    store = request.app.state.billing_header_store
+    if store is None:
+        return {"headerProgress": unavailable}
+    role = next(role for role in ("Admin", "Coder", "Provider") if principal.has_any_role((role,)))
+    if config.auth_mode == "disabled" and config.state_store == "local":
+        actor = header.HeaderActor(str(uuid5(NAMESPACE_URL, f"cab-local:{principal.tenant_id}")),
+            str(uuid5(NAMESPACE_URL, f"cab-local:{principal.user_id}")), "Synthetic queue reader", role)
+    else:
+        actor = header.actor_for_principal(principal, role)
+    try:
+        progress = store.progress(stored.bundle.encounter_id, expected_source=pin, actor=actor)
+    except header.BillingHeaderError as exc:
+        if exc.code == "not_authorized":
+            raise HTTPException(403, "not_authorized") from None
+        progress = unavailable
+    except (PersistenceUnavailable, KeyError, TypeError):
+        # Keep the authorized worklist usable; an unreadable header is not an
+        # empty or reviewed one. Authentication/membership failures remain 403.
+        progress = unavailable
+    return {"headerProgress": progress}
 
 
 def _encounter_data_policy(stored, request=None) -> dict[str, Any]:

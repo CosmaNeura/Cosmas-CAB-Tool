@@ -39,6 +39,45 @@ def _audit_check(event, practice, actor, resource, action, *, mandatory):
 class _Store(SignoffStoreMixin):
     """Shared transaction algorithm; adapters only supply storage primitives."""
 
+    def progress(self, encounter_id, *, expected_source, actor):
+        """Source-locked saved progress only; no clinical view or model work."""
+        actor = _actor(actor)
+        with self._unit(encounter_id, actor) as unit:
+            domain.check_source(unit.stored, expected_source)
+            result = {"schemaVersion": "billing-header-progress.v1",
+                      "encounterVersion": expected_source["encounterVersion"],
+                      "bundleSha256": expected_source["bundleSha256"],
+                      "ingestionSource": expected_source["ingestionSource"],
+                      "status": "not_generated", "revisionNumber": None,
+                      "reviewedRevision": None}
+            record = unit.latest(domain.digest(expected_source))
+            if record is None:
+                domain.check_source(unit.current_source(), expected_source)
+                return result
+            domain.require(type(record) is dict and type(record.get("header")) is dict, "store_invalid")
+            domain.require(record["header"].get("headerId") == record.get("headerId")
+                           and record["header"].get("expectedSource") == expected_source
+                           and record.get("sourceDigest") == domain.digest(expected_source), "store_invalid")
+            rows = unit.revisions(record["headerId"])
+            domain.require(type(rows) is list and len(rows) <= domain.MAX_REVISIONS and all(
+                type(row) is dict and type(row.get("number")) is int and row["number"] == index + 1
+                and row.get("headerId") == record["headerId"] and row.get("expectedSource") == expected_source
+                for index, row in enumerate(rows)), "store_invalid")
+            receipt = unit.signoff_receipt(header_id=record["headerId"])
+            domain.require(receipt is None or type(receipt) is dict and type(receipt.get("receipt")) is dict, "store_invalid")
+            signed = receipt["receipt"] if receipt is not None else None
+            if signed is not None:
+                domain.require(signed.get("headerId") == record["headerId"]
+                    and signed.get("expectedSource") == expected_source and signed.get("status") == "recorded"
+                    and type(signed.get("headerRevision")) is int
+                    and 0 <= signed["headerRevision"] <= len(rows), "store_invalid")
+            result.update(revisionNumber=len(rows),
+                reviewedRevision=signed["headerRevision"] if signed is not None else None,
+                status=("reviewed" if signed is not None and signed["headerRevision"] == len(rows)
+                        else "review_required" if signed is not None else "awaiting_review"))
+            domain.check_source(unit.current_source(), expected_source)
+            return result
+
     def latest(self, encounter_id, *, expected_source):
         with self._unit(encounter_id) as unit:
             domain.check_source(unit.stored, expected_source)
