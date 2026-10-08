@@ -1,0 +1,52 @@
+name: CAB GitHub OIDC IaC
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "infra/gha-oidc/**"
+      - ".github/workflows/cab-gha-oidc-ci.yml"
+  pull_request:
+    paths:
+      - "infra/gha-oidc/**"
+      - ".github/workflows/cab-gha-oidc-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned Bicep compiler
+        run: az bicep install --version v0.46.1
+      - name: Compile and verify the fixed identity boundary
+        run: |
+          set -euo pipefail
+          compiled="${RUNNER_TEMP}/cab-gha-oidc.json"
+          az bicep build --file infra/gha-oidc/main.bicep --outfile "$compiled"
+
+          jq -e '
+            .variables.identityName == "cosmaneura-pilot-gha-identity-i4akwqry"
+            and .variables.registryName == "cosmaneurapiloti4akwqry"
+            and .variables.apiAppName == "cosmaneura-pilot-api-i4akwqry"
+            and .variables.migrationJobName == "cosmaneura-pilot-mig-i4akwqry"
+            and .variables.workerJobName == "cosmaneura-pilot-wrk-i4akwqry"
+            and .variables.githubOidcIssuer == "https://token.actions.githubusercontent.com"
+            and .variables.azureTokenExchangeAudience == "api://AzureADTokenExchange"
+            and .variables.mainBranchSubject == "repo:CosmaNeura/Cosmas-CAB-Tool:ref:refs/heads/main"
+            and .variables.pilotEnvironmentSubject == "repo:CosmaNeura/Cosmas-CAB-Tool:environment:pilot"
+            and ([.resources[] | select(.type == "Microsoft.ManagedIdentity/userAssignedIdentities")] | length == 1)
+            and ([.resources[] | select(.type == "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials")] | length == 2)
+            and ([.resources[] | select(.type == "Microsoft.Authorization/roleAssignments")] | length == 4)
+            and ([.resources[] | select(.type == "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials" and (.name | contains("github-pilot-deploy"))) | .dependsOn | length] == [2])
+            and (.variables.acrPushRoleDefinitionId | contains("8311e382-0749-4cb8-b61a-304f252e45ec"))
+            and (.variables.containerAppsContributorRoleDefinitionId | contains("358470bc-b998-42bd-ab17-a7e34c199c0f"))
+            and (.variables.containerAppsJobsContributorRoleDefinitionId | contains("4e3d2b60-56ae-4dc6-a233-09c8e5a82e68"))
+            and ([.resources[] | select(.type == "Microsoft.Authorization/roleAssignments" and (.scope | contains("Microsoft.ContainerRegistry/registries")) and (.properties.roleDefinitionId | contains("acrPushRoleDefinitionId")))] | length == 1)
+            and ([.resources[] | select(.type == "Microsoft.Authorization/roleAssignments" and (.scope | contains("Microsoft.App/containerApps")) and (.properties.roleDefinitionId | contains("containerAppsContributorRoleDefinitionId")))] | length == 1)
+            and ([.resources[] | select(.type == "Microsoft.Authorization/roleAssignments" and (.scope | contains("Microsoft.App/jobs")) and (.properties.roleDefinitionId | contains("containerAppsJobsContributorRoleDefinitionId")))] | length == 2)
+            and .outputs.azureClientId.type == "string"
+          ' "$compiled"
