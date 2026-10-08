@@ -68,6 +68,10 @@ param communicationsCronExpression string = '*/5 * * * *'
 param communicationsEnabledChannels string = 'sms'
 @description('Restrict outgoing SMS to the explicit test-recipient scope. Does not enable communications or consent.')
 param communicationsTestMode bool = false
+@minValue(0)
+@maxValue(5)
+@description('Optional permanent practice-wide test dispatch ceiling; positive requires SMS test mode and one GSM segment. Zero preserves normal behavior. Not a cost cap.')
+param communicationsTestMaxDispatchStarts int = 0
 @secure()
 @description('Comma-separated consenting tester E.164 numbers, protected as API/worker Container Apps secrets. Empty test scope blocks sends; never put real values in tracked examples, CLI arguments or outputs.')
 param communicationsTestRecipients string = ''
@@ -398,6 +402,9 @@ var validatedProviderHandoff = enableProviderHandoff && !enableBillingHeader
 var validatedCommunicationsTestMode = (!communicationsTestMode && !empty(communicationsTestRecipients)) || (communicationsTestMode && communicationsEnabledChannels != 'sms')
   ? fail('Test recipients require test mode, and test mode permits SMS only')
   : communicationsTestMode
+var validatedCommunicationsTestMaxDispatchStarts = communicationsTestMaxDispatchStarts > 0 && !validatedCommunicationsTestMode
+  ? fail('Test dispatch ceiling requires explicit SMS test mode')
+  : communicationsTestMaxDispatchStarts
 var communicationsTestRecipientEnv = empty(communicationsTestRecipients)
   ? { name: 'COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS', value: '' }
   : { name: 'COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS', secretRef: 'communications-test-recipients' }
@@ -568,6 +575,7 @@ module communications './communications.bicep' = if (provisionCommunications) {
     fromNumber: validatedTwilioFromNumber
     communicationsEnabledChannels: communicationsEnabledChannels
     communicationsTestMode: validatedCommunicationsTestMode
+    communicationsTestMaxDispatchStarts: validatedCommunicationsTestMaxDispatchStarts
     communicationsTestRecipients: communicationsTestRecipients
     twilioMessagingServiceSid: validatedTwilioMessagingServiceSid
     callbackOrigin: communicationsCallbackOrigin
@@ -954,6 +962,7 @@ resource application 'Microsoft.App/containerApps@2026-01-01' = {
             { name: 'COSMANEURA_COMMUNICATIONS_ENABLED', value: string(validatedCommunicationsEnabled) }
             { name: 'COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS', value: communicationsEnabledChannels }
             { name: 'COSMANEURA_COMMUNICATIONS_TEST_MODE', value: string(validatedCommunicationsTestMode) }
+            { name: 'COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS', value: string(validatedCommunicationsTestMaxDispatchStarts) }
             communicationsTestRecipientEnv
             {
               name: 'DATABASE_URL'

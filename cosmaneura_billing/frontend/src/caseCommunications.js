@@ -12,6 +12,8 @@ const STATUS = Object.freeze({
 const REASONS = Object.freeze({
   communications_channel_disabled: "This communication channel is unavailable for this workspace.",
   communications_test_recipients_unconfigured: "SMS test mode has no approved recipients. An administrator must configure consenting test recipients.",
+  communications_test_dispatch_ceiling_reached: "The practice-wide SMS test allowance has been used. Started sends remain reserved even when delivery is unknown.",
+  communications_test_message_requires_single_segment: "SMS tests require one GSM text segment. Shorten the message and avoid emoji or non-GSM characters.",
   communications_test_recipient_not_allowed: "This contact is not an approved SMS test recipient. Verify the contact and ask an administrator to review the test-recipient list.",
   communications_contact_not_bound: "Verify a current contact before preparing outreach.",
   communications_contact_stale: "The contact changed or needs a fresh verification.",
@@ -217,9 +219,19 @@ export function readCommunications(value, chaseId) {
       && p.quietHours.every((n) => Number.isInteger(n) && n >= 0 && n <= 23)
       && Number.isInteger(p.maxTotalTouches) && p.maxTotalTouches >= 1 && p.maxTotalTouches <= 50
       && Number.isInteger(p.maxTouches24h) && p.maxTouches24h >= 1 && p.maxTouches24h <= 10);
+    let allowance = null;
+    if (p.testDispatchAllowance != null) {
+      const a = p.testDispatchAllowance;
+      require(object(a) && Object.keys(a).sort().join(",") === "maxStarts,remainingStarts,reservedStarts,singleSegmentRequired"
+        && Number.isInteger(a.maxStarts) && a.maxStarts >= 1 && a.maxStarts <= 5
+        && Number.isSafeInteger(a.reservedStarts) && a.reservedStarts >= 0
+        && Number.isInteger(a.remainingStarts) && a.remainingStarts === Math.max(0, a.maxStarts - a.reservedStarts)
+        && a.singleSegmentRequired === true);
+      allowance = { ...a };
+    }
     policy = { hash: p.hash, approved: p.approved, canApprove: p.canApprove, outboundEnabled: p.outboundEnabled,
       practiceName: p.practiceName, timezone: p.timezone, quietHours: [...p.quietHours],
-      maxTotalTouches: p.maxTotalTouches, maxTouches24h: p.maxTouches24h };
+      maxTotalTouches: p.maxTotalTouches, maxTouches24h: p.maxTouches24h, testDispatchAllowance: allowance };
     if (actions.sms.authorization.allowed && !p.outboundEnabled) {
       actions.sms.authorization = { allowed: false, reason: "communications_dispatch_disabled" };
     }

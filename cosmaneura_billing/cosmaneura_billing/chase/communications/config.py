@@ -8,9 +8,9 @@ import re
 from urllib.parse import urlsplit
 
 from ...settings import (SettingsError, _database_url_uses_role, _parse_communications_channels,
-                         _parse_communications_test_recipients)
+                         _parse_communications_test_recipients, _parse_communications_test_max_dispatch_starts)
 from ...communications_channels import enabled_channels
-from ...communications_test_policy import validated_test_recipients
+from ...communications_test_policy import validated_test_recipients, validated_test_max_dispatch_starts
 from ..worker_config import _worker_bool, _worker_bounded_int
 from .dispatch import DispatchPolicy
 
@@ -36,6 +36,7 @@ class TwilioServiceConfig:
     contact_snapshot_max_age_hours: int
     communications_enabled_channels: tuple[str, ...] = ("sms",)
     communications_test_mode: bool = False
+    communications_test_max_dispatch_starts: int = 0
     communications_test_recipients: tuple[str, ...] = field(default=(), repr=False)
     twilio_messaging_service_sid: str = ""
 
@@ -50,6 +51,7 @@ class TwilioServiceConfig:
         try:
             object.__setattr__(self, "communications_test_recipients", validated_test_recipients(
                 self.communications_test_mode, self.communications_test_recipients, self.communications_enabled_channels))
+            validated_test_max_dispatch_starts(self.communications_test_max_dispatch_starts, self.communications_test_mode)
         except ValueError as exc:
             raise SettingsError(str(exc)) from None
         if not isinstance(self.twilio_messaging_service_sid, str) or (
@@ -77,7 +79,8 @@ class TwilioServiceConfig:
                 patient_messaging_enabled=self.patient_messaging_enabled,
                 operationally_activated=self.patient_messaging_operationally_activated,
                 enabled_channels=self.communications_enabled_channels,
-                test_mode=self.communications_test_mode, test_recipients=self.communications_test_recipients)
+                test_mode=self.communications_test_mode, test_recipients=self.communications_test_recipients,
+                test_max_dispatch_starts=self.communications_test_max_dispatch_starts)
         except (ValueError, TypeError):
             raise SettingsError("Twilio service policy or HTTPS callback origin is invalid") from None
         if self.patient_messaging_operationally_activated and not self.patient_messaging_enabled:
@@ -99,6 +102,7 @@ class TwilioServiceConfig:
             communications_enabled=_worker_bool(env, "COSMANEURA_COMMUNICATIONS_ENABLED", False),
             communications_enabled_channels=_parse_communications_channels(env),
             communications_test_mode=_worker_bool(env, "COSMANEURA_COMMUNICATIONS_TEST_MODE", False),
+            communications_test_max_dispatch_starts=_parse_communications_test_max_dispatch_starts(env),
             communications_test_recipients=_parse_communications_test_recipients(env),
             chase_transport=env.get("COSMANEURA_CHASE_TRANSPORT", "record_only").strip().lower(),
             chase_scheduler_enabled=_worker_bool(env, "COSMANEURA_CHASE_SCHEDULER_ENABLED", False),
