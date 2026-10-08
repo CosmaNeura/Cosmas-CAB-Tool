@@ -32,7 +32,8 @@ def dispatch_policy(config):
         patient_messaging_enabled=config.patient_messaging_enabled,
         operationally_activated=config.patient_messaging_operationally_activated,
         enabled_channels=config.communications_enabled_channels,
-        test_mode=config.communications_test_mode, test_recipients=config.communications_test_recipients)
+        test_mode=config.communications_test_mode, test_recipients=config.communications_test_recipients,
+        test_max_dispatch_starts=config.communications_test_max_dispatch_starts)
 
 
 def dispatcher_from_settings(config, *, dsn=None, adapter=None, audit=None):
@@ -195,6 +196,7 @@ def staff_view(dispatcher, principal, case_id):
             actions[label] = availability(channel, "prepare")
             if channel == "sms":
                 actions[label]["authorization"] = availability(channel, "authorize")
+        allowance = dispatcher.test_dispatch_allowance(db)
         try:
             dispatcher._policy_decision(db)
             approved = True
@@ -206,6 +208,7 @@ def staff_view(dispatcher, principal, case_id):
             "canApprove": principal.has_any_role(("Admin",)), "practiceName": dispatcher.policy.practice_name,
             "timezone": dispatcher.policy.timezone, "quietHours": list(dispatcher.policy.quiet_hours),
             "maxTotalTouches": dispatcher.policy.max_total_touches, "maxTouches24h": dispatcher.policy.max_touches_24h,
+            "testDispatchAllowance": allowance,
             "outboundEnabled": all((dispatcher.policy.scheduler_enabled, dispatcher.policy.patient_messaging_enabled,
                                      dispatcher.policy.operationally_activated))}}
 

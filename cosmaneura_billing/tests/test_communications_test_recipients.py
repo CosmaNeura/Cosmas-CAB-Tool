@@ -299,7 +299,7 @@ def test_policy_hash_preserves_inactive_approvals_and_binds_active_recipient_sco
     def service(policy):
         return CommunicationsDispatcher(lane.store, policy=policy, sender=lane.sender, roster=lane.roster)
     previous_values = asdict(baseline)
-    for key in ("scheduler_enabled", "patient_messaging_enabled", "operationally_activated", "test_mode", "test_recipients"):
+    for key in ("scheduler_enabled", "patient_messaging_enabled", "operationally_activated", "test_mode", "test_recipients", "test_max_dispatch_starts"):
         del previous_values[key]
     original = _hash([previous_values, asdict(lane.sender), lane.service.call_script])
     assert service(baseline).policy_hash == original
@@ -308,3 +308,44 @@ def test_policy_hash_preserves_inactive_approvals_and_binds_active_recipient_sco
     assert len(hashes) == 4
     assert service(replace(lane.policy, test_recipients=(OTHER, ALLOWED))).policy_hash == service(
         replace(lane.policy, test_recipients=(ALLOWED, OTHER))).policy_hash
+
+
+@pytest.mark.parametrize("raw", ["1", "5"])
+def test_api_worker_and_policy_bind_trial_ceiling(raw):
+    env = environment(COSMANEURA_COMMUNICATIONS_TEST_MODE="true",
+        COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS=ALLOWED,
+        COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS=raw)
+    api = runtime.dispatcher_from_settings(Settings.from_env(env))
+    callback = worker.configured_dispatcher(environ=env)
+    assert api.policy.test_max_dispatch_starts == callback.policy.test_max_dispatch_starts == int(raw)
+    assert api.policy_hash == callback.policy_hash
+    assert api.policy_hash != runtime.dispatcher_from_settings(Settings.from_env({**env,
+        "COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS": "0"})).policy_hash
+
+
+@pytest.mark.parametrize("raw", ["", " ", "-1", "6", "1.0", "true", "01", None])
+def test_trial_ceiling_rejects_malformed_configuration(raw):
+    env = environment(COSMANEURA_COMMUNICATIONS_TEST_MODE="true",
+        COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS=raw)
+    for config in (Settings, TwilioServiceConfig):
+        with pytest.raises(SettingsError):
+            config.from_env(env)
+
+
+def test_trial_ceiling_requires_test_mode_and_strict_integer():
+    for config in (Settings, TwilioServiceConfig):
+        with pytest.raises(SettingsError):
+            config.from_env(environment(COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS="1"))
+    for value in (True, "1", -1, 6):
+        with pytest.raises(ValueError):
+            replace(DispatchPolicy("Synthetic", "UTC", test_mode=True), test_max_dispatch_starts=value)
+    with pytest.raises(ValueError):
+        replace(DispatchPolicy("Synthetic", "UTC"), test_max_dispatch_starts=1)
+
+
+@pytest.mark.parametrize("text,allowed", [("a" * 160, True), ("a" * 161, False),
+    ("^" * 80, True), ("^" * 81, False), ("€" * 80, True), ("\n\r", True),
+    ("a😀", False), ("漢", False), ("\x1b", False), ("", False)])
+def test_trial_segment_rejects_multipart_or_unicode_without_changing_body(text, allowed):
+    from cosmaneura_billing.communications_test_policy import single_gsm_segment
+    assert single_gsm_segment(text) is allowed

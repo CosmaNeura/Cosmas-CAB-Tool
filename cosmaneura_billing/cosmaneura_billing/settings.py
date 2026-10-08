@@ -19,7 +19,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .runtime import safe_llm_model_label
 from .communications_channels import enabled_channels
-from .communications_test_policy import parse_test_recipients, validated_test_recipients
+from .communications_test_policy import (parse_test_recipients, validated_test_recipients,
+    parse_test_max_dispatch_starts, validated_test_max_dispatch_starts)
 
 
 class SettingsError(ValueError):
@@ -39,6 +40,13 @@ def _parse_communications_test_recipients(env):
         return parse_test_recipients(env.get("COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS", ""))
     except ValueError:
         raise SettingsError("invalid communications test recipients") from None
+
+
+def _parse_communications_test_max_dispatch_starts(env):
+    try:
+        return parse_test_max_dispatch_starts(env.get("COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS", "0"))
+    except ValueError as exc:
+        raise SettingsError(str(exc)) from None
 
 
 AMA_CREDENTIAL_ENV_VARS = (
@@ -509,6 +517,7 @@ class Settings:
     communications_enabled: bool = False
     communications_enabled_channels: tuple[str, ...] = ("sms",)
     communications_test_mode: bool = False
+    communications_test_max_dispatch_starts: int = 0
     communications_test_recipients: tuple[str, ...] = field(default=(), repr=False, metadata={"secret": True})
     twilio_account_sid: str = ""
     twilio_from_number: str = field(default="", repr=False, metadata={"secret": True})
@@ -791,6 +800,7 @@ class Settings:
         try:
             object.__setattr__(self, "communications_test_recipients", validated_test_recipients(
                 self.communications_test_mode, self.communications_test_recipients, self.communications_enabled_channels))
+            validated_test_max_dispatch_starts(self.communications_test_max_dispatch_starts, self.communications_test_mode)
         except ValueError as exc:
             raise SettingsError(str(exc)) from None
         if not isinstance(self.twilio_messaging_service_sid, str) or (
@@ -1292,6 +1302,7 @@ class Settings:
             communications_enabled=_parse_bool(env, "COSMANEURA_COMMUNICATIONS_ENABLED", False),
             communications_enabled_channels=_parse_communications_channels(env),
             communications_test_mode=_parse_bool(env, "COSMANEURA_COMMUNICATIONS_TEST_MODE", False),
+            communications_test_max_dispatch_starts=_parse_communications_test_max_dispatch_starts(env),
             communications_test_recipients=_parse_communications_test_recipients(env),
             twilio_account_sid=env.get("COSMANEURA_TWILIO_ACCOUNT_SID", ""),
             twilio_from_number=env.get("COSMANEURA_TWILIO_FROM_NUMBER", ""),

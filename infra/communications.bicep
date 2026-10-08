@@ -22,6 +22,10 @@ param fromNumber string
 param communicationsEnabledChannels string = 'sms'
 @description('Must match the API test-mode flag. Does not activate messaging.')
 param communicationsTestMode bool = false
+@minValue(0)
+@maxValue(5)
+@description('Optional permanent practice-wide test dispatch ceiling; positive requires SMS test mode and one GSM segment. Zero preserves normal behavior. Not a cost cap.')
+param communicationsTestMaxDispatchStarts int = 0
 @secure()
 @description('Exact protected API test-recipient input; outgoing worker only. Runtime validates E.164, duplicates and twenty-recipient limit. Empty blocks test sends.')
 param communicationsTestRecipients string = ''
@@ -48,6 +52,9 @@ var validatedMessaging = enableMessaging != activateMessaging
 var validatedCommunicationsTestMode = (!communicationsTestMode && !empty(communicationsTestRecipients)) || (communicationsTestMode && communicationsEnabledChannels != 'sms')
   ? fail('Test recipients require test mode, and test mode permits SMS only')
   : communicationsTestMode
+var validatedCommunicationsTestMaxDispatchStarts = communicationsTestMaxDispatchStarts > 0 && !validatedCommunicationsTestMode
+  ? fail('Test dispatch ceiling requires explicit SMS test mode')
+  : communicationsTestMaxDispatchStarts
 var communicationsTestRecipientEnv = empty(communicationsTestRecipients)
   ? { name: 'COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS', value: '' }
   : { name: 'COSMANEURA_COMMUNICATIONS_TEST_RECIPIENTS', secretRef: 'communications-test-recipients' }
@@ -81,6 +88,7 @@ var commonEnv = [
   { name: 'COSMANEURA_COMMUNICATIONS_ENABLED', value: 'true' }
   { name: 'COSMANEURA_COMMUNICATIONS_ENABLED_CHANNELS', value: communicationsEnabledChannels }
   { name: 'COSMANEURA_COMMUNICATIONS_TEST_MODE', value: string(validatedCommunicationsTestMode) }
+            { name: 'COSMANEURA_COMMUNICATIONS_TEST_MAX_DISPATCH_STARTS', value: string(validatedCommunicationsTestMaxDispatchStarts) }
   { name: 'COSMANEURA_CHASE_TRANSPORT', value: 'twilio' }
   { name: 'COSMANEURA_PRACTICE_ID', value: practiceId }
   { name: 'COSMANEURA_PRACTICE_NAME', value: practiceName }

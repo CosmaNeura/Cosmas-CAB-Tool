@@ -285,3 +285,17 @@ test("investigation preserves unknown history and accepts only confirmed attribu
     { canResolveUnknown: false, unknownResolution: { ...resolution, vendorReference: "" } },
     { canResolveUnknown: false, unknownResolution: { ...resolution, resolvedAt: "bad" } }]) assert.throws(() => read(extra));
 });
+
+
+test("practice-wide trial allowance is verified and old servers remain compatible", () => {
+  const value = durable();
+  value.policy.testDispatchAllowance = { maxStarts: 1, reservedStarts: 1, remainingStarts: 0, singleSegmentRequired: true };
+  assert.equal(readCommunications(value, "case-a").policy.testDispatchAllowance.remainingStarts, 0);
+  for (const change of [{ maxStarts: 6 }, { reservedStarts: -1 }, { remainingStarts: 1 },
+    { singleSegmentRequired: false }, { reservedStarts: "1" }, { unused: 1 }]) {
+    const invalid = structuredClone(value);
+    Object.assign(invalid.policy.testDispatchAllowance, change);
+    assert.throws(() => readCommunications(invalid, "case-a"));
+  }
+  assert.equal(readCommunications(durable(), "case-a").policy.testDispatchAllowance, null);
+});

@@ -12,7 +12,8 @@ import re
 
 from ...direct_contract import DirectContractList, check_direct_contract
 from ...communications_channels import enabled_channels
-from ...communications_test_policy import validated_test_recipients
+from ...communications_test_policy import (validated_test_recipients,
+    validated_test_max_dispatch_starts, single_gsm_segment)
 from ..models import TERMINAL
 from ..policy import assert_no_phi, MessageContainsPHI
 from ..scheduling import _practice_zone, _quiet_hours, _inside_quiet_hours
@@ -67,12 +68,14 @@ class DispatchPolicy:
     operationally_activated: bool = False
     enabled_channels: tuple[str, ...] = ("sms",)
     test_mode: bool = False
+    test_max_dispatch_starts: int = 0
     test_recipients: tuple[str, ...] = field(default=(), repr=False)
 
     def __post_init__(self):
         object.__setattr__(self, "enabled_channels", enabled_channels(self.enabled_channels))
         object.__setattr__(self, "test_recipients", validated_test_recipients(
             self.test_mode, self.test_recipients, self.enabled_channels))
+        validated_test_max_dispatch_starts(self.test_max_dispatch_starts, self.test_mode)
         _practice_zone(self.timezone)
         _quiet_hours(self.quiet_hours)
         if not isinstance(self.quiet_hours, tuple):
@@ -136,6 +139,8 @@ class CommunicationsDispatcher:
         if not policy.test_mode:
             del values["test_mode"]
             del values["test_recipients"]
+        if not policy.test_max_dispatch_starts:
+            del values["test_max_dispatch_starts"]
         self.policy_hash = _hash([values, asdict(sender), self.call_script])
 
     def require_channel(self, channel):
@@ -252,10 +257,29 @@ class CommunicationsDispatcher:
                (kind='voice_gather' AND recipient=%s AND disposition='stop_calls')) LIMIT 1""",
             (self.store.practice_id, binding["channel"], binding["phone"], binding["phone"])).fetchone() is not None
 
+    def test_dispatch_allowance(self, db):
+        ceiling = self.policy.test_max_dispatch_starts
+        if not ceiling:
+            return None
+        # The existing practice transaction lock serializes this count and the
+        # start INSERT across cases, workers and executions. Receipts/resolutions
+        # never refund a permanent start, including unknown provider outcomes.
+        starts = db.execute("SELECT count(*) AS starts FROM chase_communication_dispatch_starts WHERE practice_id=%s",
+                            (self.store.practice_id,)).fetchone()["starts"]
+        return {"maxStarts": ceiling, "reservedStarts": starts,
+                "remainingStarts": max(0, ceiling - starts), "singleSegmentRequired": True}
+
+    def _require_test_dispatch_allowance(self, db):
+        allowance = self.test_dispatch_allowance(db)
+        if allowance is not None and allowance["remainingStarts"] == 0:
+            _fail("test_dispatch_ceiling_reached", 403)
+
     def _gates(self, db, op, *, phase, authorization=None):
         if not isinstance(phase, str) or phase not in {"prepare", "authorize", "dispatch"}:
             _fail("invalid_gate_phase", 400)
         self.require_channel(op["channel"])
+        if phase != "dispatch":
+            self._require_test_dispatch_allowance(db)
         policy = self._policy_decision(db)
         self.store._staff(db, str(op["actor_tenant_id"]), str(op["actor_id"]))
         # Match the existing attempt/import writers' case lock. Besides case
@@ -298,6 +322,8 @@ class CommunicationsDispatcher:
                 assert_no_phi(op["text"])
             except MessageContainsPHI:
                 _fail("message_requires_review", 403)
+            if self.policy.test_max_dispatch_starts and not single_gsm_segment(op["text"]):
+                _fail("test_message_requires_single_segment", 403)
             if "reply stop" not in op["text"].casefold() or self.policy.practice_name.casefold() not in op["text"].casefold():
                 _fail("message_requires_identity_and_opt_out", 403)
         if authorization:
@@ -396,6 +422,7 @@ class CommunicationsDispatcher:
             # Recheck after the case lock also covers a direct database cancel.
             if self._canceled(db, operation_id):
                 return None
+            self._require_test_dispatch_allowance(db)
             request = (self.adapter.build_sms(binding["phone"], op["text"]) if op["channel"] == "sms"
                        else self.adapter.build_call(binding["phone"]))
             db.execute("INSERT INTO chase_communication_dispatch_starts(practice_id,operation_id) VALUES (%s,%s)",
